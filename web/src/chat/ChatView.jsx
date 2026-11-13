@@ -85,7 +85,12 @@ function UserMessage({ item, canEdit, onEdit }) {
     );
   }
   return (
-    <div className="msg user">
+    <div className={`msg user ${item.from ? 'from-session' : ''}`}>
+      {item.from && (
+        <div className="from-label">
+          {item.from.kind === 'question' ? 'Question from' : item.from.kind === 'update' ? 'Update from' : 'From'} {item.from.role === 'child' ? 'child chat' : item.from.role === 'parent' ? 'parent chat' : 'chat'} <b>{item.from.name}</b>
+        </div>
+      )}
       <div className="bubble">
         {item.images > 0 && <div className="img-note">🖼 {item.images} image{item.images > 1 ? 's' : ''}</div>}
         {body}
@@ -230,6 +235,7 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
   const [menu, setMenu] = useState(false);
   const [info, setInfo] = useState(false);
   const [terminal, setTerminal] = useState(false);
+  const [inbox, setInbox] = useState([]);
   const wsRef = useRef(null);
   const listRef = useRef(null);
   const deltaOrder = useRef(0);
@@ -263,6 +269,7 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
           setMeta(m.meta);
           setState(m.state);
           setTurns(m.turns || 0);
+          setInbox(m.inbox || []);
           setDeltas({});
           setConn('open');
           retry = 500;
@@ -296,6 +303,7 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
         } else if (m.t === 'state') {
           setState(m.state);
           setTurns(m.turns || 0);
+          setInbox(m.inbox || []);
           setMeta({ ...m.meta, live: m.live });
         } else if (m.t === 'status') setStatus(m.status);
         else if (m.t === 'reload') ws.close(4000, 'reload');
@@ -525,7 +533,7 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
                   case 'group':
                     return <ToolGroup key={it.key} tools={it.tools} cwd={meta.cwd} />;
                   case 'user':
-                    return <UserMessage key={`u${it.index}`} item={it} canEdit={!busy && conn === 'open'} onEdit={(index, text) => send({ t: 'edit', index, text })} />;
+                    return <UserMessage key={`u${it.index}`} item={it} canEdit={!busy && conn === 'open' && !it.from} onEdit={(index, text) => send({ t: 'edit', index, text })} />;
                   case 'text':
                     return (
                       <div key={it.key || n} className="msg assistant">
@@ -624,6 +632,11 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
             </div>
           )}
 
+          {inbox.length > 0 && (
+            <div className="inbox-bar" title={inbox.map((b) => `${b.name}: ${b.preview}`).join('\n')}>
+              ✉ {inbox.length} message{inbox.length === 1 ? '' : 's'} from {[...new Set(inbox.map((b) => b.name))].join(', ')} waiting. Claude gets {inbox.length === 1 ? 'it' : 'them, in order,'} when this turn ends.
+            </div>
+          )}
           <Composer
             sessionId={session.id}
             disabled={conn !== 'open'}

@@ -117,9 +117,31 @@ app.post(
     const s = store.get(req.params.id);
     if (!s || s.meta.kind !== 'chat') throw new Error('No such chat session');
     const text = String(req.body?.message || '');
+    const sender = req.body?.from && req.body.from !== s.id ? store.get(req.body.from) : null;
+    const from = sender ? { id: sender.id, name: sender.meta.name, role: s.meta.parentId === sender.id ? 'parent' : sender.meta.parentId === s.id ? 'child' : 'other' } : undefined;
     if (await s.runLocalCommand(text)) return res.json({ ok: true, ranCommand: true, session: sessionSummary(s) });
-    s.send({ text });
-    res.json({ ok: true, session: sessionSummary(s) });
+    if (!from) {
+      s.send({ text });
+      return res.json({ ok: true, session: sessionSummary(s) });
+    }
+    const r = s.deliver({ text, from });
+    res.json({ ok: true, queued: r.queued, note: r.queued ? `It is busy; queued (${r.queued} waiting) and delivered in order when its current turn ends.` : 'Delivered.', session: sessionSummary(s) });
+  })
+);
+
+app.post(
+  '/internal/sessions/:id/to-parent',
+  wrap(async (req, res) => {
+    const s = store.get(req.params.id);
+    if (!s) throw new Error('No such session');
+    const parent = s.meta.parentId && store.get(s.meta.parentId);
+    if (!parent || parent.meta.kind !== 'chat') throw new Error('This session has no parent chat. Ask the user in your reply instead.');
+    const text = String(req.body?.message || '').trim();
+    if (!text) throw new Error('message is required');
+    const question = req.body?.kind !== 'update';
+    const r = parent.deliver({ text, from: { id: s.id, name: s.meta.name, role: 'child', kind: question ? 'question' : 'update' } });
+    const where = r.queued ? `Queued for "${parent.meta.name}" (it is busy; ${r.queued} message(s) waiting, delivered in order when its turn ends).` : `Delivered to "${parent.meta.name}".`;
+    res.json({ ok: true, queued: r.queued, note: question ? `${where} End your turn now; the answer arrives as your next message.` : `${where} Keep working.` });
   })
 );
 

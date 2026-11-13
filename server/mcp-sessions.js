@@ -47,6 +47,18 @@ const TOOLS = [
     },
   },
   {
+    name: 'ask_parent',
+    description:
+      'Ask the chat that started you (your parent / orchestrator) a question, for example when you are blocked or need a decision. The question appears in the parent chat; end your turn after asking, and the answer arrives as your next message. Only works in a child session.',
+    inputSchema: { type: 'object', properties: { message: { type: 'string', description: 'A clear, self-contained question or status note.' } }, required: ['message'] },
+  },
+  {
+    name: 'message_parent',
+    description:
+      "Send the chat that started you a non-blocking note: progress on a long task, something it should know early, or your final result. Keep working after sending. If the parent is busy the note is queued and delivered in order. Only works in a child session.",
+    inputSchema: { type: 'object', properties: { message: { type: 'string' } }, required: ['message'] },
+  },
+  {
     name: 'read_session',
     description:
       'Get a session\'s status (idle, busy, waiting for permission) and its latest reply. Set wait=true to block until it finishes its current turn (up to timeout_seconds, default 300).',
@@ -70,7 +82,11 @@ async function runTool(name, a = {}) {
     case 'set_session_options':
       return call('POST', `/internal/sessions/${encodeURIComponent(a.id)}/options`, { model: a.model, effort: a.effort, permissionMode: a.permission_mode });
     case 'send_to_session':
-      return call('POST', `/internal/sessions/${encodeURIComponent(a.id)}/send`, { message: a.message });
+      return call('POST', `/internal/sessions/${encodeURIComponent(a.id)}/send`, { message: a.message, from: SELF });
+    case 'ask_parent':
+      return call('POST', `/internal/sessions/${encodeURIComponent(SELF)}/to-parent`, { message: a.message, kind: 'question' });
+    case 'message_parent':
+      return call('POST', `/internal/sessions/${encodeURIComponent(SELF)}/to-parent`, { message: a.message, kind: 'update' });
     case 'read_session': {
       const t = Math.min(Math.max(Number(a.timeout_seconds) || 300, 1), 1800);
       return call('GET', `/internal/sessions/${encodeURIComponent(a.id)}?wait=${a.wait ? 1 : 0}&timeout=${t}`);
