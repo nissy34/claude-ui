@@ -7,6 +7,7 @@ import ChatView from './chat/ChatView.jsx';
 import Settings, { Shortcuts } from './Settings.jsx';
 import { newChatDefaults } from './prefs.js';
 import ArtifactsGallery from './ArtifactsGallery.jsx';
+import Scheduled from './Scheduled.jsx';
 
 function readHash() {
   const m = location.hash.match(/s=([0-9a-f-]{36})/i);
@@ -122,6 +123,14 @@ export default function App() {
   useEffect(() => {
     const onKey = (e) => {
       if (e.key === 'Escape' && dialog && (dialog.type === 'settings' || dialog.type === 'keys')) return setDialog(null);
+      // Alt+↑/↓: previous or next chat in the sidebar order (Ctrl+Tab belongs to the browser).
+      if (e.altKey && !e.ctrlKey && !e.metaKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+        const list = sessions.filter((x) => !x.archived && x.kind !== 'shell');
+        const i = list.findIndex((x) => x.id === activeId);
+        const next = list[(i + (e.key === 'ArrowDown' ? 1 : -1) + list.length) % list.length];
+        if (next) (e.preventDefault(), select(next.id));
+        return;
+      }
       if (!(e.metaKey || e.ctrlKey)) return;
       if (e.key === ',') {
         e.preventDefault();
@@ -139,7 +148,7 @@ export default function App() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [collapsed, dialog]);
+  }, [collapsed, dialog, sessions, activeId, select]);
 
   const active = sessions.find((s) => s.id === activeId) || null;
 
@@ -166,6 +175,7 @@ export default function App() {
         onSettings={() => (setDrawer(false), setDialog({ type: 'settings' }))}
         onCustomize={() => (setDrawer(false), setDialog({ type: 'settings', tab: 'plugins' }))}
         onArtifacts={() => (setDrawer(false), setDialog({ type: 'artifacts' }))}
+        onScheduled={() => (setDrawer(false), setDialog({ type: 'scheduled' }))}
         onError={showError}
         onLogout={async () => {
           await api('/api/logout', { method: 'POST' }).catch(() => {});
@@ -205,6 +215,18 @@ export default function App() {
             setDialog(null);
             location.hash = `s=${a.sessionId}&a=${encodeURIComponent(a.path)}`;
             setActiveId(a.sessionId);
+          }}
+        />
+      )}
+      {dialog?.type === 'scheduled' && (
+        <Scheduled
+          projects={projects}
+          defaultCwd={active?.project || active?.cwd}
+          onClose={() => setDialog(null)}
+          onError={showError}
+          onOpen={(id) => {
+            setDialog(null);
+            select(id);
           }}
         />
       )}

@@ -30,6 +30,7 @@ const MCP_SCRIPT = path.join(path.dirname(fileURLToPath(import.meta.url)), 'mcp-
 const commandCache = new Map(); // cwd -> commands with descriptions
 import { setModels } from './models.js';
 const MCP_BROWSER = path.join(path.dirname(fileURLToPath(import.meta.url)), 'mcp-browser.js');
+const MCP_SCHEDULE = path.join(path.dirname(fileURLToPath(import.meta.url)), 'mcp-schedule.js');
 
 /** How a message from another session is introduced to Claude. */
 function fromLabel(f) {
@@ -106,7 +107,9 @@ export function eventsFromTranscript(file) {
       } else {
         const text = promptText(c).trim();
         if (text && !text.startsWith('<')) {
-          let t = text.replace(/\n\n<mentioned_chats>[\s\S]*<\/mentioned_chats>$/, '');
+          let t = text
+            .replace(/\n\n<mentioned_chats>[\s\S]*<\/mentioned_chats>$/, '')
+            .replace(/^The user ran these shell commands \(output below\) before this message:\n[\s\S]*?<\/bash-stdout>(?:\n<bash-exit-code>\d+<\/bash-exit-code>)?\n\n(?!<bash-input>)/, '');
           let from;
           const fm = /^\[(Question|Reply|Message) from (\w+) session "(.*?)" \(session id ([\w-]+)\)[^\]\n]*\]\n\n/.exec(t);
           if (fm) (from = { kind: fm[1] === 'Message' ? undefined : fm[1].toLowerCase(), role: fm[2], name: fm[3], id: fm[4] }), (t = t.slice(fm[0].length));
@@ -266,6 +269,7 @@ export class ChatSession {
     ];
     const builtin = {};
     if (config.childSessions) builtin.sessions = { type: 'stdio', command: process.execPath, args: [MCP_SCRIPT] };
+    if (config.schedules) builtin.schedule = { type: 'stdio', command: process.execPath, args: [MCP_SCHEDULE] };
     if (browserAvailable()) builtin.browser = { type: 'stdio', command: process.execPath, args: [MCP_BROWSER] };
     if (Object.keys(builtin).length) args.push('--mcp-config', JSON.stringify({ mcpServers: builtin }));
     if (builtin.sessions) args.push('--append-system-prompt', this.sessionsPrompt());
@@ -274,6 +278,7 @@ export class ChatSession {
     const allowed = [];
     if (builtin.sessions) allowed.push(...['send_to_session', 'read_session', 'list_sessions'].map((t) => `mcp__sessions__${t}`));
     if (builtin.browser) allowed.push(...['snapshot', 'screenshot', 'console', 'scroll', 'wait_for', 'back', 'reload', 'resize'].map((t) => `mcp__browser__${t}`));
+    if (builtin.schedule) allowed.push('mcp__schedule__list_scheduled_tasks');
     if (allowed.length) args.push('--allowedTools', allowed.join(','));
     // 'default' is the CLI's normal ask-first mode; newer CLIs call it 'manual', so just omit the flag.
     if (m.permissionMode && m.permissionMode !== 'default') args.push('--permission-mode', m.permissionMode);
@@ -546,6 +551,28 @@ export class ChatSession {
   }
 
   // ---------- actions from the browser ----------
+  /** "!cmd": run a shell command in the chat's folder; its output goes to Claude with the next message. */
+  runShell(cmd) {
+    const m = this.meta;
+    const isWin = process.platform === 'win32';
+    const p = spawn(isWin ? 'cmd.exe' : process.env.SHELL || 'bash', isWin ? ['/d', '/s', '/c', cmd] : ['-lc', cmd], { cwd: m.cwd, env: childEnv(m.id), windowsHide: true });
+    let out = '';
+    const add = (d) => {
+      if (out.length < 200_000) out += d;
+    };
+    p.stdout.on('data', add);
+    p.stderr.on('data', add);
+    const timer = setTimeout(() => p.kill('SIGKILL'), 120_000);
+    const finish = (code, err) => {
+      clearTimeout(timer);
+      const text = clip(out.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '') + (err ? `\n${err}` : ''));
+      this.record({ k: 'shell', cmd, text, code });
+      (this.shellContext ||= []).push(`<bash-input>${cmd}</bash-input>\n<bash-stdout>${text.slice(0, 30_000)}</bash-stdout>${code ? `\n<bash-exit-code>${code}</bash-exit-code>` : ''}`);
+    };
+    p.on('error', (e) => finish(-1, e.message));
+    p.on('close', (code) => finish(code));
+  }
+
   /** What this chat is told about its parent and children (the sessions tools). */
   sessionsPrompt() {
     const m = this.meta;
@@ -653,6 +680,10 @@ export class ChatSession {
         .map((c) => `<chat name="${c.meta.name.replace(/"/g, "'")}" session_id="${c.id}" folder="${c.meta.cwd}">\n${c.transcriptText(Math.floor(24000 / chats.length)) || '(empty)'}\n</chat>`)
         .join('\n\n');
       prompt = `${text}\n\n<mentioned_chats>\nThe user mentioned these other chats. Their conversations so far (tool calls left out):\n\n${ctx}\n\nYou can also read or message them with the sessions tools (read_session, send_to_session) using the session_id.\n</mentioned_chats>`;
+    }
+    if (this.shellContext?.length) {
+      prompt = `The user ran these shell commands (output below) before this message:\n${this.shellContext.join('\n\n')}\n\n${prompt}`;
+      this.shellContext = [];
     }
     if (batch) prompt = batch.map((b) => `${fromLabel(b.from)}\n\n${b.text}`).join('\n\n---\n\n');
     else if (from?.name) prompt = `${fromLabel(from)}\n\n${prompt}`;
@@ -819,6 +850,20 @@ export class ChatSession {
    * Edit an earlier user message: restore files to before it (when checkpoints exist),
    * fork the Claude conversation just before it, drop later history, and send the new text.
    */
+  /** Copy this conversation into another (new) chat, up to the end of the turn at index, and fork the CLI session there. */
+  forkInto(target, index) {
+    let cut = this.events.length;
+    if (Number.isInteger(index)) {
+      for (let i = index + 1; i < this.events.length; i++) if (this.events[i].k === 'user') { cut = i; break; }
+    }
+    let at = null;
+    for (let i = cut - 1; i >= 0 && !at; i--) if (this.events[i].uuid && !this.events[i].parent) at = this.events[i].uuid;
+    target.forkAt = { from: this.meta.claudeSessionId, at: cut < this.events.length ? at : undefined };
+    target.events = this.events.slice(0, cut).filter((e) => e.k !== 'perm');
+    fs.writeFileSync(target.logFile, target.events.map((e) => JSON.stringify(e)).join('\n') + (target.events.length ? '\n' : ''));
+    target.record({ k: 'notice', text: `Forked from "${this.meta.name}"` });
+  }
+
   async editMessage({ index, text }) {
     const ev = this.events[index];
     if (!ev || ev.k !== 'user') throw new Error('That message can no longer be edited');

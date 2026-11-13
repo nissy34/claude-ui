@@ -4,34 +4,198 @@ import { highlight } from './markdown.js';
 import ArtifactView from './ArtifactView.jsx';
 import BrowserView from './BrowserView.jsx';
 
-function UnifiedDiff({ diff, path }) {
+function UnifiedDiff({ diff, path, comments, onComment }) {
+  const [draft, setDraft] = useState(null); // { i, line, text }
   const rows = [];
+  let oldN = 0;
+  let newN = 0;
   for (const line of diff.split('\n')) {
     if (/^(diff --git|index |--- |\+\+\+ |new file|deleted file|similarity|rename |old mode|new mode)/.test(line)) continue;
-    if (line.startsWith('@@')) rows.push(['hunk', line.replace(/^(@@[^@]*@@).*/, '$1')]);
-    else if (line.startsWith('+')) rows.push(['add', line.slice(1)]);
-    else if (line.startsWith('-')) rows.push(['del', line.slice(1)]);
+    if (line.startsWith('@@')) {
+      const m = /@@ -(\d+)(?:,\d+)? \+(\d+)/.exec(line);
+      if (m) (oldN = +m[1]), (newN = +m[2]);
+      rows.push(['hunk', line.replace(/^(@@[^@]*@@).*/, '$1')]);
+    } else if (line.startsWith('+')) rows.push(['add', line.slice(1), newN++]);
+    else if (line.startsWith('-')) rows.push(['del', line.slice(1), oldN++, true]);
     else if (line.startsWith('\\')) continue;
-    else rows.push(['ctx', line.slice(1)]);
+    else rows.push(['ctx', line.slice(1), (oldN++, newN++)]);
   }
   const shown = rows.slice(0, 3000);
+  const save = () => {
+    if (draft?.text.trim()) onComment({ path, line: draft.line, old: draft.old, code: draft.code, text: draft.text.trim() });
+    setDraft(null);
+  };
   return (
     <div className="diff">
-      {shown.map(([k, l], i) => (
-        <div key={i} className={`dl ${k}`}>
-          <span className="dm">{k === 'add' ? '+' : k === 'del' ? '−' : ''}</span>
-          {k === 'hunk' ? <span>{l}</span> : <span dangerouslySetInnerHTML={{ __html: highlight(l, path) || ' ' }} />}
-        </div>
+      {shown.map(([k, l, n, old], i) => (
+        <React.Fragment key={i}>
+          <div className={`dl ${k}`}>
+            {onComment && k !== 'hunk' && (
+              <button className="dl-add" title="Comment on this line" onClick={() => setDraft({ i, line: n, old: !!old, code: l, text: '' })}>
+                +
+              </button>
+            )}
+            <span className="dm">{k === 'add' ? '+' : k === 'del' ? '−' : ''}</span>
+            {k === 'hunk' ? <span>{l}</span> : <span dangerouslySetInnerHTML={{ __html: highlight(l, path) || ' ' }} />}
+          </div>
+          {comments
+            ?.filter((c) => c.path === path && c.line === n && c.old === !!old && k !== 'hunk' && c.code === l)
+            .map((c) => (
+              <div key={c.id} className="dl-comment">
+                <span>{c.text}</span>
+                <button className="icon-btn" title="Remove comment" onClick={() => onComment({ remove: c.id })}>
+                  ✕
+                </button>
+              </div>
+            ))}
+          {draft?.i === i && (
+            <div className="dl-draft">
+              <textarea
+                autoFocus
+                rows={2}
+                placeholder="Comment for Claude (Ctrl/⌘ Enter to add)"
+                value={draft.text}
+                onChange={(e) => setDraft({ ...draft, text: e.target.value })}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) (e.preventDefault(), save());
+                  if (e.key === 'Escape') setDraft(null);
+                }}
+              />
+              <div className="row">
+                <button className="btn small ghost" onClick={() => setDraft(null)}>
+                  Cancel
+                </button>
+                <button className="btn small primary" disabled={!draft.text.trim()} onClick={save}>
+                  Add comment
+                </button>
+              </div>
+            </div>
+          )}
+        </React.Fragment>
       ))}
       {rows.length > shown.length && <div className="dl gap">… {rows.length - shown.length} more lines</div>}
     </div>
   );
 }
 
+// The branch's pull request with CI checks, like Desktop's PR status in the Changes card.
+function PrCard({ sessionId, refreshKey, onPrompt, busy, onError }) {
+  const [st, setSt] = useState(null);
+  const [open, setOpen] = useState(false);
+  const [merging, setMerging] = useState(false);
+  const load = () =>
+    api(`/api/sessions/${sessionId}/pr`)
+      .then(setSt)
+      .catch(() => setSt(null));
+  useEffect(() => {
+    load();
+  }, [sessionId, refreshKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  const pending = st?.pr?.summary?.pending > 0;
+  useEffect(() => {
+    if (!pending) return;
+    const t = setInterval(load, 20_000);
+    return () => clearInterval(t);
+  }, [pending]); // eslint-disable-line react-hooks/exhaustive-deps
+  if (!st) return null;
+  if (!st.available) return <div className="pr-card muted pr-note">{st.reason}</div>;
+  const pr = st.pr;
+  if (!pr) return null;
+  const { pass, fail, pending: pend } = pr.summary;
+  const merge = async () => {
+    if (!window.confirm(`Turn on auto-merge (squash) for PR #${pr.number}? GitHub merges it once checks and reviews pass.`)) return;
+    setMerging(true);
+    try {
+      setSt(await api(`/api/sessions/${sessionId}/pr/merge-when-ready`, { method: 'POST', body: { number: pr.number } }));
+    } catch (e) {
+      onError?.(e);
+    } finally {
+      setMerging(false);
+    }
+  };
+  return (
+    <div className="pr-card">
+      <div className="pr-top">
+        <span className={`pr-state ${pr.state.toLowerCase()}`}>{pr.state === 'OPEN' ? 'Open' : pr.state === 'DRAFT' ? 'Draft' : pr.state === 'MERGED' ? 'Merged' : 'Closed'}</span>
+        <a href={pr.url} target="_blank" rel="noreferrer" className="pr-title" title={pr.title}>
+          #{pr.number} {pr.title}
+        </a>
+        <button className="icon-btn" title="Refresh" onClick={load}>
+          ↻
+        </button>
+      </div>
+      {pr.checks.length > 0 && (
+        <button className="pr-checks" onClick={() => setOpen(!open)}>
+          {fail > 0 && <span className="ck fail">✕ {fail} failing</span>}
+          {pend > 0 && <span className="ck pending">● {pend} running</span>}
+          {pass > 0 && <span className="ck pass">✓ {pass} passed</span>}
+          <span className="chev">{open ? '▾' : '▸'}</span>
+        </button>
+      )}
+      {open && (
+        <div className="pr-check-list">
+          {pr.checks.map((c, i) => (
+            <div key={i} className={`ck-row ${c.state}`}>
+              <span className="ck-ico">{c.state === 'pass' ? '✓' : c.state === 'fail' ? '✕' : '●'}</span>
+              {c.url ? (
+                <a href={c.url} target="_blank" rel="noreferrer">
+                  {c.name}
+                </a>
+              ) : (
+                c.name
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+      <div className="pr-meta muted">
+        {pr.review === 'APPROVED' ? 'Approved' : pr.review === 'CHANGES_REQUESTED' ? 'Changes requested' : pr.review === 'REVIEW_REQUIRED' ? 'Review required' : ''}
+        {pr.mergeable === 'CONFLICTING' ? ' · Merge conflict' : ''}
+        {pr.autoMerge ? ' · Auto-merge on' : ''}
+      </div>
+      {(pr.state === 'OPEN' || pr.state === 'DRAFT') && (
+        <div className="git-actions">
+          {fail > 0 && (
+            <button className="btn small" disabled={busy || !onPrompt} onClick={() => onPrompt(`CI is failing on PR #${pr.number} (${pr.url}). Use gh to look at the failing checks and their logs, find the root cause, fix it, and push. Don't skip or disable tests.`)}>
+              Fix failing checks
+            </button>
+          )}
+          {(pr.review === 'CHANGES_REQUESTED' || pr.review === 'REVIEW_REQUIRED') && (
+            <button className="btn small" disabled={busy || !onPrompt} onClick={() => onPrompt(`Read the review comments on PR #${pr.number} (${pr.url}) with gh, address the ones that need changes, push, and reply on the threads you handled.`)}>
+              Address review comments
+            </button>
+          )}
+          {pr.mergeable === 'CONFLICTING' && (
+            <button className="btn small" disabled={busy || !onPrompt} onClick={() => onPrompt(`PR #${pr.number} has a merge conflict with ${pr.base}. Merge ${pr.base} into this branch, resolve the conflicts carefully, run the tests, and push.`)}>
+              Resolve conflict
+            </button>
+          )}
+          {!pr.autoMerge && pr.state === 'OPEN' && (
+            <button className="btn small" disabled={merging} onClick={merge}>
+              {merging ? 'Turning on…' : 'Merge when ready'}
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Line comments on the diff, sent to Claude as one review (like Desktop's diff comments).
+function reviewPrompt(comments) {
+  const body = comments.map((c) => `- ${c.path}:${c.line}${c.old ? ' (removed line)' : ''}\n  > ${c.code.trim().slice(0, 200)}\n  ${c.text.replace(/\n/g, '\n  ')}`).join('\n');
+  return `Please address my review comments on the current changes:\n\n${body}`;
+}
+
 function Changes({ sessionId, refreshKey, onOpenFile, onPrompt, busy }) {
   const [data, setData] = useState(null);
   const [open, setOpen] = useState({});
   const [loading, setLoading] = useState(false);
+  const [comments, setComments] = useState([]);
+  const onComment = (c) => setComments((list) => (c.remove ? list.filter((x) => x.id !== c.remove) : [...list, { ...c, id: Math.random().toString(36).slice(2) }]));
+  const sendReview = () => {
+    onPrompt(reviewPrompt(comments));
+    setComments([]);
+  };
   const load = () => {
     setLoading(true);
     api(`/api/sessions/${sessionId}/changes`)
@@ -63,6 +227,7 @@ function Changes({ sessionId, refreshKey, onOpenFile, onPrompt, busy }) {
           </button>
         )}
       </div>
+      <PrCard sessionId={sessionId} refreshKey={refreshKey} onPrompt={onPrompt} busy={busy} />
       {onPrompt && (
         <div className="git-actions">
           <button className="btn small" disabled={busy || !data.files.length} onClick={() => onPrompt('Commit the current changes with a clear commit message. Stage only the files that belong to this work.')}>
@@ -73,6 +238,20 @@ function Changes({ sessionId, refreshKey, onOpenFile, onPrompt, busy }) {
           </button>
           <button className="btn small primary" disabled={busy} onClick={() => onPrompt('Commit any uncommitted changes, push this branch, and open a pull request with a clear title and description. Use the gh CLI if it is available, and give me the PR link.')}>
             Create PR
+          </button>
+        </div>
+      )}
+      {comments.length > 0 && (
+        <div className="review-bar">
+          <span>
+            {comments.length} comment{comments.length === 1 ? '' : 's'}
+          </span>
+          <span style={{ flex: 1 }} />
+          <button className="btn small ghost" onClick={() => setComments([])}>
+            Discard
+          </button>
+          <button className="btn small primary" disabled={busy || !onPrompt} onClick={sendReview} title="Ctrl/⌘ Enter">
+            Send to Claude
           </button>
         </div>
       )}
@@ -102,7 +281,7 @@ function Changes({ sessionId, refreshKey, onOpenFile, onPrompt, busy }) {
               </span>
             )}
           </button>
-          {open[f.path] && <UnifiedDiff diff={f.diff} path={f.path} />}
+          {open[f.path] && <UnifiedDiff diff={f.diff} path={f.path} comments={comments} onComment={onPrompt ? onComment : null} />}
         </div>
       ))}
     </>
