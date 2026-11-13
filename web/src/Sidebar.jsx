@@ -52,9 +52,18 @@ export default function Sidebar({ sessions, activeId, onSelect, onCreate, onNewC
       return true;
     });
     const ids = new Set(visible.map((s) => s.id));
+    const byId = new Map(visible.map((s) => [s.id, s]));
+    // A child sits in its top parent's group, even when it runs in another folder (e.g. a chat in
+    // ~ that starts children in ~/GitHub/x); otherwise it would land in a group without its parent.
+    const rootOf = (s) => {
+      const seen = new Set();
+      while (s.parentId && byId.has(s.parentId) && !seen.has(s.id)) (seen.add(s.id), (s = byId.get(s.parentId)));
+      return s;
+    };
     const byProject = new Map();
     for (const s of visible) {
-      const p = s.project || s.cwd;
+      const r = rootOf(s);
+      const p = r.project || r.cwd;
       if (!byProject.has(p)) byProject.set(p, []);
       byProject.get(p).push(s);
     }
