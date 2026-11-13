@@ -352,6 +352,12 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
   const pendingPerms = items.filter((i) => i.type === 'tool' && i.perm && !i.perm.done).length + items.filter((i) => i.type === 'perm' && !i.done).length;
   const busy = state === 'busy' || state === 'waiting';
   const queued = Math.max(0, turns - 1);
+  // Commands with descriptions when the CLI gave them, plus any other names it listed.
+  const commandList = useMemo(() => {
+    const info = meta.commandInfo || [];
+    const known = new Set(info.flatMap((c) => [c.name, ...(c.aliases || [])]));
+    return [...info, ...(meta.commands || []).filter((n) => !known.has(n)).map((name) => ({ name }))];
+  }, [meta.commandInfo, meta.commands]);
   const mentionable = useMemo(() => sessions.filter((x) => x.kind === 'chat' && x.id !== session.id && !x.archived).sort((a, b) => b.lastActivity - a.lastActivity), [sessions, session.id]);
   const lastError = [...items].reverse().find((i) => i.type === 'error' || i.type === 'result');
   const authProblem = lastError && (lastError.type === 'error' || lastError.isError) && AUTH_RE.test(lastError.text || '');
@@ -624,7 +630,7 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
             onModel={(model) => send({ t: 'model', model })}
             effort={meta.effort || ''}
             onEffort={(effort) => send({ t: 'effort', effort })}
-            commands={meta.commands || []}
+            commands={commandList}
             footer=""
             usage={meta.rateLimit?.unifiedWindows}
             mcpServers={meta.mcpServers}

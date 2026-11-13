@@ -50,7 +50,8 @@ function MenuIcon({ type }) {
   if (type === 'cmd')
     return (
       <svg {...common}>
-        <path d="M10 2.5 6 13.5" strokeLinecap="round" />
+        <circle cx="8" cy="8" r="2.2" />
+        <path d="M8 1.8v1.6M8 12.6v1.6M1.8 8h1.6M12.6 8h1.6M3.6 3.6l1.1 1.1M11.3 11.3l1.1 1.1M3.6 12.4l1.1-1.1M11.3 4.7l1.1-1.1" strokeLinecap="round" />
       </svg>
     );
   return (
@@ -179,6 +180,15 @@ export default function Composer({ sessionId, disabled, busy, onSend, onStop, mo
   const fileRef = useRef(null);
   const fetchSeq = useRef(0);
   const menuRef = useRef(null);
+  const [tipTop, setTipTop] = useState(null);
+  // Line the description bubble up with the highlighted command (offset from the menu's bottom).
+  const placeTip = () => {
+    const m = menuRef.current;
+    const el = m?.children[sel];
+    if (!m || !el) return setTipTop(null);
+    setTipTop(el.offsetTop + el.offsetHeight - m.scrollTop - m.clientHeight);
+  };
+  useLayoutEffect(placeTip, [sel, suggest]); // eslint-disable-line react-hooks/exhaustive-deps
   const refsRef = useRef({}); // "@chat:name" -> session id
   const caretRef = useRef(null);
   // Put the caret after an inserted suggestion before the next keystroke lands.
@@ -227,7 +237,10 @@ export default function Composer({ sessionId, disabled, busy, onSend, onStop, mo
     const slash = /^\/([^\s]*)$/.exec(before);
     if (slash) {
       const q = slash[1].toLowerCase();
-      const items = commands.filter((c) => c.toLowerCase().includes(q)).slice(0, 60).map((c) => ({ label: `/${c}`, insert: `/${c} ` }));
+      const starts = (c) => c.name.toLowerCase().startsWith(q) || (c.aliases || []).some((a) => a.toLowerCase().startsWith(q));
+      const items = [...commands.filter(starts), ...commands.filter((c) => !starts(c) && `${c.name} ${(c.aliases || []).join(' ')}`.toLowerCase().includes(q))]
+        .slice(0, 80)
+        .map((c) => ({ label: c.name, insert: `/${c.name} `, type: 'cmd', desc: c.description, hint: c.argumentHint }));
       setSuggest(items.length ? { type: 'cmd', items, start: 0, end: cursor } : null);
       setSel(0);
       return;
@@ -393,11 +406,12 @@ export default function Composer({ sessionId, disabled, busy, onSend, onStop, mo
         }}
       >
         {suggest && (
-          <div className="cmd-menu" ref={menuRef}>
+          <div className={`cmd-menu ${suggest.type === 'cmd' ? 'cmds' : ''}`} ref={menuRef} onScroll={placeTip}>
             {suggest.items.map((it, i) => (
               <button
                 key={it.label}
                 className={i === sel ? 'on' : ''}
+                onMouseEnter={() => setSel(i)}
                 onMouseDown={(e) => {
                   e.preventDefault();
                   applySuggestion(it);
@@ -405,9 +419,14 @@ export default function Composer({ sessionId, disabled, busy, onSend, onStop, mo
               >
                 <MenuIcon type={it.type || (suggest.type === 'cmd' ? 'cmd' : 'file')} />
                 <span className="cm-label">{it.type === 'file' ? it.label.split('/').pop() : it.label}</span>
-                <span className="cm-hint">{it.type === 'chat' ? (it.hint || '').split(/[\\/]/).filter(Boolean).pop() : it.type === 'file' && it.label.includes('/') ? it.label.slice(0, it.label.lastIndexOf('/')) : ''}</span>
+                <span className="cm-hint">{it.type === 'cmd' ? '' : it.type === 'chat' ? (it.hint || '').split(/[\\/]/).filter(Boolean).pop() : it.type === 'file' && it.label.includes('/') ? it.label.slice(0, it.label.lastIndexOf('/')) : ''}</span>
               </button>
             ))}
+          </div>
+        )}
+        {suggest?.type === 'cmd' && suggest.items[sel]?.desc && tipTop != null && (
+          <div className="cmd-tip" style={{ bottom: `calc(100% + 6px)`, transform: `translateY(${tipTop}px)` }}>
+            {suggest.items[sel].hint && <code>{suggest.items[sel].hint}</code>} {suggest.items[sel].desc}
           </div>
         )}
         {queued > 0 && <div className="queued-note">{queued} message{queued > 1 ? 's' : ''} queued. Claude reads {queued > 1 ? 'them' : 'it'} when the current step finishes.</div>}
@@ -484,9 +503,10 @@ export default function Composer({ sessionId, disabled, busy, onSend, onStop, mo
                 {sub === 'skills' && (
                   <div className="pop sub">
                     {commands.length === 0 && <span className="pad muted">Shown after the first message</span>}
-                    {commands.slice(0, 40).map((c) => (
+                    {commands.slice(0, 40).map(({ name: c, description }) => (
                       <button
                         key={c}
+                        title={description || ''}
                         onClick={() => {
                           setMenu(null);
                           setSub(null);

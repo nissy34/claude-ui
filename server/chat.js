@@ -26,6 +26,7 @@ export function transcriptPath(cwd, id) {
 }
 
 const MCP_SCRIPT = path.join(path.dirname(fileURLToPath(import.meta.url)), 'mcp-sessions.js');
+const commandCache = new Map(); // cwd -> commands with descriptions
 const MCP_BROWSER = path.join(path.dirname(fileURLToPath(import.meta.url)), 'mcp-browser.js');
 
 function childEnv(sessionId) {
@@ -109,6 +110,10 @@ export class ChatSession {
     this.clients = new Set();
     this.pending = new Map(); // request_id -> permission request event
     this.controlWaiters = new Map();
+    // A new chat shows the / menu (with descriptions) before its process has started.
+    if (meta.commandInfo) commandCache.set(meta.cwd, meta.commandInfo);
+    else if (commandCache.has(meta.cwd)) meta.commandInfo = commandCache.get(meta.cwd);
+    else if (commandCache.size) meta.commandInfo = [...commandCache.values()].pop();
     this.turns = 0; // user turns in flight
     this.stderr = [];
     this.seenBlocks = new Set();
@@ -131,7 +136,7 @@ export class ChatSession {
   }
 
   toJSON() {
-    return { ...this.meta, commands: undefined, tools: undefined, mcpServers: undefined, status: this.running ? 'running' : 'idle', state: this.state, live: this.running, clients: this.clients.size };
+    return { ...this.meta, commands: undefined, commandInfo: undefined, tools: undefined, mcpServers: undefined, status: this.running ? 'running' : 'idle', state: this.state, live: this.running, clients: this.clients.size };
   }
 
   loadEvents() {
@@ -280,6 +285,15 @@ export class ChatSession {
         console.error('chat message handling failed', e);
       }
     });
+    // Ask for the command list with descriptions (what the SDK's supportedCommands() uses), for the / menu.
+    this.control({ subtype: 'initialize' })
+      .then((r) => {
+        if (!Array.isArray(r?.commands)) return;
+        m.commandInfo = r.commands.map((c) => ({ name: c.name, description: (c.description || '').slice(0, 300), argumentHint: c.argumentHint || '', builtin: !!c.builtin, aliases: c.aliases || [] }));
+        commandCache.set(m.cwd, m.commandInfo);
+        this.broadcastState();
+      })
+      .catch(() => {});
     proc.on('exit', (code, signal) => {
       if (this.proc !== proc) return;
       this.proc = null;
