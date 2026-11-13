@@ -89,6 +89,15 @@ function UserMessage({ item, canEdit, onEdit }) {
       <div className="bubble">
         {item.images > 0 && <div className="img-note">🖼 {item.images} image{item.images > 1 ? 's' : ''}</div>}
         {body}
+        {item.refs?.length > 0 && (
+          <div className="attach-row in-bubble">
+            {item.refs.map((r) => (
+              <span key={r.id} className="attach" title="Claude got this chat's conversation as context">
+                💬 {r.name}
+              </span>
+            ))}
+          </div>
+        )}
         {attached.length > 0 && (
           <div className="attach-row in-bubble">
             {attached.map((f) => (
@@ -343,6 +352,7 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
   const pendingPerms = items.filter((i) => i.type === 'tool' && i.perm && !i.perm.done).length + items.filter((i) => i.type === 'perm' && !i.done).length;
   const busy = state === 'busy' || state === 'waiting';
   const queued = Math.max(0, turns - 1);
+  const mentionable = useMemo(() => sessions.filter((x) => x.kind === 'chat' && x.id !== session.id && !x.archived).sort((a, b) => b.lastActivity - a.lastActivity), [sessions, session.id]);
   const lastError = [...items].reverse().find((i) => i.type === 'error' || i.type === 'result');
   const authProblem = lastError && (lastError.type === 'error' || lastError.isError) && AUTH_RE.test(lastError.text || '');
   const parent = meta.parentId && sessions.find((s) => s.id === meta.parentId);
@@ -360,10 +370,10 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
 
   const answer = (a) => send({ t: 'perm', ...a });
   const setMode = (mode) => send({ t: 'mode', mode });
-  const submit = (text, images) => {
+  const submit = (text, images, refs) => {
     if ('Notification' in window && Notification.permission === 'default') Notification.requestPermission().catch(() => {});
     setStick(true);
-    return send({ t: 'send', text, images });
+    return send({ t: 'send', text, images, refs });
   };
 
   const openPanel = (tab) => {
@@ -620,6 +630,7 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
             mcpServers={meta.mcpServers}
             onSettings={onSettings}
             onBrowser={() => openPanel('browser')}
+            chats={mentionable}
             context={{ used: meta.contextTokens, window: meta.contextWindow }}
             onCompact={() => submit('/compact', [])}
             queued={queued}

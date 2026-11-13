@@ -30,7 +30,7 @@ export function buildItems(events, deltas, offset = 0) {
     }
     switch (e.k) {
       case 'user':
-        push({ type: 'user', text: e.text, images: e.images || 0, ts: e.ts, index: idx + offset });
+        push({ type: 'user', text: e.text, images: e.images || 0, refs: e.refs || [], ts: e.ts, index: idx + offset });
         break;
       case 'block': {
         const b = e.block;
