@@ -22,6 +22,7 @@ import { getChanges, searchFiles, readFileSafe, createWorktree } from './git.js'
 import * as browser from './browser.js';
 import { listArtifacts, rawHandler, rawUrl } from './artifacts.js';
 import * as admin from './claude-admin.js';
+import { getModels } from './models.js';
 import { authStatus, mcpList, pluginList, cliVersion, permissionRules, removePermissionRule } from './claude-admin.js';
 
 if (!config.password && !config.passwordHash) {
@@ -457,6 +458,7 @@ app.post(
 
 // Structured management of MCP servers, plugins and skills.
 const optCwd = (v) => (v ? resolveDir(v) : null);
+app.get('/api/claude/models', wrap(async (req, res) => res.json({ models: await getModels() })));
 app.get('/api/claude/mcp-servers', wrap(async (req, res) => res.json(await admin.mcpServers(optCwd(req.query.cwd)))));
 app.post(
   '/api/claude/mcp-servers/:action',
@@ -668,6 +670,7 @@ function handleChat(ws, s) {
       else if (msg.t === 'mode') await s.setMode(msg.mode);
       else if (msg.t === 'model') await s.setModel(msg.model);
       else if (msg.t === 'stop') s.stop();
+      else if (msg.t === 'resume') await s.resume();
       else if (msg.t === 'effort') await s.setEffort(msg.effort);
       else if (msg.t === 'edit') await s.editMessage(msg);
     } catch (e) {

@@ -3,6 +3,7 @@ import { api } from './api.js';
 import { getThemePref, setThemePref } from './theme.js';
 import { getPrefs, setPref } from './prefs.js';
 import { MODES } from './chat/Composer.jsx';
+import { useModels } from './models.js';
 import { McpTab, PluginsTab, SkillsTab } from './Customize.jsx';
 
 const TABS = [
@@ -94,15 +95,19 @@ function General({ prefs, set, onKeys }) {
 }
 
 function Chats({ prefs, set }) {
+  const models = useModels();
+  const list = models.length ? models : [{ id: '', displayName: 'Default' }];
   return (
     <>
       <p className="muted set-note">Used for each new chat. You can still change them from the composer.</p>
       <Row label="Model">
         <select value={prefs.newModel} onChange={(e) => set('newModel', e.target.value)}>
-          <option value="">Default</option>
-          <option value="opus">Opus</option>
-          <option value="sonnet">Sonnet</option>
-          <option value="haiku">Haiku</option>
+          {list.map((m) => (
+            <option key={m.id} value={m.id}>
+              {m.displayName}
+            </option>
+          ))}
+          {prefs.newModel && !list.some((m) => m.id === prefs.newModel) && <option value={prefs.newModel}>{prefs.newModel}</option>}
         </select>
       </Row>
       <Row label="Permission mode">
