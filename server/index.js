@@ -388,6 +388,22 @@ app.patch(
 );
 
 app.post(
+  '/api/sessions/:id/fork',
+  wrap(async (req, res) => {
+    const src = getSession(req);
+    if (src.meta.kind !== 'chat') throw new Error('Only chats can be forked');
+    const m = src.meta;
+    const t = store.create({ cwd: m.cwd, kind: 'chat', name: `${m.name} (fork)`.slice(0, 80), model: m.model, permissionMode: m.permissionMode, effort: m.effort });
+    t.meta.project = m.project || m.cwd;
+    if (m.worktree) t.meta.worktree = m.worktree;
+    t.meta.customName = true;
+    src.forkInto(t, Number.isInteger(req.body?.index) ? req.body.index : undefined);
+    store.save();
+    res.json({ session: t.toJSON() });
+  })
+);
+
+app.post(
   '/api/sessions/:id/restart',
   wrap(async (req, res) => {
     const s = getSession(req);
@@ -681,6 +697,7 @@ function handleChat(ws, s) {
     }
     try {
       if (msg.t === 'send') {
+        if (!msg.images?.length && /^!\s*\S/.test(msg.text || '')) return s.runShell(msg.text.replace(/^!\s*/, ''));
         if (!(msg.images?.length) && (await s.runLocalCommand(msg.text))) return;
         s.send(msg);
       }

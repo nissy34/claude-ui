@@ -122,6 +122,14 @@ export default function App() {
   useEffect(() => {
     const onKey = (e) => {
       if (e.key === 'Escape' && dialog && (dialog.type === 'settings' || dialog.type === 'keys')) return setDialog(null);
+      // Alt+↑/↓: previous or next chat in the sidebar order (Ctrl+Tab belongs to the browser).
+      if (e.altKey && !e.ctrlKey && !e.metaKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+        const list = sessions.filter((x) => !x.archived && x.kind !== 'shell');
+        const i = list.findIndex((x) => x.id === activeId);
+        const next = list[(i + (e.key === 'ArrowDown' ? 1 : -1) + list.length) % list.length];
+        if (next) (e.preventDefault(), select(next.id));
+        return;
+      }
       if (!(e.metaKey || e.ctrlKey)) return;
       if (e.key === ',') {
         e.preventDefault();
@@ -139,7 +147,7 @@ export default function App() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [collapsed, dialog]);
+  }, [collapsed, dialog, sessions, activeId, select]);
 
   const active = sessions.find((s) => s.id === activeId) || null;
 
