@@ -241,6 +241,10 @@ class Store {
       meta.pid = null;
       this.sessions.set(meta.id, meta.kind === 'chat' ? new ChatSession(meta, this) : new Session(meta));
     }
+    // Messages queued for a chat when the server stopped: deliver them now.
+    setTimeout(() => {
+      for (const s of this.sessions.values()) if (s.meta.kind === 'chat' && s.inbox.length) s.flushInbox();
+    }, 2000).unref?.();
     this.saveTimer = setInterval(() => {
       for (const s of this.sessions.values()) s.saveScreen();
     }, 10_000);

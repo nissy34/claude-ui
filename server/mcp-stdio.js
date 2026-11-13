@@ -1,21 +1,40 @@
 // Minimal stdio MCP server loop shared by the built-in MCP servers. Each one forwards tool
 // calls to the main server's /internal API.
 import readline from 'node:readline';
+import http from 'node:http';
 
 export const API = process.env.CW_INTERNAL_URL;
 export const SELF = process.env.CW_SESSION_ID;
 const TOKEN = process.env.CW_INTERNAL_TOKEN;
 
-export async function call(method, path, body, { raw = false } = {}) {
-  const res = await fetch(API + path, {
-    method,
-    headers: { 'content-type': 'application/json', 'x-cw-token': TOKEN, 'x-cw-session': SELF },
-    body: body ? JSON.stringify(body) : undefined,
+// node:http rather than fetch: fetch gives up on a response after 5 minutes, and some calls
+// (read_session wait, send_to_session wait_for_reply) legitimately block for longer.
+export function call(method, path, body, { raw = false } = {}) {
+  return new Promise((resolve, reject) => {
+    const data = body ? JSON.stringify(body) : undefined;
+    const req = http.request(
+      API + path,
+      { method, headers: { 'content-type': 'application/json', 'x-cw-token': TOKEN, 'x-cw-session': SELF, ...(data ? { 'content-length': Buffer.byteLength(data) } : {}) } },
+      (res) => {
+        const chunks = [];
+        res.on('data', (c) => chunks.push(c));
+        res.on('error', reject);
+        res.on('end', () => {
+          const buf = Buffer.concat(chunks);
+          const ok = res.statusCode >= 200 && res.statusCode < 300;
+          if (raw && ok) return resolve(buf);
+          let out = {};
+          try {
+            out = JSON.parse(buf.toString('utf8'));
+          } catch {}
+          ok ? resolve(out) : reject(new Error(out.error || `HTTP ${res.statusCode}`));
+        });
+      }
+    );
+    req.on('error', reject);
+    if (data) req.write(data);
+    req.end();
   });
-  if (raw && res.ok) return Buffer.from(await res.arrayBuffer());
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-  return data;
 }
 
 // runTool returns either a plain object (sent as JSON text) or {content:[...]} as-is.

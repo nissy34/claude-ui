@@ -110,19 +110,74 @@ app.post(
     if (name) s.meta.customName = true;
     s.send({ text: prompt });
     store.save();
-    res.json({ session: sessionSummary(s), note: 'Started. It runs on its own; use read_session to check on it.' });
+    res.json({ session: sessionSummary(s), note: 'Started. It runs on its own and sends you updates, questions and its result as messages; no need to poll.' });
   })
 );
 
+// One messaging tool for every direction. The sender is the calling session (x-cw-session), so
+// the other side sees who wrote and can reply the same way. "parent" names the caller's parent.
 app.post(
   '/internal/sessions/:id/send',
   wrap(async (req, res) => {
-    const s = store.get(req.params.id);
+    const sender = store.get(req.headers['x-cw-session']);
+    let id = req.params.id;
+    if (id === 'parent') {
+      id = sender?.meta.parentId;
+      if (!id) throw new Error('This session has no parent chat. Ask the user in your reply instead.');
+    }
+    const s = store.get(id);
     if (!s || s.meta.kind !== 'chat') throw new Error('No such chat session');
+    if (s === sender) throw new Error('That is this session');
     const text = String(req.body?.message || '');
+    if (!text.trim()) throw new Error('message is required');
+    const wait = !!req.body?.wait_for_reply;
     if (await s.runLocalCommand(text)) return res.json({ ok: true, ranCommand: true, session: sessionSummary(s) });
-    s.send({ text });
-    res.json({ ok: true, session: sessionSummary(s) });
+    if (!sender) {
+      s.send({ text });
+      return res.json({ ok: true, session: sessionSummary(s) });
+    }
+    // How the recipient sees the sender.
+    const role = sender.meta.parentId === s.id ? 'child' : s.meta.parentId === sender.id ? 'parent' : 'other';
+    const from = { id: sender.id, name: sender.meta.name, role };
+
+    // The recipient is blocked waiting for this sender: this message is its answer, and its
+    // tool call returns it right away (no new turn, no queue).
+    const replied = s.takeReply(sender.id, text, wait);
+    if (replied) {
+      s.record({ k: 'user', text, images: 0, from: { ...from, kind: 'reply' } });
+      // Answered before the question reached this chat's turn (e.g. it saw it via read_session): drop it from the queue.
+      if (sender.inbox.some((b) => b.from?.id === s.id && b.from?.kind === 'question')) {
+        sender.meta.inbox = sender.inbox.filter((b) => !(b.from?.id === s.id && b.from?.kind === 'question'));
+        sender.store.save();
+        sender.broadcastState();
+      }
+      if (!wait) return res.json({ ok: true, note: `Delivered to "${s.meta.name}" as the reply it was waiting for; it carries on now.`, session: sessionSummary(s) });
+    }
+
+    const r = replied ? { queued: 0 } : s.deliver({ text, from: { ...from, kind: wait ? 'question' : undefined } });
+    const where = r.held
+      ? `Held for "${s.meta.name}" (it can't take messages right now); delivered when it can.`
+      : r.queued
+        ? `Queued for "${s.meta.name}": it is busy, ${r.queued} message(s) waiting, delivered in order when its current turn ends.`
+        : `Delivered to "${s.meta.name}".`;
+    if (!wait) return res.json({ ok: true, queued: r.queued, note: `${where} Keep working.`, session: sessionSummary(s) });
+
+    const minutes = Math.min(Math.max(Number(req.body?.timeout_minutes) || 60, 1), 24 * 60);
+    let done = false;
+    res.on('close', () => {
+      if (!done) sender.cancelWait('the tool call was cancelled');
+    });
+    const out = await sender.waitForReply(s.id, minutes * 60_000);
+    done = true;
+    if (res.destroyed) return;
+    if (out.answered) return res.json({ answered: true, from: s.meta.name, session_id: s.id, reply: out.reply, ...(out.expectsReply ? { note: 'They are now blocked waiting for your reply: answer with send_to_session.' } : {}) });
+    res.json({
+      answered: false,
+      note:
+        out.reason === 'timeout'
+          ? `No reply from "${s.meta.name}" after ${minutes} minutes. Carry on with your best judgment or ask again; a reply that comes later arrives as a new message.`
+          : `Stopped waiting (${out.reason}). A reply that comes later arrives as a new message.`,
+    });
   })
 );
 
@@ -146,11 +201,16 @@ app.get(
     if (!s || s.meta.kind !== 'chat') throw new Error('No such chat session');
     if (req.query.wait === '1') {
       const until = Date.now() + Math.min(Number(req.query.timeout) || 300, 1800) * 1000;
-      while (s.state !== 'idle' && Date.now() < until && store.get(s.id)) await new Promise((r) => setTimeout(r, 1000));
+      // Stop early when the session is blocked on a question to the caller: nobody else will answer it.
+      const caller = req.headers['x-cw-session'];
+      while (s.state !== 'idle' && Date.now() < until && store.get(s.id) && !(s.waiting && s.waiting.to === caller)) await new Promise((r) => setTimeout(r, 1000));
     }
+    const w = s.waitingSummary();
     res.json({
       session: sessionSummary(s),
       waitingForPermission: s.pending.size > 0,
+      waitingForReplyFrom: w ? { session_id: w.id, name: w.name, ...(w.id === req.headers['x-cw-session'] ? { note: 'It is blocked on a question to you (in your messages). Answer with send_to_session.' } : {}) } : null,
+      queuedMessages: s.inbox.length,
       lastReply: s.lastReply(),
     });
   })
