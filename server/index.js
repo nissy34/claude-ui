@@ -23,6 +23,7 @@ import * as browser from './browser.js';
 import { listArtifacts, rawHandler, rawUrl } from './artifacts.js';
 import * as admin from './claude-admin.js';
 import { getModels } from './models.js';
+import * as schedules from './schedules.js';
 import { authStatus, mcpList, pluginList, cliVersion, permissionRules, removePermissionRule } from './claude-admin.js';
 
 if (!config.password && !config.passwordHash) {
@@ -169,11 +170,60 @@ app.post(
   })
 );
 
+// Scheduled tasks, created by Claude through mcp-schedule.js.
+app.get('/internal/schedules', (req, res) => res.json({ tasks: schedules.listTasks().map(scheduleSummary) }));
+app.post(
+  '/internal/schedules',
+  wrap(async (req, res) => {
+    const b = req.body || {};
+    const from = store.get(b.sessionId);
+    const cwd = resolveDir(b.cwd || from?.meta.project || from?.meta.cwd);
+    const t = schedules.createTask({ ...b, cwd, permissionMode: b.permissionMode || from?.meta.permissionMode || 'default' });
+    res.json({ task: scheduleSummary(t), note: 'Created. It shows on the Scheduled page, where the user can edit, pause or delete it.' });
+  })
+);
+app.post(
+  '/internal/schedules/:id/:action',
+  wrap(async (req, res) => {
+    const { id, action } = req.params;
+    if (action === 'delete') schedules.deleteTask(id);
+    else if (action === 'run') return res.json(await schedules.runTask(id));
+    else if (action === 'update') return res.json({ task: scheduleSummary(schedules.updateTask(id, req.body || {})) });
+    else throw new Error('Unknown action');
+    res.json({ ok: true });
+  })
+);
+function scheduleSummary(t) {
+  return { id: t.id, name: t.name, preset: t.preset, cron: t.cronExpr, enabled: t.enabled, cwd: t.cwd, nextRun: t.nextRun ? new Date(t.nextRun).toString() : null, lastRun: t.lastRun ? new Date(t.lastRun).toString() : null };
+}
+
 app.get('/internal/sessions', (req, res) => {
   let list = [...store.sessions.values()];
   if (req.query.parentId) list = list.filter((s) => s.meta.parentId === req.query.parentId);
   res.json({ sessions: list.map(sessionSummary) });
 });
+
+// ---------- scheduled tasks ----------
+app.get('/api/schedules', (req, res) => res.json({ tasks: schedules.listTasks(), now: Date.now(), tz: Intl.DateTimeFormat().resolvedOptions().timeZone }));
+app.post(
+  '/api/schedules',
+  wrap(async (req, res) => res.json({ task: schedules.createTask({ ...req.body, cwd: resolveDir(req.body?.cwd) }) }))
+);
+app.patch(
+  '/api/schedules/:id',
+  wrap(async (req, res) => res.json({ task: schedules.updateTask(req.params.id, req.body?.cwd ? { ...req.body, cwd: resolveDir(req.body.cwd) } : req.body || {}) }))
+);
+app.delete(
+  '/api/schedules/:id',
+  wrap(async (req, res) => {
+    schedules.deleteTask(req.params.id);
+    res.json({ ok: true });
+  })
+);
+app.post(
+  '/api/schedules/:id/run',
+  wrap(async (req, res) => res.json({ run: await schedules.runTask(req.params.id) }))
+);
 
 app.get('/api/me', (req, res) => res.json({ authed: isAuthed(req) }));
 
@@ -704,6 +754,21 @@ function handleChat(ws, s) {
 }
 
 // ---------- lifecycle ----------
+// Each run is a new chat in the task's folder (optionally its own worktree), named after the task.
+if (config.schedules) schedules.startScheduler(async (t) => {
+  const project = resolveDir(t.cwd);
+  const wt = t.worktree ? await createWorktree(project, t.name) : null;
+  const when = new Date().toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  const s = store.create({ cwd: wt ? wt.path : project, kind: 'chat', name: `${t.name} · ${when}`.slice(0, 80), model: t.model || undefined, permissionMode: t.permissionMode, effort: t.effort || undefined });
+  s.meta.customName = true;
+  s.meta.project = project;
+  s.meta.scheduleId = t.id;
+  if (wt) s.meta.worktree = wt;
+  s.send({ text: t.prompt });
+  store.save();
+  return s.id;
+});
+
 server.listen(config.port, config.host, () => {
   const h = ['0.0.0.0', '::', ''].includes(config.host) ? '127.0.0.1' : config.host.includes(':') ? `[${config.host}]` : config.host;
   config.internalUrl = `http://${h}:${config.port}`;

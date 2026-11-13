@@ -30,6 +30,7 @@ const MCP_SCRIPT = path.join(path.dirname(fileURLToPath(import.meta.url)), 'mcp-
 const commandCache = new Map(); // cwd -> commands with descriptions
 import { setModels } from './models.js';
 const MCP_BROWSER = path.join(path.dirname(fileURLToPath(import.meta.url)), 'mcp-browser.js');
+const MCP_SCHEDULE = path.join(path.dirname(fileURLToPath(import.meta.url)), 'mcp-schedule.js');
 
 function childEnv(sessionId) {
   const env = { ...process.env };
@@ -229,10 +230,14 @@ export class ChatSession {
     ];
     const builtin = {};
     if (config.childSessions) builtin.sessions = { type: 'stdio', command: process.execPath, args: [MCP_SCRIPT] };
+    if (config.schedules) builtin.schedule = { type: 'stdio', command: process.execPath, args: [MCP_SCHEDULE] };
     if (browserAvailable()) builtin.browser = { type: 'stdio', command: process.execPath, args: [MCP_BROWSER] };
     if (Object.keys(builtin).length) args.push('--mcp-config', JSON.stringify({ mcpServers: builtin }));
     // Looking at the page never needs a prompt; navigating, clicking and typing still ask.
-    if (builtin.browser) args.push('--allowedTools', ['snapshot', 'screenshot', 'console', 'scroll', 'wait_for', 'back', 'reload', 'resize'].map((t) => `mcp__browser__${t}`).join(','));
+    const readOnly = [];
+    if (builtin.browser) readOnly.push(...['snapshot', 'screenshot', 'console', 'scroll', 'wait_for', 'back', 'reload', 'resize'].map((t) => `mcp__browser__${t}`));
+    if (builtin.schedule) readOnly.push('mcp__schedule__list_scheduled_tasks');
+    if (readOnly.length) args.push('--allowedTools', readOnly.join(','));
     // 'default' is the CLI's normal ask-first mode; newer CLIs call it 'manual', so just omit the flag.
     if (m.permissionMode && m.permissionMode !== 'default') args.push('--permission-mode', m.permissionMode);
     if (m.model) args.push('--model', m.model);

@@ -21,7 +21,7 @@ export function baseName(p) {
   return (p || '').split(/[\\/]/).filter(Boolean).pop() || p;
 }
 
-export default function Sidebar({ sessions, activeId, onSelect, onCreate, onNewChat, onHistory, onSettings, onArtifacts, onCustomize, onLogout, onClose, onCollapse, onError }) {
+export default function Sidebar({ sessions, activeId, onSelect, onCreate, onNewChat, onHistory, onSettings, onArtifacts, onScheduled, onCustomize, onLogout, onClose, onCollapse, onError }) {
   const [q, setQ] = useState('');
   const [showArchived, setShowArchived] = useState(false);
   const [collapsed, setCollapsed] = useState(() => {
@@ -198,6 +198,9 @@ export default function Sidebar({ sessions, activeId, onSelect, onCreate, onNewC
         </div>
         <button onClick={onArtifacts}>
           <span className="nico">◇</span> Artifacts
+        </button>
+        <button onClick={onScheduled}>
+          <span className="nico">◷</span> Scheduled
         </button>
         <button onClick={onCustomize}>
           <span className="nico">⚒</span> Customize
