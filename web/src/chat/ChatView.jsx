@@ -8,6 +8,7 @@ import Composer from './Composer.jsx';
 import { getPrefs } from '../prefs.js';
 import SidePanel from './SidePanel.jsx';
 import { ChatCtx } from './ctx.js';
+import SideChat from './SideChat.jsx';
 import TerminalView from '../TerminalView.jsx';
 
 const AUTH_RE = /oauth|authenticat|\/login|not logged in|invalid api key|credentials/i;
@@ -237,6 +238,7 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
   const [menu, setMenu] = useState(false);
   const [info, setInfo] = useState(false);
   const [terminal, setTerminal] = useState(false);
+  const [side, setSide] = useState(null); // { q } while the side chat is open
   const [verbose, setVerbose] = useState(() => localStorage.getItem('cw.verbose') === '1');
   const wsRef = useRef(null);
   const listRef = useRef(null);
@@ -366,7 +368,9 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
   const commandList = useMemo(() => {
     const info = meta.commandInfo || [];
     const known = new Set(info.flatMap((c) => [c.name, ...(c.aliases || [])]));
-    return [...info, ...(meta.commands || []).filter((n) => !known.has(n)).map((name) => ({ name }))];
+    const list = [...info, ...(meta.commands || []).filter((n) => !known.has(n)).map((name) => ({ name }))].filter((c) => c.name !== 'btw');
+    // Handled here: opens the side chat.
+    return [{ name: 'btw', description: 'Ask a side question without adding it to the conversation (Ctrl/⌘ ;)', argumentHint: '<question>' }, ...list];
   }, [meta.commandInfo, meta.commands]);
   const mentionable = useMemo(() => sessions.filter((x) => x.kind === 'chat' && x.id !== session.id && !x.archived).sort((a, b) => b.lastActivity - a.lastActivity), [sessions, session.id]);
   const lastError = [...items].reverse().find((i) => i.type === 'error' || i.type === 'result');
@@ -387,6 +391,11 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
   const answer = (a) => send({ t: 'perm', ...a });
   const setMode = (mode) => send({ t: 'mode', mode });
   const submit = (text, images, refs) => {
+    const btw = /^\/btw(?:\s+([\s\S]*))?$/.exec((text || '').trim());
+    if (btw && !images?.length) {
+      setSide({ q: btw[1] || '', key: Date.now() });
+      return true;
+    }
     if ('Notification' in window && Notification.permission === 'default') Notification.requestPermission().catch(() => {});
     setStick(true);
     return send({ t: 'send', text, images, refs });
@@ -417,6 +426,16 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
     }),
     [meta.cwd, onSelect, verbose]
   );
+  useEffect(() => {
+    const onKey = (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === ';') {
+        e.preventDefault();
+        setSide((v) => (v ? null : { q: '', key: Date.now() }));
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
   const ctxRef = useRef(ctx);
   ctxRef.current = ctx;
 
@@ -519,6 +538,7 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
     <ChatCtx.Provider value={ctx}>
       <div className="chat-shell">
         <div className="chat-view">
+          {side && <SideChat key={side.key} sessionId={session.id} initial={side.q} onClose={() => setSide(null)} />}
           <div className="topbar">
             <button className="icon-btn menu-btn" onClick={onMenu} aria-label="Menu">
               ☰

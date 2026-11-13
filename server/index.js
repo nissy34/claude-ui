@@ -23,6 +23,8 @@ import * as browser from './browser.js';
 import { listArtifacts, rawHandler, rawUrl } from './artifacts.js';
 import * as admin from './claude-admin.js';
 import { getModels } from './models.js';
+import { sideChat } from './side-chat.js';
+import { prStatus, mergeWhenReady } from './pr-status.js';
 import * as schedules from './schedules.js';
 import { authStatus, mcpList, pluginList, cliVersion, permissionRules, removePermissionRule } from './claude-admin.js';
 
@@ -468,6 +470,40 @@ app.get(
     res.json(await getChanges(getSession(req).meta.cwd));
   })
 );
+
+app.get(
+  '/api/sessions/:id/pr',
+  wrap(async (req, res) => res.json(await prStatus(getSession(req).meta.cwd)))
+);
+app.post(
+  '/api/sessions/:id/pr/merge-when-ready',
+  wrap(async (req, res) => res.json(await mergeWhenReady(getSession(req).meta.cwd, parseInt(req.body?.number, 10))))
+);
+
+// Side chat: streams the answer as NDJSON lines ({d: text} … then {done} or {error}).
+app.post('/api/sessions/:id/btw', (req, res) => {
+  let s;
+  try {
+    s = getSession(req);
+    if (s.meta.kind !== 'chat') throw new Error('Side chat works in chats only');
+  } catch (e) {
+    return res.status(400).json({ error: e.message });
+  }
+  const q = String(req.body?.question || '').trim();
+  if (!q) return res.status(400).json({ error: 'Ask something' });
+  res.setHeader('Content-Type', 'application/x-ndjson');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.flushHeaders?.();
+  const write = (o) => res.write(JSON.stringify(o) + '\n');
+  const stop = sideChat(s, q, req.body?.history, {
+    onDelta: (d) => write({ d }),
+    onDone: (r) => {
+      write(r.error ? { error: r.error } : { done: true });
+      res.end();
+    },
+  });
+  res.on('close', () => !res.writableEnded && stop());
+});
 
 app.get(
   '/api/files',
