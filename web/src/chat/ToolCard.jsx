@@ -173,17 +173,25 @@ function childSessionId(result) {
   }
 }
 
+/** First meaningful line of a failed tool's result, for the collapsed row. */
+function errorLine(text) {
+  const line = String(text).split('\n').map((l) => l.trim()).find(Boolean) || '';
+  const clean = line.replace(/^<tool_use_error>|<\/tool_use_error>$/g, '').replace(/^(MCP error -?\d+:\s*)/, '');
+  return clean.length > 200 ? clean.slice(0, 200) + '…' : clean;
+}
+
 export default function ToolCard({ item, cwd, children }) {
   const { name, input, result } = item;
   const ctx = useContext(ChatCtx);
   const filePath = FILE_TOOLS[name] && input?.[FILE_TOOLS[name]];
   const isSessionTool = /^mcp__sessions__(start_session|send_to_session|read_session)$/.test(name);
   const parentId = ctx.parentId;
-  const sessionArg = input?.id === 'parent' ? parentId : input?.id;
-  const linkedSession = isSessionTool ? childSessionId(result) || sessionArg : null;
+  const sendTarget = String(input?.id ?? input?.session_id ?? input?.to ?? '');
+  const sessionArg = /^parent$/i.test(sendTarget) ? parentId : sendTarget || undefined;
+  const linkedSession = isSessionTool && !result?.isError ? childSessionId(result) || sessionArg : null;
   const sessionLabel =
     name === 'mcp__sessions__send_to_session'
-      ? `${input?.wait_for_reply ? 'Asked' : 'Messaged'} ${input?.id === 'parent' || (parentId && input?.id === parentId) ? 'parent' : 'session'}`
+      ? `${input?.wait_for_reply ? 'Asked' : 'Messaged'} ${/^parent$/i.test(sendTarget) || (parentId && sendTarget === parentId) ? 'parent' : 'session'}`
       : { start_session: 'Started session', read_session: 'Checked session' }[name.split('__')[2]];
   const isEditLike = ['Edit', 'MultiEdit', 'Write', 'TodoWrite', 'ExitPlanMode'].includes(name);
   const [open, setOpen] = useState(isEditLike && !(name === 'Write' && filePath && artifactKind(filePath)));
@@ -222,6 +230,11 @@ export default function ToolCard({ item, cwd, children }) {
         )}
         <span className={`tstate ${status}`}>{status === 'running' ? <span className="spinner" /> : status === 'error' ? '!' : status === 'waiting' ? '…' : '✓'}</span>
       </button>
+      {status === 'error' && !open && resultText && (
+        <div className="tool-err" title={resultText} onClick={() => setOpen(true)}>
+          {errorLine(resultText)}
+        </div>
+      )}
       {open && (body || resultText || item.children?.length > 0) && (
         <div className="tool-body">
           {body}

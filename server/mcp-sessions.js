@@ -74,7 +74,16 @@ const TOOLS = [
 ];
 
 async function runTool(name, a = {}) {
-  if (a.id == null && a.session_id != null) a.id = a.session_id; // a common slip
+  // The CLI may defer this server's schemas behind tool search, so a model can call a tool
+  // before it has seen the schema and guess the argument name. Take the usual guesses.
+  if (a.id == null) a.id = ['session_id', 'sessionId', 'to', 'target', 'session', 'recipient'].map((k) => a[k]).find((v) => v != null);
+  if (a.message == null) a.message = ['text', 'content', 'body', 'prompt'].map((k) => a[k]).find((v) => v != null);
+  const needsId = ['set_session_options', 'send_to_session', 'read_session'].includes(name);
+  if (needsId && (a.id == null || String(a.id).trim() === '')) {
+    throw new Error(`Missing "id". Call ${name} with {"id": "<session id>"${name === 'send_to_session' ? ', "message": "..."' : ''}}; use "parent" as the id for the chat that started this one.`);
+  }
+  if (name === 'send_to_session' && !String(a.message ?? '').trim()) throw new Error('Missing "message". Call send_to_session with {"id": "...", "message": "..."}.');
+  if (needsId) a.id = String(a.id).trim();
   switch (name) {
     case 'start_session':
       return call('POST', '/internal/sessions', { parentId: SELF, prompt: a.prompt, name: a.name, cwd: a.cwd, worktree: !!a.worktree, permissionMode: a.permission_mode, model: a.model, effort: a.effort });
