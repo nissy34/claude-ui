@@ -29,7 +29,9 @@ function Markdown({ text, streaming }) {
 }
 
 function Thinking({ text, streaming }) {
-  const [open, setOpen] = useState(false);
+  const { verbose } = React.useContext(ChatCtx);
+  const [open, setOpen] = useState(verbose);
+  useEffect(() => setOpen(verbose), [verbose]);
   return (
     <div className="thinking">
       <button className="thinking-head" onClick={() => setOpen((o) => !o)}>
@@ -53,7 +55,7 @@ function splitAttachments(text) {
   return [text.slice(0, m.index), m[1].trim().split('\n').map((l) => l.slice(2))];
 }
 
-function UserMessage({ item, canEdit, onEdit }) {
+function UserMessage({ item, canEdit, onEdit, onFork }) {
   const [body, attached] = splitAttachments(item.text);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(item.text);
@@ -113,6 +115,11 @@ function UserMessage({ item, canEdit, onEdit }) {
         <button className="icon-btn" title="Copy" onClick={() => copy(item.text)}>
           ⧉
         </button>
+        {onFork && (
+          <button className="icon-btn" title="Fork: continue this conversation from here in a new chat" onClick={() => onFork(item.index)}>
+            ⑂ <span className="lbl">Fork</span>
+          </button>
+        )}
         {canEdit && (
           <button
             className="icon-btn"
@@ -230,6 +237,7 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
   const [menu, setMenu] = useState(false);
   const [info, setInfo] = useState(false);
   const [terminal, setTerminal] = useState(false);
+  const [verbose, setVerbose] = useState(() => localStorage.getItem('cw.verbose') === '1');
   const wsRef = useRef(null);
   const listRef = useRef(null);
   const deltaOrder = useRef(0);
@@ -339,7 +347,7 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
       run = [];
     };
     for (const it of items) {
-      if (it.type === 'tool' && QUIET.has(it.name) && !(it.perm && !it.perm.done) && !it.result?.isError) run.push(it);
+      if (!verbose && it.type === 'tool' && QUIET.has(it.name) && !(it.perm && !it.perm.done) && !it.result?.isError) run.push(it);
       else {
         flush();
         out.push(it);
@@ -347,7 +355,7 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
     }
     flush();
     return out;
-  }, [items]);
+  }, [items, verbose]);
   const todos = useMemo(() => lastTodos(events), [events]);
   const pendingPerms = items.filter((i) => i.type === 'tool' && i.perm && !i.perm.done).length + items.filter((i) => i.type === 'perm' && !i.done).length;
   const busy = state === 'busy' || state === 'waiting';
@@ -405,8 +413,9 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
       },
       openBrowser: () => openPanel('browser'),
       openSession: (id) => onSelect(id),
+      verbose,
     }),
-    [meta.cwd, onSelect]
+    [meta.cwd, onSelect, verbose]
   );
   const ctxRef = useRef(ctx);
   ctxRef.current = ctx;
@@ -439,6 +448,52 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
     if (!window.confirm('Delete this chat? Claude keeps its own transcript, so you can resume it later from "Past conversations".')) return;
     api(`/api/sessions/${session.id}`, { method: 'DELETE' }).then(onDeleted).catch(onError);
   };
+  const fork = async (index) => {
+    try {
+      const { session: s } = await api(`/api/sessions/${session.id}/fork`, { method: 'POST', body: Number.isInteger(index) ? { index } : {} });
+      onSelect(s.id, s);
+    } catch (e) {
+      onError(e);
+    }
+  };
+  const toggleVerbose = () =>
+    setVerbose((v) => {
+      try {
+        localStorage.setItem('cw.verbose', v ? '0' : '1');
+      } catch {}
+      return !v;
+    });
+  const exportChat = () => {
+    const out = [`# ${meta.name}`, '', `Folder: ${meta.cwd}`, ''];
+    for (const it of items) {
+      if (it.type === 'user') out.push('## You', '', it.text, '');
+      else if (it.type === 'text') out.push('## Claude', '', it.text, '');
+      else if (it.type === 'tool') out.push(`> Tool: ${it.name}${it.summary ? ` ${it.summary}` : ''}`, '');
+      else if (it.type === 'shell') out.push('```', `$ ${it.cmd}`, it.text || '', '```', '');
+    }
+    const blob = new Blob([out.join('\n')], { type: 'text/markdown' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `${(meta.name || 'chat').replace(/[^\w.-]+/g, '-').slice(0, 60)}.md`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  };
+  // Desktop shortcuts inside a chat: Ctrl+O view mode, Ctrl+` terminal, Ctrl/⌘+Shift+D changes, Ctrl/⌘+Shift+B browser.
+  const keysRef = useRef({});
+  keysRef.current = { toggleVerbose, toggleTerminal: () => toggleTerminal(), panel };
+  useEffect(() => {
+    const onKey = (e) => {
+      const mod = e.ctrlKey || e.metaKey;
+      const k = keysRef.current;
+      if (e.ctrlKey && !e.shiftKey && e.key.toLowerCase() === 'o') (e.preventDefault(), k.toggleVerbose());
+      else if (e.ctrlKey && e.key === '`') (e.preventDefault(), k.toggleTerminal());
+      else if (mod && e.shiftKey && e.key.toLowerCase() === 'd') (e.preventDefault(), k.panel && k.panel !== 'browser' ? setPanel(null) : openPanel('changes'));
+      else if (mod && e.shiftKey && e.key.toLowerCase() === 'b') (e.preventDefault(), k.panel === 'browser' ? setPanel(null) : openPanel('browser'));
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   const toggleTerminal = async () => {
     if (!terminal && !drawerSession) {
       const s = await onCreate({ cwd: meta.cwd, kind: 'shell', parentId: session.id, name: `${meta.name} terminal` }, { navigate: false });
@@ -498,6 +553,11 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
                     <button onClick={() => (setMenu(false), setInfo(true))}>Session info and usage</button>
                     <button onClick={openTui}>Open in Claude's terminal</button>
                     <button onClick={rename}>Rename</button>
+                    <button onClick={() => (setMenu(false), fork())}>Fork chat</button>
+                    <button onClick={() => (setMenu(false), exportChat())}>Export as Markdown</button>
+                    <button onClick={() => (setMenu(false), toggleVerbose())}>
+                      {verbose ? 'Normal view' : 'Verbose view'} <kbd>Ctrl O</kbd>
+                    </button>
                     <button onClick={archive}>{meta.archived ? 'Unarchive' : 'Archive'}</button>
                     {meta.live && <button onClick={() => (setMenu(false), send({ t: 'stop' }))}>Stop Claude process</button>}
                     <button onClick={() => (setMenu(false), relogin())}>Log in to Claude again</button>
@@ -525,7 +585,7 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
                   case 'group':
                     return <ToolGroup key={it.key} tools={it.tools} cwd={meta.cwd} />;
                   case 'user':
-                    return <UserMessage key={`u${it.index}`} item={it} canEdit={!busy && conn === 'open'} onEdit={(index, text) => send({ t: 'edit', index, text })} />;
+                    return <UserMessage key={`u${it.index}`} item={it} canEdit={!busy && conn === 'open'} onEdit={(index, text) => send({ t: 'edit', index, text })} onFork={busy ? null : fork} />;
                   case 'text':
                     return (
                       <div key={it.key || n} className="msg assistant">
@@ -565,6 +625,17 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
                             ↻ Resume
                           </button>
                         )}
+                      </div>
+                    );
+                  case 'shell':
+                    return (
+                      <div key={n} className="shell-run">
+                        <div className="shell-cmd">
+                          <span className="muted">$</span> {it.cmd}
+                          {it.code ? <span className="shell-code">exit {it.code}</span> : null}
+                        </div>
+                        {it.text && <pre>{it.text}</pre>}
+                        <div className="muted shell-note">Claude sees this with your next message.</div>
                       </div>
                     );
                   case 'notice':

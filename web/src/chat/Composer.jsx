@@ -397,6 +397,16 @@ export default function Composer({ sessionId, disabled, busy, onSend, onStop, mo
   const modeInfo = MODES.find((m) => m.id === mode) || { label: mode, short: mode };
   const effortInfo = EFFORTS.find((x) => x.id === (effort || ''));
   const models = useModels();
+  useEffect(() => {
+    const onKey = (e) => {
+      if (!(e.ctrlKey || e.metaKey) || !e.shiftKey) return;
+      const k = e.key.toLowerCase();
+      if (k === 'm') (e.preventDefault(), setMenu((m) => (m === 'mode' ? null : 'mode')));
+      else if (k === 'e') (e.preventDefault(), setMenu((m) => (m === 'effort' ? null : 'effort')));
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
   const [moreModels, setMoreModels] = useState(false);
   const modelEfforts = findModel(models, model, activeModel)?.efforts;
   const efforts = modelEfforts?.length ? EFFORTS.filter((x) => !x.id || modelEfforts.includes(x.id)) : EFFORTS;
@@ -467,11 +477,12 @@ export default function Composer({ sessionId, disabled, busy, onSend, onStop, mo
             ))}
           </div>
         )}
+        {/^!\s*\S/.test(text) && <div className="shell-hint">Shell command: runs in the chat's folder, and Claude sees the output with your next message.</div>}
         <textarea
           ref={taRef}
           rows={1}
           value={text}
-          placeholder={placeholder || (busy ? 'Queue a follow-up…' : isTouch ? 'Reply to Claude…' : 'Reply to Claude…  (@ to mention a file or chat, / for commands)')}
+          placeholder={placeholder || (busy ? 'Queue a follow-up…' : isTouch ? 'Reply to Claude…' : 'Reply to Claude…  (@ to mention, / for commands, ! for shell)')}
           onChange={(e) => {
             setText(e.target.value);
             updateSuggest(e.target.value, e.target.selectionStart);
