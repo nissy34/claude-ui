@@ -36,7 +36,7 @@ function loadFontSize() {
   return Number.isFinite(v) ? v : isTouch ? 11 : 13;
 }
 
-export default function TerminalView({ session, onMenu, onError, onDeleted }) {
+export default function TerminalView({ session, onMenu, onError, onDeleted, onCreate }) {
   const holderRef = useRef(null);
   const termRef = useRef(null);
   const fitRef = useRef(null);
@@ -287,6 +287,23 @@ export default function TerminalView({ session, onMenu, onError, onDeleted }) {
         </div>
       </div>
 
+      {onCreate && session.kind === 'claude' && (
+        <div className="term-banner">
+          <span>
+            {session.name === 'Log in to Claude'
+              ? 'Finish signing in here (we typed /login for you), then go back to your chat.'
+              : 'This is the raw Claude terminal. The Desktop-style chat has tool cards, diffs and approvals.'}
+          </span>
+          {session.name !== 'Log in to Claude' && (
+            <button
+              className="btn small primary"
+              onClick={() => onCreate({ cwd: session.cwd, kind: 'chat', ...(session.claudeSessionId ? { resume: session.claudeSessionId, name: session.name } : {}) })}
+            >
+              Open as chat
+            </button>
+          )}
+        </div>
+      )}
       <div className="term-wrap">
         <div className="term-holder" ref={holderRef} />
         {!running && conn !== 'gone' && (

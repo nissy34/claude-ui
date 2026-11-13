@@ -165,7 +165,7 @@ export default function App() {
         {active && active.kind === 'chat' ? (
           <ChatView key={active.id} session={active} sessions={sessions} onSelect={select} onCreate={createSession} {...common} />
         ) : active ? (
-          <TerminalView key={active.id} session={active} {...common} />
+          <TerminalView key={active.id} session={active} onCreate={createSession} {...common} />
         ) : (
           <Empty onMenu={openMenu} onNew={() => setDialog({ type: 'new' })} missing={!!activeId && sessions.length > 0} />
         )}

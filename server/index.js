@@ -301,7 +301,7 @@ app.post(
     const wt = worktree ? await createWorktree(project, name || 'chat') : null;
     const dir = wt ? wt.path : project;
     if (resume && resume !== 'continue' && !/^[0-9a-f-]{36}$/i.test(resume)) throw new Error('Bad resume id');
-    const s = store.create({ cwd: dir, kind, name: name ? String(name).slice(0, 80) : undefined, resume, model, permissionMode });
+    const s = store.create({ cwd: dir, kind, name: name ? String(name).slice(0, 80) : undefined, resume, model, permissionMode, initialInput: req.body?.login && kind === 'claude' ? '/login\r' : undefined });
     if (name) s.meta.customName = true;
     s.meta.project = project;
     if (wt) s.meta.worktree = wt;

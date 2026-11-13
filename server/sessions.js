@@ -254,7 +254,7 @@ class Store {
     return this.sessions.get(id);
   }
 
-  create({ cwd, kind = 'chat', name, resume, model, permissionMode }) {
+  create({ cwd, kind = 'chat', name, resume, model, permissionMode, initialInput }) {
     const id = crypto.randomUUID();
     kind = ['chat', 'claude', 'shell'].includes(kind) ? kind : 'chat';
     const meta = {
@@ -281,6 +281,8 @@ class Store {
       s = new Session(meta);
       this.sessions.set(id, s);
       s.start({ resume });
+      // e.g. type /login into a fresh claude TUI once it has started
+      if (initialInput) setTimeout(() => s.write(initialInput), 3000);
     }
     this.save();
     return s;

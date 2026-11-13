@@ -349,7 +349,7 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
     }
     setTerminal((t) => !t);
   };
-  const relogin = () => onCreate({ cwd: meta.cwd, kind: 'claude', name: 'Log in to Claude' });
+  const relogin = () => onCreate({ cwd: meta.cwd, kind: 'claude', name: 'Log in to Claude', login: true });
 
   const project = (meta.project || meta.cwd)?.split(/[\\/]/).filter(Boolean).pop();
   const rate = meta.rateLimit?.unifiedWindows?.five_hour;

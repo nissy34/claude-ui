@@ -1,14 +1,14 @@
 {
   "name": "claude-ui",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "Self-hosted web UI that fronts the interactive Claude Code CLI running in persistent ptys",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "start": "node server/index.js",
-    "start:env": "node --env-file=.env server/index.js",
+    "start": "node scripts/ensure-build.js && node server/index.js",
+    "start:env": "node scripts/ensure-build.js && node --env-file=.env server/index.js",
     "hash-password": "node server/hash-password.js"
   },
   "engines": {

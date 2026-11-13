@@ -207,6 +207,8 @@ a { color: var(--accent); }
 .toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 80; background: var(--red-soft); border: 1px solid var(--red); color: var(--text); padding: 10px 16px; border-radius: 10px; max-width: calc(100vw - 32px); box-shadow: var(--shadow-pop); }
 
 /* ============ terminal ============ */
+.term-banner { display: flex; align-items: center; gap: 12px; padding: 8px 14px; background: var(--accent-soft); border-bottom: 1px solid var(--line); font-size: 13px; flex: none; }
+.term-banner span { flex: 1; }
 .term-view { display: flex; flex-direction: column; height: 100%; min-height: 0; background: var(--bg); }
 .term-wrap { position: relative; flex: 1; min-height: 0; background: #1e1d1b; }
 .term-holder { position: absolute; inset: 6px 4px 4px 10px; }
