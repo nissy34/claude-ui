@@ -19,6 +19,8 @@ import {
 } from './auth.js';
 import { store, claudeProjectDir } from './sessions.js';
 import { getChanges, searchFiles, readFileSafe, createWorktree } from './git.js';
+import * as browser from './browser.js';
+import { listArtifacts, rawHandler, rawUrl } from './artifacts.js';
 import { authStatus, mcpList, pluginList, cliVersion, permissionRules, removePermissionRule } from './claude-admin.js';
 
 if (!config.password && !config.passwordHash) {
@@ -133,6 +135,22 @@ app.get(
   })
 );
 
+// Built-in browser, driven by Claude through mcp-browser.js.
+app.get(
+  '/internal/browser/:sid/screenshot',
+  wrap(async (req, res) => {
+    const buf = await browser.screenshot(req.params.sid, { type: 'jpeg', quality: 75, fullPage: req.query.full === '1' });
+    res.type('image/jpeg').send(buf);
+  })
+);
+app.post(
+  '/internal/browser/:sid/:op',
+  wrap(async (req, res) => {
+    if (!store.get(req.params.sid)) throw new Error('No such session');
+    res.json(await browser.run(req.params.sid, req.params.op, req.body || {}));
+  })
+);
+
 app.get('/internal/sessions', (req, res) => {
   let list = [...store.sessions.values()];
   if (req.query.parentId) list = list.filter((s) => s.meta.parentId === req.query.parentId);
@@ -140,6 +158,16 @@ app.get('/internal/sessions', (req, res) => {
 });
 
 app.get('/api/me', (req, res) => res.json({ authed: isAuthed(req) }));
+
+// Artifact files, authorised by a per-session signature in the path (no cookie: sandboxed
+// HTML artifacts load their own CSS/JS from here with an opaque origin).
+app.get('/raw/:sid/:sig/*', (req, res, next) => {
+  try {
+    rawHandler(store)(req, res);
+  } catch (e) {
+    next(e);
+  }
+});
 
 app.use('/api', (req, res, next) => {
   if (!isAuthed(req)) return res.status(401).json({ error: 'Not logged in' });
@@ -370,6 +398,46 @@ app.get(
   })
 );
 
+// ---------- built-in browser (the user's view of Claude's tab) ----------
+app.get(
+  '/api/sessions/:id/browser',
+  wrap(async (req, res) => {
+    getSession(req);
+    res.json(await browser.state(req.params.id));
+  })
+);
+app.get(
+  '/api/sessions/:id/browser/frame',
+  wrap(async (req, res) => {
+    getSession(req);
+    const buf = await browser.screenshot(req.params.id, { type: 'jpeg', quality: 70 });
+    res.setHeader('Cache-Control', 'no-store');
+    res.type('image/jpeg').send(buf);
+  })
+);
+app.post(
+  '/api/sessions/:id/browser/:op',
+  wrap(async (req, res) => {
+    getSession(req);
+    const out = await browser.run(req.params.id, req.params.op, { ...(req.body || {}), quiet: true });
+    res.json({ ...(out.url ? { url: out.url, title: out.title } : out), state: await browser.state(req.params.id) });
+  })
+);
+
+// ---------- artifacts ----------
+app.get('/api/artifacts', (req, res) => {
+  const all = store.list().map((j) => store.get(j.id)).filter(Boolean);
+  const list = listArtifacts(req.query.session ? all.filter((s) => s.meta.id === req.query.session) : all);
+  res.json({ artifacts: list });
+});
+app.get(
+  '/api/artifact-url',
+  wrap(async (req, res) => {
+    const s = getSessionById(req.query.session);
+    res.json({ url: rawUrl(s.meta.id, path.resolve(s.meta.cwd, String(req.query.path || ''))) });
+  })
+);
+
 // ---------- settings ----------
 app.get('/api/claude/status', wrap(async (req, res) => res.json({ auth: await authStatus(), version: await cliVersion(), dataDir: config.dataDir, projectsRoot: config.projectsRoot, node: process.version, platform: process.platform })));
 app.get('/api/claude/mcp', wrap(async (req, res) => res.json(await mcpList(req.query.cwd ? resolveDir(req.query.cwd) : config.projectsRoot))));
@@ -415,6 +483,7 @@ app.delete(
   '/api/sessions/:id',
   wrap(async (req, res) => {
     store.remove(req.params.id);
+    browser.closeTab(req.params.id);
     res.json({ ok: true });
   })
 );

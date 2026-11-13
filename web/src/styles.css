@@ -532,3 +532,40 @@ kbd { display: inline-block; font: 11.5px var(--mono); background: var(--panel-2
 }
 .attach-row.in-bubble { padding: 8px 0 0; }
 .attach-row.in-bubble .attach { background: var(--panel); }
+
+/* artifacts */
+.side-panel.wide { width: min(64%, 1100px); }
+.panel-body:has(> .art), .panel-body:has(> .browser) { overflow: hidden; display: flex; flex-direction: column; }
+.art { flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--bg); }
+.art-bar, .browser-bar { display: flex; align-items: center; gap: 4px; padding: 6px 8px 6px 12px; border-bottom: 1px solid var(--line); }
+.art-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 500; }
+.art-name .muted { font-weight: 400; font-size: 11.5px; }
+.art-zoom { background: var(--panel); color: var(--text-2); border: 1px solid var(--line); border-radius: 7px; font: inherit; font-size: 12px; padding: 3px 4px; }
+.art-bar a.icon-btn { text-decoration: none; color: inherit; display: inline-grid; place-items: center; }
+.btn.on { background: var(--hover); }
+.art-frame-wrap { flex: 1; min-height: 0; overflow: hidden; background: #fff; }
+.art-frame { border: 0; width: 100%; height: 100%; flex: 1; transform-origin: 0 0; background: #fff; display: block; }
+.art-image { flex: 1; min-height: 0; overflow: auto; display: flex; padding: 16px; background: repeating-conic-gradient(var(--panel-2) 0 25%, var(--bg) 0 50%) 0 0 / 20px 20px; }
+.art-image img { margin: auto; display: block; background: #fff; box-shadow: var(--shadow-pop); }
+.art-image.fit img { max-width: 100%; max-height: 100%; object-fit: contain; }
+.art-doc { flex: 1; min-height: 0; overflow: auto; padding: 20px 28px; }
+.art-table { border-collapse: collapse; }
+.art-table th, .art-table td { border: 1px solid var(--line); padding: 4px 8px; text-align: left; white-space: nowrap; }
+.art-table th { background: var(--panel-2); position: sticky; top: 0; }
+.art:fullscreen { background: var(--bg); }
+.artifact-card { display: flex; align-items: center; gap: 12px; width: calc(100% - 20px); margin: 0 10px 10px; padding: 10px 12px; text-align: left; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; color: var(--text); }
+.artifact-card:hover { border-color: var(--accent); }
+.art-icon { width: 34px; height: 34px; border-radius: 8px; background: var(--panel-2); display: grid; place-items: center; font-size: 17px; color: var(--accent); flex: none; }
+.art-meta { flex: 1; min-width: 0; display: flex; flex-direction: column; font-size: 13px; gap: 1px; }
+.art-meta b { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.art-meta .muted { font-size: 12px; }
+
+/* built-in browser */
+.browser { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.browser-url { flex: 1; min-width: 0; background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 5px 10px; font: inherit; font-size: 12.5px; color: var(--text); }
+.browser-url:focus { outline: 2px solid color-mix(in srgb, var(--accent) 40%, transparent); background: var(--panel); }
+.browser-view { flex: 1; min-height: 0; overflow: auto; background: var(--panel-2); outline: none; }
+.browser-view:focus { box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent) 45%, transparent); }
+.browser-view img { display: block; width: 100%; height: auto; cursor: pointer; user-select: none; }
+.browser-foot { font-size: 11.5px; padding: 5px 12px; border-top: 1px solid var(--line); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.browser .panel-empty code { font-size: 12px; }

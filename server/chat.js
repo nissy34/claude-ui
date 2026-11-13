@@ -7,6 +7,7 @@ import crypto from 'node:crypto';
 import readline from 'node:readline';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { browserAvailable } from './browser.js';
 import { config, PRIVATE_ENV } from './config.js';
 import { resolveCommand } from './launch.js';
 
@@ -25,6 +26,7 @@ export function transcriptPath(cwd, id) {
 }
 
 const MCP_SCRIPT = path.join(path.dirname(fileURLToPath(import.meta.url)), 'mcp-sessions.js');
+const MCP_BROWSER = path.join(path.dirname(fileURLToPath(import.meta.url)), 'mcp-browser.js');
 
 function childEnv(sessionId) {
   const env = { ...process.env };
@@ -207,9 +209,12 @@ export class ChatSession {
       '--replay-user-messages',
       ...config.claudeArgs,
     ];
-    if (config.childSessions) {
-      args.push('--mcp-config', JSON.stringify({ mcpServers: { sessions: { type: 'stdio', command: process.execPath, args: [MCP_SCRIPT] } } }));
-    }
+    const builtin = {};
+    if (config.childSessions) builtin.sessions = { type: 'stdio', command: process.execPath, args: [MCP_SCRIPT] };
+    if (browserAvailable()) builtin.browser = { type: 'stdio', command: process.execPath, args: [MCP_BROWSER] };
+    if (Object.keys(builtin).length) args.push('--mcp-config', JSON.stringify({ mcpServers: builtin }));
+    // Looking at the page never needs a prompt; navigating, clicking and typing still ask.
+    if (builtin.browser) args.push('--allowedTools', ['snapshot', 'screenshot', 'console', 'scroll', 'wait_for', 'back', 'reload', 'resize'].map((t) => `mcp__browser__${t}`).join(','));
     // 'default' is the CLI's normal ask-first mode; newer CLIs call it 'manual', so just omit the flag.
     if (m.permissionMode && m.permissionMode !== 'default') args.push('--permission-mode', m.permissionMode);
     if (m.model) args.push('--model', m.model);

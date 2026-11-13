@@ -216,6 +216,7 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
   const [showTodos, setShowTodos] = useState(true);
   const [panel, setPanel] = useState(() => (window.matchMedia('(min-width: 1200px)').matches && localStorage.getItem('cw.panel') === 'open' ? 'changes' : null));
   const [files, setFiles] = useState([]);
+  const [wide, setWide] = useState(false);
   const [changesKey, setChangesKey] = useState(0);
   const [menu, setMenu] = useState(false);
   const [info, setInfo] = useState(false);
@@ -259,6 +260,12 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
         } else if (m.t === 'ev') {
           const e = m.ev;
           setEvents((list) => [...list, e]);
+          // Like Desktop: show the browser when Claude uses it, and new pages/images it writes.
+          if (e.k === 'block' && e.block?.type === 'tool_use' && !e.parent) {
+            const { name, input } = e.block;
+            if (/^mcp__browser__(navigate|click|type)$/.test(name)) ctxRef.current?.openBrowser();
+            else if (name === 'Write' && /\.(html?|svg)$/i.test(input?.file_path || '')) setTimeout(() => ctxRef.current?.openArtifact(input.file_path), 400);
+          }
           if (e.k === 'block' || e.k === 'result') {
             setDeltas((d) => {
               if (e.k === 'result') return {};
@@ -372,10 +379,28 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
         setFiles((f) => (f.includes(rel) ? f : [...f, rel].slice(-6)));
         openPanel(rel);
       },
+      openArtifact: (p) => {
+        const abs = /^([a-zA-Z]:)?[\\/]/.test(p) ? p : `${meta.cwd}/${p}`;
+        const key = 'art:' + abs;
+        setFiles((f) => (f.includes(key) ? f : [...f, key].slice(-6)));
+        openPanel(key);
+      },
+      openBrowser: () => openPanel('browser'),
       openSession: (id) => onSelect(id),
     }),
     [meta.cwd, onSelect]
   );
+  const ctxRef = useRef(ctx);
+  ctxRef.current = ctx;
+
+  // Opened from the Artifacts gallery: #s=<id>&a=<path>
+  useEffect(() => {
+    const m = /[&#]a=([^&]+)/.exec(location.hash);
+    if (m && meta.cwd) {
+      ctxRef.current.openArtifact(decodeURIComponent(m[1]));
+      history.replaceState(null, '', `#s=${session.id}`);
+    }
+  }, [meta.cwd, session.id]);
 
   const rename = () => {
     setMenu(false);
@@ -426,8 +451,11 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
               <button className={`icon-btn ${terminal ? 'on' : ''}`} title="Terminal" onClick={toggleTerminal}>
                 ›_
               </button>
-              <button className={`icon-btn ${panel ? 'on' : ''}`} title="Changes and files" onClick={() => (panel ? setPanel(null) : openPanel('changes'))}>
+              <button className={`icon-btn ${panel ? 'on' : ''}`} title="Changes and files" onClick={() => (panel && panel !== 'browser' ? setPanel(null) : openPanel('changes'))}>
                 ± <span className="lbl hide-mobile">Changes</span>
+              </button>
+              <button className={`icon-btn ${panel === 'browser' ? 'on' : ''}`} title="Browser" onClick={() => (panel === 'browser' ? setPanel(null) : openPanel('browser'))}>
+                ◎ <span className="lbl hide-mobile">Browser</span>
               </button>
               <div className="menu-wrap">
                 <button className="icon-btn" title="More" onClick={() => setMenu((m) => !m)}>
@@ -612,6 +640,9 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
             onOpenFile={ctx.openFile}
             onPrompt={(t) => submit(t, [])}
             busy={busy}
+            onError={onError}
+            wide={wide}
+            onWide={() => setWide((w) => !w)}
           />
         )}
         {info && <InfoDialog meta={meta} onClose={() => setInfo(false)} />}

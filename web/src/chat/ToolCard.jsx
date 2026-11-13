@@ -1,5 +1,6 @@
 import React, { useContext, useMemo, useState } from 'react';
 import { ChatCtx } from './ctx.js';
+import { artifactKind } from './ArtifactView.jsx';
 import { diffLines } from 'diff';
 import { highlight, renderMarkdown } from './markdown.js';
 import { shortPath } from './model.js';
@@ -179,7 +180,7 @@ export default function ToolCard({ item, cwd, children }) {
   const isSessionTool = /^mcp__sessions__(start_session|send_to_session|read_session)$/.test(name);
   const linkedSession = isSessionTool ? childSessionId(result) || input?.id : null;
   const isEditLike = ['Edit', 'MultiEdit', 'Write', 'TodoWrite', 'ExitPlanMode'].includes(name);
-  const [open, setOpen] = useState(isEditLike);
+  const [open, setOpen] = useState(isEditLike && !(name === 'Write' && filePath && artifactKind(filePath)));
   const [showResult, setShowResult] = useState(false);
   const stats = useMemo(() => diffStats(name, input || {}), [name, input]);
   const status = result ? (result.isError ? 'error' : 'done') : item.perm && !item.perm.done ? 'waiting' : 'running';
@@ -237,6 +238,16 @@ export default function ToolCard({ item, cwd, children }) {
             <pre className={`code-sm result ${result.isError ? 'err' : ''}`}>{resultText}</pre>
           ))}
         </div>
+      )}
+      {filePath && name !== 'Read' && artifactKind(filePath) && status !== 'error' && (
+        <button className="artifact-card" onClick={() => ctx.openArtifact(filePath)}>
+          <span className="art-icon">{{ html: '◰', image: '▣', markdown: '¶', pdf: '▤', csv: '▦' }[artifactKind(filePath)]}</span>
+          <span className="art-meta">
+            <b>{filePath.split(/[\\/]/).pop()}</b>
+            <span className="muted">{{ html: 'Web page', image: 'Image', markdown: 'Document', pdf: 'PDF', csv: 'Table' }[artifactKind(filePath)]} · click to open</span>
+          </span>
+          <span className="muted">↗</span>
+        </button>
       )}
       {linkedSession && (
         <div className="tool-body" style={{ borderTop: '1px solid var(--line)' }}>

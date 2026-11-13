@@ -1,11 +1,7 @@
 #!/usr/bin/env node
 // A tiny stdio MCP server that the web UI gives to every chat, so Claude can open and drive
 // other sessions ("child sessions"). It forwards each tool call to the main server.
-import readline from 'node:readline';
-
-const API = process.env.CW_INTERNAL_URL;
-const TOKEN = process.env.CW_INTERNAL_TOKEN;
-const SELF = process.env.CW_SESSION_ID;
+import { call, serve, SELF } from './mcp-stdio.js';
 
 const TOOLS = [
   {
@@ -50,17 +46,6 @@ const TOOLS = [
   },
 ];
 
-async function call(method, path, body) {
-  const res = await fetch(API + path, {
-    method,
-    headers: { 'content-type': 'application/json', 'x-cw-token': TOKEN, 'x-cw-session': SELF },
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-  return data;
-}
-
 async function runTool(name, a = {}) {
   switch (name) {
     case 'start_session':
@@ -78,38 +63,4 @@ async function runTool(name, a = {}) {
   }
 }
 
-function send(msg) {
-  process.stdout.write(JSON.stringify(msg) + '\n');
-}
-
-const rl = readline.createInterface({ input: process.stdin });
-rl.on('line', async (line) => {
-  let msg;
-  try {
-    msg = JSON.parse(line);
-  } catch {
-    return;
-  }
-  const { id, method, params } = msg;
-  if (id === undefined) return; // notification
-  try {
-    if (method === 'initialize') {
-      send({ jsonrpc: '2.0', id, result: { protocolVersion: params?.protocolVersion || '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'sessions', version: '1.0.0' } } });
-    } else if (method === 'tools/list') {
-      send({ jsonrpc: '2.0', id, result: { tools: TOOLS } });
-    } else if (method === 'tools/call') {
-      try {
-        const out = await runTool(params.name, params.arguments);
-        send({ jsonrpc: '2.0', id, result: { content: [{ type: 'text', text: JSON.stringify(out, null, 2) }] } });
-      } catch (e) {
-        send({ jsonrpc: '2.0', id, result: { content: [{ type: 'text', text: `Error: ${e.message}` }], isError: true } });
-      }
-    } else if (method === 'ping') {
-      send({ jsonrpc: '2.0', id, result: {} });
-    } else {
-      send({ jsonrpc: '2.0', id, error: { code: -32601, message: `Method not found: ${method}` } });
-    }
-  } catch (e) {
-    send({ jsonrpc: '2.0', id, error: { code: -32603, message: e.message } });
-  }
-});
+serve('sessions', TOOLS, runTool);

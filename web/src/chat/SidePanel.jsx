@@ -1,6 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { api } from '../api.js';
 import { highlight } from './markdown.js';
+import ArtifactView from './ArtifactView.jsx';
+import BrowserView from './BrowserView.jsx';
 
 function UnifiedDiff({ diff, path }) {
   const rows = [];
@@ -141,17 +143,21 @@ function FileView({ sessionId, path, refreshKey }) {
   );
 }
 
-export default function SidePanel({ sessionId, tab, files, onTab, onCloseFile, onClose, refreshKey, onOpenFile, onPrompt, busy }) {
+export default function SidePanel({ sessionId, tab, files, onTab, onCloseFile, onClose, refreshKey, onOpenFile, onPrompt, busy, onError, wide, onWide }) {
   return (
-    <aside className="side-panel">
+    <aside className={`side-panel ${wide ? 'wide' : ''}`}>
       <div className="panel-head">
         <div className="panel-tabs">
           <button className={`panel-tab ${tab === 'changes' ? 'on' : ''}`} onClick={() => onTab('changes')}>
             Changes
           </button>
+          <button className={`panel-tab ${tab === 'browser' ? 'on' : ''}`} onClick={() => onTab('browser')}>
+            Browser
+          </button>
           {files.map((f) => (
-            <button key={f} className={`panel-tab ${tab === f ? 'on' : ''}`} onClick={() => onTab(f)} title={f}>
-              {f.split('/').pop()}
+            <button key={f} className={`panel-tab ${tab === f ? 'on' : ''}`} onClick={() => onTab(f)} title={f.replace(/^art:/, '')}>
+              {f.startsWith('art:') ? '◇ ' : ''}
+              {f.split(/[\\/]/).pop()}
               <span
                 style={{ marginLeft: 6, opacity: 0.6 }}
                 onClick={(e) => {
@@ -164,12 +170,23 @@ export default function SidePanel({ sessionId, tab, files, onTab, onCloseFile, o
             </button>
           ))}
         </div>
+        <button className="icon-btn hide-mobile" title={wide ? 'Narrower' : 'Wider'} onClick={onWide}>
+          {wide ? '⇥' : '⇤'}
+        </button>
         <button className="icon-btn" title="Close panel" onClick={onClose}>
           ✕
         </button>
       </div>
       <div className="panel-body">
-        {tab === 'changes' ? <Changes sessionId={sessionId} refreshKey={refreshKey} onOpenFile={onOpenFile} onPrompt={onPrompt} busy={busy} /> : <FileView sessionId={sessionId} path={tab} refreshKey={refreshKey} />}
+        {tab === 'changes' ? (
+          <Changes sessionId={sessionId} refreshKey={refreshKey} onOpenFile={onOpenFile} onPrompt={onPrompt} busy={busy} />
+        ) : tab === 'browser' ? (
+          <BrowserView sessionId={sessionId} onError={onError} />
+        ) : tab.startsWith('art:') ? (
+          <ArtifactView sessionId={sessionId} path={tab.slice(4)} refreshKey={refreshKey} />
+        ) : (
+          <FileView sessionId={sessionId} path={tab} refreshKey={refreshKey} />
+        )}
       </div>
     </aside>
   );
