@@ -286,7 +286,9 @@ export function groupSummary(tools) {
 export function ToolGroup({ tools, cwd }) {
   const running = tools.some((t) => !t.result);
   const failed = tools.filter((t) => t.result?.isError).length;
-  const [open, setOpen] = useState(false);
+  const { verbose } = useContext(ChatCtx);
+  const [open, setOpen] = useState(verbose);
+  React.useEffect(() => setOpen(verbose), [verbose]);
   return (
     <div className="tool-group">
       <button className="tool-group-head" onClick={() => setOpen((o) => !o)}>

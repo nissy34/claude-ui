@@ -76,6 +76,9 @@ export function buildItems(events, deltas, offset = 0) {
       case 'error':
         push({ type: 'error', text: e.text, resumable: !!e.resumable || /^Claude exited/.test(e.text || '') });
         break;
+      case 'shell':
+        push({ type: 'shell', cmd: e.cmd, text: e.text, code: e.code });
+        break;
       case 'notice':
         push({ type: 'notice', text: e.text });
         break;
