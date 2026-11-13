@@ -19,7 +19,7 @@ const TOOLS = [
         name: { type: 'string', description: 'Short title for the session (shown in the sidebar).' },
         cwd: { type: 'string', description: 'Folder to run in. Defaults to this session\'s folder.' },
         worktree: { type: 'boolean', description: 'Run in a fresh git worktree on its own branch, so its edits do not collide with this session.' },
-        permission_mode: { type: 'string', enum: ['default', 'acceptEdits', 'plan', 'bypassPermissions'], description: 'Permission mode for the child. Defaults to this session\'s mode.' },
+        permission_mode: { type: 'string', enum: ['default', 'auto', 'acceptEdits', 'plan', 'bypassPermissions'], description: 'Permission mode for the child. Defaults to this session\'s mode.' },
       },
       required: ['prompt'],
     },

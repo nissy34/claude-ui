@@ -209,7 +209,8 @@ export class ChatSession {
     if (config.childSessions) {
       args.push('--mcp-config', JSON.stringify({ mcpServers: { sessions: { type: 'stdio', command: process.execPath, args: [MCP_SCRIPT] } } }));
     }
-    if (m.permissionMode) args.push('--permission-mode', m.permissionMode);
+    // 'default' is the CLI's normal ask-first mode; newer CLIs call it 'manual', so just omit the flag.
+    if (m.permissionMode && m.permissionMode !== 'default') args.push('--permission-mode', m.permissionMode);
     if (m.model) args.push('--model', m.model);
     if (m.effort) args.push('--effort', m.effort);
     const fork = this.forkAt;

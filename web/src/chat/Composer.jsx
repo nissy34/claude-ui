@@ -5,6 +5,7 @@ const isTouch = typeof window !== 'undefined' && window.matchMedia('(pointer: co
 
 export const MODES = [
   { id: 'default', label: 'Ask before edits', short: 'Ask', desc: 'Claude asks before changing files or running commands' },
+  { id: 'auto', label: 'Auto mode', short: 'Auto', desc: 'A safety classifier approves or blocks each action, so Claude rarely needs to ask' },
   { id: 'acceptEdits', label: 'Accept edits', short: 'Edits', desc: 'File edits are applied automatically' },
   { id: 'plan', label: 'Plan mode', short: 'Plan', desc: 'Claude explores and proposes a plan before changing anything' },
   { id: 'bypassPermissions', label: 'Bypass permissions', short: 'Bypass', desc: 'Everything runs without asking. Use with care' },
@@ -149,8 +150,8 @@ export default function Composer({ sessionId, disabled, busy, onSend, onStop, mo
       onStop();
     } else if (e.key === 'Tab' && e.shiftKey) {
       e.preventDefault();
-      const i = MODES.findIndex((m) => m.id === mode);
-      onMode(MODES[(i + 1) % 3].id);
+      const cycle = ['default', 'auto', 'acceptEdits', 'plan'];
+      onMode(cycle[(cycle.indexOf(mode) + 1) % cycle.length]);
     }
   };
 
