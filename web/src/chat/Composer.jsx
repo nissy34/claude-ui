@@ -155,6 +155,10 @@ export default function Composer({ sessionId, disabled, busy, onSend, onStop, mo
   const taRef = useRef(null);
   const fileRef = useRef(null);
   const fetchSeq = useRef(0);
+  const menuRef = useRef(null);
+  useEffect(() => {
+    menuRef.current?.children[sel]?.scrollIntoView({ block: 'nearest' });
+  }, [sel, suggest]);
 
   useEffect(() => {
     try {
@@ -190,7 +194,7 @@ export default function Composer({ sessionId, disabled, busy, onSend, onStop, mo
     const slash = /^\/([^\s]*)$/.exec(before);
     if (slash) {
       const q = slash[1].toLowerCase();
-      const items = commands.filter((c) => c.toLowerCase().includes(q)).slice(0, 10).map((c) => ({ label: `/${c}`, insert: `/${c} ` }));
+      const items = commands.filter((c) => c.toLowerCase().includes(q)).slice(0, 60).map((c) => ({ label: `/${c}`, insert: `/${c} ` }));
       setSuggest(items.length ? { type: 'cmd', items, start: 0, end: cursor } : null);
       setSel(0);
       return;
@@ -341,23 +345,6 @@ export default function Composer({ sessionId, disabled, busy, onSend, onStop, mo
 
   return (
     <div className="composer-wrap">
-      {suggest && (
-        <div className="cmd-menu">
-          {suggest.items.map((it, i) => (
-            <button
-              key={it.label}
-              className={i === sel ? 'on' : ''}
-              onMouseDown={(e) => {
-                e.preventDefault();
-                applySuggestion(it);
-              }}
-            >
-              {it.label}
-              <span className="ctype">{suggest.type === 'file' ? 'file' : 'command'}</span>
-            </button>
-          ))}
-        </div>
-      )}
       <div
         className="composer"
         onDragOver={(e) => e.preventDefault()}
@@ -366,6 +353,23 @@ export default function Composer({ sessionId, disabled, busy, onSend, onStop, mo
           addFiles(e.dataTransfer.files);
         }}
       >
+        {suggest && (
+          <div className="cmd-menu" ref={menuRef}>
+            {suggest.items.map((it, i) => (
+              <button
+                key={it.label}
+                className={i === sel ? 'on' : ''}
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  applySuggestion(it);
+                }}
+              >
+                {it.label}
+                <span className="ctype">{suggest.type === 'file' ? 'file' : 'command'}</span>
+              </button>
+            ))}
+          </div>
+        )}
         {queued > 0 && <div className="queued-note">{queued} message{queued > 1 ? 's' : ''} queued. Claude reads {queued > 1 ? 'them' : 'it'} when the current step finishes.</div>}
         {attachments.length > 0 && (
           <div className="attach-row">
