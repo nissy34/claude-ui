@@ -1,4 +1,5 @@
 import http from 'node:http';
+import os from 'node:os';
 import fs from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
@@ -64,7 +65,7 @@ app.use('/api', (req, res, next) => {
 // ---------- helpers ----------
 function resolveDir(input) {
   if (typeof input !== 'string' || !input) throw new Error('cwd is required');
-  const abs = path.resolve(config.projectsRoot, input.replace(/^~(?=$|\/)/, process.env.HOME || ''));
+  const abs = path.resolve(config.projectsRoot, input.replace(/^~(?=$|[\\/])/, os.homedir()));
   let real;
   try {
     real = fs.realpathSync(abs);

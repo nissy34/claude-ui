@@ -37,8 +37,9 @@ Sessions live on the server. Close the tab, open it on your phone, and the same 
 
 ## Requirements
 
-- Linux or macOS machine that stays on
-- Node.js 20+ and build tools for `node-pty` (`build-essential` and `python3` on Debian/Ubuntu; Xcode CLT on macOS)
+- A Linux, macOS or Windows machine that stays on
+- Node.js 20.6+
+- Optional, for Terminal sessions: build tools for `node-pty` (`build-essential` and `python3` on Debian/Ubuntu; Xcode CLT on macOS; see Windows below). If `node-pty` can't build, install still succeeds and chat sessions work.
 - Claude Code installed and logged in as the user that will run the server (`npm i -g @anthropic-ai/claude-code`, then run `claude` once)
 
 ## Install
@@ -51,8 +52,7 @@ npm run build
 
 npm run hash-password -- 'pick a strong password'   # copy the output
 cp .env.example .env                               # paste it into CW_PASSWORD_HASH, set CW_PROJECTS_ROOT
-set -a; . ./.env; set +a
-npm start
+npm run start:env                                  # reads .env
 ```
 
 Open `http://127.0.0.1:8787` on that machine. For other devices, see below.
@@ -68,6 +68,25 @@ journalctl -u claude-web@$USER -f
 ```
 
 The unit runs as your user so Claude finds your login and settings. If `node` or `claude` live somewhere unusual (nvm, volta), fix the `PATH=` line in the unit.
+
+### Windows
+
+Native Windows works for chat sessions. In PowerShell:
+
+```powershell
+git clone https://github.com/nissy34/claude-ui $HOME\claude-ui
+cd $HOME\claude-ui
+npm install
+npm run build
+npm run hash-password -- "pick a strong password"
+copy .env.example .env      # paste the hash into CW_PASSWORD_HASH, set CW_PROJECTS_ROOT=C:\Users\you\projects
+npm run start:env
+```
+
+- `claude` must work in the same PowerShell (`claude --version`). Both the npm `claude.cmd` shim and the native `claude.exe` are supported.
+- Terminal sessions need `node-pty`, which compiles on install and needs the Visual Studio Build Tools ("Desktop development with C++"). Without them, `npm install` still succeeds and only Terminal and Shell sessions are unavailable. Shell sessions use PowerShell; set `CW_SHELL` to change it.
+- To keep it running, use Task Scheduler ("At log on", action `node`, arguments `--env-file=.env server\index.js`, start in the repo folder) or a service wrapper such as NSSM.
+- If you already use Claude Code inside WSL2, run the Linux instructions inside WSL instead.
 
 ## Reaching it from your phone
 

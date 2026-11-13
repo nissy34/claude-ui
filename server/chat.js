@@ -7,6 +7,7 @@ import crypto from 'node:crypto';
 import readline from 'node:readline';
 import { spawn } from 'node:child_process';
 import { config, PRIVATE_ENV } from './config.js';
+import { resolveCommand } from './launch.js';
 
 const CHAT_DIR = path.join(config.dataDir, 'chats');
 fs.mkdirSync(CHAT_DIR, { recursive: true });
@@ -206,7 +207,8 @@ export class ChatSession {
 
     let proc;
     try {
-      proc = spawn(config.claudeBin, args, { cwd: m.cwd, env: childEnv(), stdio: ['pipe', 'pipe', 'pipe'] });
+      const cmd = resolveCommand(config.claudeBin, args);
+      proc = spawn(cmd.file, cmd.args, { cwd: m.cwd, env: childEnv(), stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
     } catch (e) {
       this.record({ k: 'error', text: `Could not start ${config.claudeBin}: ${e.message}` });
       return;

@@ -2,13 +2,22 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { createRequire } from 'node:module';
-import pty from 'node-pty';
 import { config, PRIVATE_ENV } from './config.js';
 import { ChatSession, claudeProjectDir, transcriptPath } from './chat.js';
 
 export { claudeProjectDir, transcriptPath };
 
+import { resolveCommand, defaultShell } from './launch.js';
+
 const require = createRequire(import.meta.url);
+// node-pty is optional: without it, chat sessions still work and terminal sessions are disabled.
+let pty = null;
+let ptyError = null;
+try {
+  pty = require('node-pty');
+} catch (e) {
+  ptyError = e.message;
+}
 const { Terminal } = require('@xterm/headless');
 const { SerializeAddon } = require('@xterm/addon-serialize');
 
@@ -64,8 +73,7 @@ class Session {
     const m = this.meta;
     let file, args;
     if (m.kind === 'shell') {
-      file = config.shell;
-      args = ['-l'];
+      ({ file, args } = defaultShell());
     } else {
       file = config.claudeBin;
       args = [...config.claudeArgs];
@@ -89,6 +97,8 @@ class Session {
 
     let proc;
     try {
+      if (!pty) throw new Error(`terminal sessions need the node-pty package, which failed to load (${ptyError}). Chat sessions still work.`);
+      ({ file, args } = resolveCommand(file, args));
       proc = pty.spawn(file, args, {
         name: 'xterm-256color',
         cols: this.cols,

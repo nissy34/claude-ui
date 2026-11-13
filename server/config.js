@@ -8,7 +8,7 @@ const home = os.homedir();
 
 function expand(p) {
   if (!p) return p;
-  return path.resolve(p.replace(/^~(?=$|\/)/, home));
+  return path.resolve(p.replace(/^~(?=$|[\\/])/, home));
 }
 
 function int(v, d) {
@@ -44,7 +44,6 @@ export const config = {
   allowAnyDir: env.CW_ALLOW_ANY_DIR === '1',
   claudeBin: env.CW_CLAUDE_BIN || 'claude',
   claudeArgs: (env.CW_CLAUDE_ARGS || '').split(/\s+/).filter(Boolean),
-  shell: env.CW_SHELL || env.SHELL || '/bin/bash',
   scrollback: int(env.CW_SCROLLBACK_LINES, 5000),
   cookieSecure: env.CW_COOKIE_SECURE, // 'true' | 'false' | undefined (auto)
   sessionDays: int(env.CW_SESSION_DAYS, 30),
