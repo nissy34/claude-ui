@@ -28,6 +28,108 @@ function UnifiedDiff({ diff, path }) {
   );
 }
 
+// The branch's pull request with CI checks, like Desktop's PR status in the Changes card.
+function PrCard({ sessionId, refreshKey, onPrompt, busy, onError }) {
+  const [st, setSt] = useState(null);
+  const [open, setOpen] = useState(false);
+  const [merging, setMerging] = useState(false);
+  const load = () =>
+    api(`/api/sessions/${sessionId}/pr`)
+      .then(setSt)
+      .catch(() => setSt(null));
+  useEffect(() => {
+    load();
+  }, [sessionId, refreshKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  const pending = st?.pr?.summary?.pending > 0;
+  useEffect(() => {
+    if (!pending) return;
+    const t = setInterval(load, 20_000);
+    return () => clearInterval(t);
+  }, [pending]); // eslint-disable-line react-hooks/exhaustive-deps
+  if (!st) return null;
+  if (!st.available) return <div className="pr-card muted pr-note">{st.reason}</div>;
+  const pr = st.pr;
+  if (!pr) return null;
+  const { pass, fail, pending: pend } = pr.summary;
+  const merge = async () => {
+    if (!window.confirm(`Turn on auto-merge (squash) for PR #${pr.number}? GitHub merges it once checks and reviews pass.`)) return;
+    setMerging(true);
+    try {
+      setSt(await api(`/api/sessions/${sessionId}/pr/merge-when-ready`, { method: 'POST', body: { number: pr.number } }));
+    } catch (e) {
+      onError?.(e);
+    } finally {
+      setMerging(false);
+    }
+  };
+  return (
+    <div className="pr-card">
+      <div className="pr-top">
+        <span className={`pr-state ${pr.state.toLowerCase()}`}>{pr.state === 'OPEN' ? 'Open' : pr.state === 'DRAFT' ? 'Draft' : pr.state === 'MERGED' ? 'Merged' : 'Closed'}</span>
+        <a href={pr.url} target="_blank" rel="noreferrer" className="pr-title" title={pr.title}>
+          #{pr.number} {pr.title}
+        </a>
+        <button className="icon-btn" title="Refresh" onClick={load}>
+          ↻
+        </button>
+      </div>
+      {pr.checks.length > 0 && (
+        <button className="pr-checks" onClick={() => setOpen(!open)}>
+          {fail > 0 && <span className="ck fail">✕ {fail} failing</span>}
+          {pend > 0 && <span className="ck pending">● {pend} running</span>}
+          {pass > 0 && <span className="ck pass">✓ {pass} passed</span>}
+          <span className="chev">{open ? '▾' : '▸'}</span>
+        </button>
+      )}
+      {open && (
+        <div className="pr-check-list">
+          {pr.checks.map((c, i) => (
+            <div key={i} className={`ck-row ${c.state}`}>
+              <span className="ck-ico">{c.state === 'pass' ? '✓' : c.state === 'fail' ? '✕' : '●'}</span>
+              {c.url ? (
+                <a href={c.url} target="_blank" rel="noreferrer">
+                  {c.name}
+                </a>
+              ) : (
+                c.name
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+      <div className="pr-meta muted">
+        {pr.review === 'APPROVED' ? 'Approved' : pr.review === 'CHANGES_REQUESTED' ? 'Changes requested' : pr.review === 'REVIEW_REQUIRED' ? 'Review required' : ''}
+        {pr.mergeable === 'CONFLICTING' ? ' · Merge conflict' : ''}
+        {pr.autoMerge ? ' · Auto-merge on' : ''}
+      </div>
+      {(pr.state === 'OPEN' || pr.state === 'DRAFT') && (
+        <div className="git-actions">
+          {fail > 0 && (
+            <button className="btn small" disabled={busy || !onPrompt} onClick={() => onPrompt(`CI is failing on PR #${pr.number} (${pr.url}). Use gh to look at the failing checks and their logs, find the root cause, fix it, and push. Don't skip or disable tests.`)}>
+              Fix failing checks
+            </button>
+          )}
+          {(pr.review === 'CHANGES_REQUESTED' || pr.review === 'REVIEW_REQUIRED') && (
+            <button className="btn small" disabled={busy || !onPrompt} onClick={() => onPrompt(`Read the review comments on PR #${pr.number} (${pr.url}) with gh, address the ones that need changes, push, and reply on the threads you handled.`)}>
+              Address review comments
+            </button>
+          )}
+          {pr.mergeable === 'CONFLICTING' && (
+            <button className="btn small" disabled={busy || !onPrompt} onClick={() => onPrompt(`PR #${pr.number} has a merge conflict with ${pr.base}. Merge ${pr.base} into this branch, resolve the conflicts carefully, run the tests, and push.`)}>
+              Resolve conflict
+            </button>
+          )}
+          {!pr.autoMerge && pr.state === 'OPEN' && (
+            <button className="btn small" disabled={merging} onClick={merge}>
+              {merging ? 'Turning on…' : 'Merge when ready'}
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function Changes({ sessionId, refreshKey, onOpenFile, onPrompt, busy }) {
   const [data, setData] = useState(null);
   const [open, setOpen] = useState({});
@@ -63,6 +165,7 @@ function Changes({ sessionId, refreshKey, onOpenFile, onPrompt, busy }) {
           </button>
         )}
       </div>
+      <PrCard sessionId={sessionId} refreshKey={refreshKey} onPrompt={onPrompt} busy={busy} />
       {onPrompt && (
         <div className="git-actions">
           <button className="btn small" disabled={busy || !data.files.length} onClick={() => onPrompt('Commit the current changes with a clear commit message. Stage only the files that belong to this work.')}>
