@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { api } from '../api.js';
 import { getPrefs } from '../prefs.js';
 
@@ -35,6 +35,29 @@ function readFile(file) {
     r.onerror = reject;
     r.readAsDataURL(file);
   });
+}
+
+const chatToken = (c) => 'chat:' + c.name.trim().replace(/\s+/g, '-').replace(/[^\w.\-\u0590-\u05ff]/g, '').slice(0, 30);
+
+function MenuIcon({ type }) {
+  const common = { width: 16, height: 16, viewBox: '0 0 16 16', fill: 'none', stroke: 'currentColor', strokeWidth: 1.3, className: 'cm-ico', 'aria-hidden': true };
+  if (type === 'chat')
+    return (
+      <svg {...common}>
+        <path d="M2.5 3.5h11v7h-6l-3 2.5v-2.5h-2z" strokeLinejoin="round" />
+      </svg>
+    );
+  if (type === 'cmd')
+    return (
+      <svg {...common}>
+        <path d="M10 2.5 6 13.5" strokeLinecap="round" />
+      </svg>
+    );
+  return (
+    <svg {...common}>
+      <path d="M4 1.8h5l3 3v9.4H4z M9 1.8v3h3" strokeLinejoin="round" />
+    </svg>
+  );
 }
 
 const SpeechRec = typeof window !== 'undefined' && (window.SpeechRecognition || window.webkitSpeechRecognition);
@@ -135,7 +158,7 @@ function UsageButton({ usage }) {
   );
 }
 
-export default function Composer({ sessionId, disabled, busy, onSend, onStop, mode, onMode, model, activeModel, onModel, effort, onEffort, commands, footer, onError, placeholder, context, onCompact, queued, usage, mcpServers, onSettings, onBrowser }) {
+export default function Composer({ sessionId, disabled, busy, onSend, onStop, mode, onMode, model, activeModel, onModel, effort, onEffort, commands, footer, onError, placeholder, context, onCompact, queued, usage, mcpServers, onSettings, onBrowser, chats }) {
   const draftKey = `cw.draft.${sessionId}`;
   const [text, setText] = useState(() => {
     try {
@@ -156,6 +179,16 @@ export default function Composer({ sessionId, disabled, busy, onSend, onStop, mo
   const fileRef = useRef(null);
   const fetchSeq = useRef(0);
   const menuRef = useRef(null);
+  const refsRef = useRef({}); // "@chat:name" -> session id
+  const caretRef = useRef(null);
+  // Put the caret after an inserted suggestion before the next keystroke lands.
+  useLayoutEffect(() => {
+    if (caretRef.current == null) return;
+    const pos = caretRef.current;
+    caretRef.current = null;
+    taRef.current?.focus();
+    taRef.current?.setSelectionRange(pos, pos);
+  }, [text]);
   useEffect(() => {
     menuRef.current?.children[sel]?.scrollIntoView({ block: 'nearest' });
   }, [sel, suggest]);
@@ -204,10 +237,17 @@ export default function Composer({ sessionId, disabled, busy, onSend, onStop, mo
       const q = at[2];
       const start = cursor - q.length - 1;
       const seq = ++fetchSeq.current;
+      // Other chats first (mention one to give Claude its conversation), then files.
+      const nq = q.toLowerCase().replace(/^chat:/, '');
+      const chatItems = (chats || [])
+        .filter((c) => !nq || c.name.toLowerCase().includes(nq.replace(/-/g, ' ')) || chatToken(c).toLowerCase().includes(nq))
+        .slice(0, q ? 6 : 4)
+        .map((c) => ({ label: c.name, insert: `@${chatToken(c)} `, type: 'chat', id: c.id, hint: c.project }));
+      if (chatItems.length) setSuggest({ type: 'file', items: chatItems, start, end: cursor });
       api(`/api/files?session=${sessionId}&q=${encodeURIComponent(q)}`)
         .then(({ files }) => {
           if (seq !== fetchSeq.current) return;
-          const items = files.map((f) => ({ label: f, insert: `@${f} `, type: 'file' }));
+          const items = [...chatItems, ...files.map((f) => ({ label: f, insert: `@${f} `, type: 'file' }))];
           setSuggest(items.length ? { type: 'file', items, start, end: cursor } : null);
           setSel(0);
         })
@@ -220,14 +260,11 @@ export default function Composer({ sessionId, disabled, busy, onSend, onStop, mo
 
   const applySuggestion = (item) => {
     const s = suggest;
+    if (item.type === 'chat') refsRef.current[item.insert.trim()] = item.id;
     const next = text.slice(0, s.start) + item.insert + text.slice(s.end);
     setText(next);
     setSuggest(null);
-    const pos = s.start + item.insert.length;
-    requestAnimationFrame(() => {
-      taRef.current?.focus();
-      taRef.current?.setSelectionRange(pos, pos);
-    });
+    caretRef.current = s.start + item.insert.length;
   };
 
   // Images go inline to Claude; any other file is uploaded to the server and referenced by path.
@@ -297,7 +334,9 @@ export default function Composer({ sessionId, disabled, busy, onSend, onStop, mo
     if (disabled || empty || attachments.some((a) => a.uploading)) return;
     recRef.current?.stop();
     const files = ready.length ? `${text.trim() ? '\n\n' : ''}Attached files:\n${ready.map((a) => `- ${a.path}`).join('\n')}` : '';
-    if (onSend(text + files, images.map(({ media_type, data }) => ({ media_type, data })))) {
+    const refs = [...new Set(Object.entries(refsRef.current).filter(([tok]) => text.includes(tok)).map(([, id]) => id))];
+    if (onSend(text + files, images.map(({ media_type, data }) => ({ media_type, data })), refs)) {
+      refsRef.current = {};
       setText('');
       setImages([]);
       setAttachments([]);
@@ -364,8 +403,9 @@ export default function Composer({ sessionId, disabled, busy, onSend, onStop, mo
                   applySuggestion(it);
                 }}
               >
-                {it.label}
-                <span className="ctype">{suggest.type === 'file' ? 'file' : 'command'}</span>
+                <MenuIcon type={it.type || (suggest.type === 'cmd' ? 'cmd' : 'file')} />
+                <span className="cm-label">{it.type === 'file' ? it.label.split('/').pop() : it.label}</span>
+                <span className="cm-hint">{it.type === 'chat' ? (it.hint || '').split(/[\\/]/).filter(Boolean).pop() : it.type === 'file' && it.label.includes('/') ? it.label.slice(0, it.label.lastIndexOf('/')) : ''}</span>
               </button>
             ))}
           </div>
@@ -402,7 +442,7 @@ export default function Composer({ sessionId, disabled, busy, onSend, onStop, mo
           ref={taRef}
           rows={1}
           value={text}
-          placeholder={placeholder || (busy ? 'Queue a follow-up…' : isTouch ? 'Reply to Claude…' : 'Reply to Claude…  (@ to mention a file, / for commands)')}
+          placeholder={placeholder || (busy ? 'Queue a follow-up…' : isTouch ? 'Reply to Claude…' : 'Reply to Claude…  (@ to mention a file or chat, / for commands)')}
           onChange={(e) => {
             setText(e.target.value);
             updateSuggest(e.target.value, e.target.selectionStart);

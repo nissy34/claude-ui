@@ -90,7 +90,7 @@ export function eventsFromTranscript(file) {
         }
       } else {
         const text = promptText(c).trim();
-        if (text && !text.startsWith('<')) events.push({ k: 'user', text, ts });
+        if (text && !text.startsWith('<')) events.push({ k: 'user', text: text.replace(/\n\n<mentioned_chats>[\s\S]*<\/mentioned_chats>$/, ''), ts });
       }
     } else if (o.type === 'assistant' && o.message?.content) {
       for (const b of o.message.content) {
@@ -470,7 +470,7 @@ export class ChatSession {
   }
 
   // ---------- actions from the browser ----------
-  send({ text, images }) {
+  send({ text, images, refs }) {
     text = typeof text === 'string' ? text : '';
     const imgs = Array.isArray(images) ? images.filter((i) => i && /^image\/(png|jpeg|gif|webp)$/.test(i.media_type) && typeof i.data === 'string').slice(0, 10) : [];
     if (!text.trim() && !imgs.length) return;
@@ -487,12 +487,24 @@ export class ChatSession {
     m.attention = false;
     this.ensureProcess();
     if (!this.proc) return;
+    // @-mentioned chats: Claude gets each one's conversation as context (the log shows only your text).
+    let prompt = text;
+    const chats = (Array.isArray(refs) ? refs : [])
+      .slice(0, 5)
+      .map((id) => this.store.get(id))
+      .filter((c) => c && c !== this && c.meta.kind === 'chat');
+    if (chats.length) {
+      const ctx = chats
+        .map((c) => `<chat name="${c.meta.name.replace(/"/g, "'")}" session_id="${c.id}" folder="${c.meta.cwd}">\n${c.transcriptText(Math.floor(24000 / chats.length)) || '(empty)'}\n</chat>`)
+        .join('\n\n');
+      prompt = `${text}\n\n<mentioned_chats>\nThe user mentioned these other chats. Their conversations so far (tool calls left out):\n\n${ctx}\n\nYou can also read or message them with the sessions tools (read_session, send_to_session) using the session_id.\n</mentioned_chats>`;
+    }
     const content = imgs.length
-      ? [...imgs.map((i) => ({ type: 'image', source: { type: 'base64', media_type: i.media_type, data: i.data } })), ...(text ? [{ type: 'text', text }] : [])]
-      : text;
+      ? [...imgs.map((i) => ({ type: 'image', source: { type: 'base64', media_type: i.media_type, data: i.data } })), ...(prompt ? [{ type: 'text', text: prompt }] : [])]
+      : prompt;
     this.writeLine({ type: 'user', message: { role: 'user', content }, parent_tool_use_id: null, session_id: m.claudeSessionId });
     this.turns++;
-    this.record({ k: 'user', text, images: imgs.length });
+    this.record({ k: 'user', text, images: imgs.length, ...(chats.length ? { refs: chats.map((c) => ({ id: c.id, name: c.meta.name })) } : {}) });
     clearTimeout(this.idleTimer);
     this.store.save();
     this.broadcastState();
@@ -569,6 +581,23 @@ export class ChatSession {
   }
 
   /** Last assistant text since the last user message (for read_session). */
+  /** The conversation as plain text (your messages and Claude's replies, tools left out), newest kept. */
+  transcriptText(maxChars = 12000) {
+    const parts = [];
+    for (const e of this.events) {
+      if (e.parent) continue;
+      if (e.k === 'user' && e.text) parts.push(`User: ${e.text}`);
+      else if (e.k === 'block' && e.block.type === 'text' && e.block.text?.trim()) {
+        const last = parts[parts.length - 1];
+        if (last?.startsWith('Claude: ')) parts[parts.length - 1] = `${last}\n\n${e.block.text}`;
+        else parts.push(`Claude: ${e.block.text}`);
+      }
+    }
+    let text = parts.join('\n\n');
+    if (text.length > maxChars) text = '[…earlier messages left out…]\n\n' + text.slice(-maxChars);
+    return text;
+  }
+
   lastReply() {
     let out = [];
     for (let i = this.events.length - 1; i >= 0; i--) {
@@ -610,7 +639,7 @@ export class ChatSession {
     fs.writeFileSync(this.logFile, this.events.map((e) => JSON.stringify(e)).join('\n') + (this.events.length ? '\n' : ''));
     this.record({ k: 'notice', text: restored ? 'Edited message: conversation and files rewound to this point' : 'Edited message: conversation rewound to this point' });
     this.broadcast({ t: 'reload' });
-    this.send({ text });
+    this.send({ text, refs: (ev.refs || []).map((r) => r.id) });
   }
 
   stop() {
