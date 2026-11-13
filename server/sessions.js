@@ -316,7 +316,7 @@ class Store {
       s.saveScreen(true);
     }
     this.save();
-    for (const s of this.sessions.values()) s.kill();
+    for (const s of this.sessions.values()) (s.shutdown ? s.shutdown() : s.kill());
   }
 }
 

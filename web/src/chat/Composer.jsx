@@ -1,6 +1,7 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { api } from '../api.js';
 import { getPrefs } from '../prefs.js';
+import { findModel, modelLabel, useModels } from '../models.js';
 
 const isTouch = typeof window !== 'undefined' && window.matchMedia('(pointer: coarse)').matches;
 
@@ -10,13 +11,6 @@ export const MODES = [
   { id: 'acceptEdits', label: 'Accept edits', short: 'Edits', desc: 'File edits are applied automatically' },
   { id: 'plan', label: 'Plan mode', short: 'Plan', desc: 'Claude explores and proposes a plan before changing anything' },
   { id: 'bypassPermissions', label: 'Bypass permissions', short: 'Bypass', desc: 'Everything runs without asking. Use with care' },
-];
-
-const MODELS = [
-  { id: '', label: 'Default' },
-  { id: 'opus', label: 'Opus' },
-  { id: 'sonnet', label: 'Sonnet' },
-  { id: 'haiku', label: 'Haiku' },
 ];
 
 const EFFORTS = [
@@ -156,6 +150,18 @@ function UsageButton({ usage }) {
         </div>
       )}
     </div>
+  );
+}
+
+function ModelItem({ m, on, onPick }) {
+  return (
+    <button className={on ? 'on' : ''} onClick={onPick}>
+      <span className="check">{on ? '✓' : ''}</span>
+      <span>
+        {m.displayName}
+        {m.description && <span className="desc">{m.description}</span>}
+      </span>
+    </button>
   );
 }
 
@@ -390,6 +396,10 @@ export default function Composer({ sessionId, disabled, busy, onSend, onStop, mo
 
   const modeInfo = MODES.find((m) => m.id === mode) || { label: mode, short: mode };
   const effortInfo = EFFORTS.find((x) => x.id === (effort || ''));
+  const models = useModels();
+  const [moreModels, setMoreModels] = useState(false);
+  const modelEfforts = findModel(models, model, activeModel)?.efforts;
+  const efforts = modelEfforts?.length ? EFFORTS.filter((x) => !x.id || modelEfforts.includes(x.id)) : EFFORTS;
   const pick = (fn) => (v) => {
     fn(v);
     setMenu(null);
@@ -562,17 +572,26 @@ export default function Composer({ sessionId, disabled, busy, onSend, onStop, mo
           </div>
           <div className="menu-wrap">
             <button className="chip" onClick={() => setMenu(menu === 'model' ? null : 'model')} title={activeModel ? `Running ${activeModel}` : 'Model'}>
-              {model ? MODELS.find((m) => m.id === model)?.label || model : activeModel?.replace(/^claude-/, '') || 'Model'} <span className="chev">▾</span>
+              {modelLabel(models, model, activeModel)} <span className="chev">▾</span>
             </button>
             {menu === 'model' && (
-              <div className="pop up">
-                {MODELS.map((m) => (
-                  <button key={m.id} className={m.id === (model || '') ? 'on' : ''} onClick={() => pick(onModel)(m.id)}>
-                    <span className="check">{m.id === (model || '') ? '✓' : ''}</span>
-                    {m.label}
-                    {m.id === '' && activeModel ? <span className="muted"> ({activeModel})</span> : null}
-                  </button>
+              <div className="pop up model-pop">
+                {(models.length ? models.filter((m) => !m.id.startsWith('claude-') || m.id === model) : [{ id: '', displayName: 'Default', description: '' }]).map((m) => (
+                  <ModelItem key={m.id} m={m} on={m.id === (model || '')} onPick={() => pick(onModel)(m.id)} />
                 ))}
+                {models.some((m) => m.id.startsWith('claude-') && m.id !== model) && (
+                  <>
+                    <div className="sep" />
+                    <button onClick={() => setMoreModels(!moreModels)}>
+                      <span className="check" />
+                      More models <span className="chev">{moreModels ? '▴' : '▾'}</span>
+                    </button>
+                    {moreModels &&
+                      models
+                        .filter((m) => m.id.startsWith('claude-') && m.id !== model)
+                        .map((m) => <ModelItem key={m.id} m={m} on={false} onPick={() => pick(onModel)(m.id)} />)}
+                  </>
+                )}
                 <div className="sep" />
                 <button
                   onClick={() => {
@@ -593,7 +612,7 @@ export default function Composer({ sessionId, disabled, busy, onSend, onStop, mo
             </button>
             {menu === 'effort' && (
               <div className="pop up">
-                {EFFORTS.map((x) => (
+                {efforts.map((x) => (
                   <button key={x.id} className={x.id === (effort || '') ? 'on' : ''} onClick={() => pick(onEffort)(x.id)}>
                     <span className="check">{x.id === (effort || '') ? '✓' : ''}</span>
                     {x.label}

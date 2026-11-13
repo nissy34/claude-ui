@@ -27,6 +27,7 @@ export function transcriptPath(cwd, id) {
 
 const MCP_SCRIPT = path.join(path.dirname(fileURLToPath(import.meta.url)), 'mcp-sessions.js');
 const commandCache = new Map(); // cwd -> commands with descriptions
+import { setModels } from './models.js';
 const MCP_BROWSER = path.join(path.dirname(fileURLToPath(import.meta.url)), 'mcp-browser.js');
 
 function childEnv(sessionId) {
@@ -136,7 +137,7 @@ export class ChatSession {
   }
 
   toJSON() {
-    return { ...this.meta, commands: undefined, commandInfo: undefined, tools: undefined, mcpServers: undefined, status: this.running ? 'running' : 'idle', state: this.state, live: this.running, clients: this.clients.size };
+    return { ...this.meta, commands: undefined, commandInfo: undefined, models: undefined, tools: undefined, mcpServers: undefined, status: this.running ? 'running' : 'idle', state: this.state, live: this.running, clients: this.clients.size };
   }
 
   loadEvents() {
@@ -273,6 +274,8 @@ export class ChatSession {
     });
     readline.createInterface({ input: proc.stdout, crlfDelay: Infinity }).on('line', (line) => {
       if (!line.trim()) return;
+      this.heard = true;
+      clearTimeout(this.watchdog);
       let msg;
       try {
         msg = JSON.parse(line);
@@ -291,6 +294,7 @@ export class ChatSession {
         if (!Array.isArray(r?.commands)) return;
         m.commandInfo = r.commands.map((c) => ({ name: c.name, description: (c.description || '').slice(0, 300), argumentHint: c.argumentHint || '', builtin: !!c.builtin, aliases: c.aliases || [] }));
         commandCache.set(m.cwd, m.commandInfo);
+        if (Array.isArray(r.models)) setModels(r.models);
         this.broadcastState();
       })
       .catch(() => {});
@@ -304,9 +308,12 @@ export class ChatSession {
       this.pending.clear();
       for (const w of this.controlWaiters.values()) w.reject(new Error('process exited'));
       this.controlWaiters.clear();
-      if (hadWork || (code && code !== 0 && !this.stopping)) {
+      clearTimeout(this.watchdog);
+      if (this.quietExit) this.quietExit = false;
+      else if (hadWork || (code && code !== 0 && !this.stopping)) {
         const err = this.stderr.join('').trim().split('\n').slice(-8).join('\n');
-        this.record({ k: 'error', text: `Claude exited (${signal || `code ${code}`})${err ? `:\n${err}` : ''}` });
+        const why = this.stopping ? 'Claude was stopped before it finished.' : `Claude exited (${signal || `code ${code}`}).`;
+        this.record({ k: 'error', resumable: true, text: `${why} Press Resume or send a message to pick up where it left off.${err ? `\n\n${err}` : ''}` });
       }
       this.stopping = false;
       this.store.save();
@@ -518,6 +525,15 @@ export class ChatSession {
       : prompt;
     this.writeLine({ type: 'user', message: { role: 'user', content }, parent_tool_use_id: null, session_id: m.claudeSessionId });
     this.turns++;
+    // The CLI echoes every message right away (--replay-user-messages). Silence means it hung on
+    // start or resume; say so, so the chat doesn't just sit there.
+    this.heard = false;
+    clearTimeout(this.watchdog);
+    const proc = this.proc;
+    this.watchdog = setTimeout(() => {
+      if (this.proc === proc && !this.heard && this.turns > 0) this.record({ k: 'error', resumable: true, text: "Claude hasn't responded for a minute. Press Resume to restart it and continue." });
+    }, 60_000);
+    this.watchdog.unref?.();
     this.record({ k: 'user', text, images: imgs.length, ...(chats.length ? { refs: chats.map((c) => ({ id: c.id, name: c.meta.name })) } : {}) });
     clearTimeout(this.idleTimer);
     this.store.save();
@@ -674,6 +690,24 @@ export class ChatSession {
   }
 
   kill() {
+    this.stop();
+  }
+
+  /** Restart Claude on the same conversation (--resume) and ask it to carry on. */
+  async resume() {
+    if (this.proc && (this.turns > 0 || !this.heard)) {
+      this.quietExit = true;
+      await this.stopAndWait();
+    }
+    this.send({ text: 'Continue from where you left off.' });
+  }
+
+  /** The server is going down: note it in the chat, since the process may outlive our exit handler. */
+  shutdown() {
+    if (this.proc && this.turns > 0) {
+      this.record({ k: 'error', resumable: true, text: 'The server shut down while Claude was working. Press Resume or send a message to pick up where it left off.' });
+      this.quietExit = true;
+    }
     this.stop();
   }
 

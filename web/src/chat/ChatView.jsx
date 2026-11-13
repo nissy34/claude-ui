@@ -296,7 +296,7 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
         } else if (m.t === 'state') {
           setState(m.state);
           setTurns(m.turns || 0);
-          setMeta(m.meta);
+          setMeta({ ...m.meta, live: m.live });
         } else if (m.t === 'status') setStatus(m.status);
         else if (m.t === 'reload') ws.close(4000, 'reload');
         else if (m.t === 'error') onError(new Error(m.error));
@@ -351,6 +351,8 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
   const todos = useMemo(() => lastTodos(events), [events]);
   const pendingPerms = items.filter((i) => i.type === 'tool' && i.perm && !i.perm.done).length + items.filter((i) => i.type === 'perm' && !i.done).length;
   const busy = state === 'busy' || state === 'waiting';
+  // Resume shows on an exit error only while it is the latest thing in the chat.
+  const lastResumable = busy ? -1 : rows.findLastIndex((r) => ['error', 'user', 'text', 'tool', 'group'].includes(r.type));
   const queued = Math.max(0, turns - 1);
   // Commands with descriptions when the CLI gave them, plus any other names it listed.
   const commandList = useMemo(() => {
@@ -556,9 +558,14 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
                     );
                   case 'error':
                     return (
-                      <pre key={n} className="sys-error">
-                        {it.text}
-                      </pre>
+                      <div key={n} className="sys-error-wrap">
+                        <pre className="sys-error">{it.text}</pre>
+                        {it.resumable && n === lastResumable && (
+                          <button className="btn small primary" disabled={conn !== 'open'} onClick={() => send({ t: 'resume' })}>
+                            ↻ Resume
+                          </button>
+                        )}
+                      </div>
                     );
                   case 'notice':
                     return (
