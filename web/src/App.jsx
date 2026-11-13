@@ -4,6 +4,8 @@ import Login from './Login.jsx';
 import Sidebar, { NewChatDialog, HistoryDialog } from './Sidebar.jsx';
 import TerminalView from './TerminalView.jsx';
 import ChatView from './chat/ChatView.jsx';
+import Settings, { Shortcuts } from './Settings.jsx';
+import { newChatDefaults } from './prefs.js';
 
 function readHash() {
   const m = location.hash.match(/s=([0-9a-f-]{36})/i);
@@ -23,7 +25,7 @@ export default function App() {
       return false;
     }
   });
-  const [dialog, setDialog] = useState(null); // {type:'new'} | {type:'history', path}
+  const [dialog, setDialog] = useState(null); // {type:'new'} | {type:'history', path} | {type:'settings'} | {type:'keys'}
   const [toast, setToast] = useState('');
   const eventsRef = useRef(null);
 
@@ -96,7 +98,7 @@ export default function App() {
   const createSession = useCallback(
     async (opts, { navigate = true } = {}) => {
       try {
-        const { session } = await api('/api/sessions', { method: 'POST', body: opts });
+        const { session } = await api('/api/sessions', { method: 'POST', body: newChatDefaults(opts) });
         setSessions((list) => [session, ...list.filter((s) => s.id !== session.id)]);
         if (navigate) select(session.id);
         return session;
@@ -115,11 +117,18 @@ export default function App() {
     } catch {}
   };
 
-  // Ctrl/Cmd+K: new chat, Ctrl/Cmd+B: toggle sidebar.
+  // Ctrl/Cmd+K: new chat, Ctrl/Cmd+B: toggle sidebar, Ctrl/Cmd+,: settings, Ctrl/Cmd+/: shortcuts.
   useEffect(() => {
     const onKey = (e) => {
+      if (e.key === 'Escape' && dialog && (dialog.type === 'settings' || dialog.type === 'keys')) return setDialog(null);
       if (!(e.metaKey || e.ctrlKey)) return;
-      if (e.key === 'k') {
+      if (e.key === ',') {
+        e.preventDefault();
+        setDialog({ type: 'settings' });
+      } else if (e.key === '/') {
+        e.preventDefault();
+        setDialog({ type: 'keys' });
+      } else if (e.key === 'k') {
         e.preventDefault();
         setDialog({ type: 'new' });
       } else if (e.key === 'b') {
@@ -129,7 +138,7 @@ export default function App() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [collapsed]);
+  }, [collapsed, dialog]);
 
   const active = sessions.find((s) => s.id === activeId) || null;
 
@@ -153,6 +162,7 @@ export default function App() {
         onCreate={createSession}
         onNewChat={() => setDialog({ type: 'new' })}
         onHistory={(path) => setDialog({ type: 'history', path })}
+        onSettings={() => (setDrawer(false), setDialog({ type: 'settings' }))}
         onLogout={async () => {
           await api('/api/logout', { method: 'POST' }).catch(() => {});
           setAuthed(false);
@@ -181,6 +191,8 @@ export default function App() {
         />
       )}
       {dialog?.type === 'history' && <HistoryDialog path={dialog.path} onCreate={createSession} onClose={() => setDialog(null)} onError={showError} />}
+      {dialog?.type === 'settings' && <Settings projects={projects} activeCwd={active?.cwd} onClose={() => setDialog(null)} onError={showError} onKeys={() => setDialog({ type: 'keys' })} />}
+      {dialog?.type === 'keys' && <Shortcuts onClose={() => setDialog(null)} />}
       {toast && <div className="toast">{toast}</div>}
     </div>
   );

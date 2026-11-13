@@ -16,7 +16,10 @@ Sessions live on the server. Close the tab, open it on your phone, and the same 
 - **Edit an earlier message**: the conversation forks from that point and files Claude changed are restored (Claude Code file checkpoints)
 - **Child sessions**: ask Claude to "open another session for X" and it starts a parallel chat, nested under the parent in the sidebar. The parent can message it, wait for it and read its result, and you can open and talk to it directly
 - **Worktrees**: start a chat in an isolated git worktree on its own branch, from the new-chat dialog or a project's ⋯ menu
-- Composer with permission mode (Shift+Tab cycles), model, effort, `@` file mentions with autocomplete, slash-command autocomplete, image paste/drag/attach, and Stop (Esc)
+- Composer with permission mode (Shift+Tab cycles), model, effort, `@` file mentions, a slash-command menu, image paste/drag/attach, **any-file attachments** (uploaded to the server and handed to Claude), browser dictation, a context-usage ring with Compact, queued follow-ups, and Stop (Esc)
+- Consecutive tool calls fold into one compact row you can expand
+- Commit, Commit and push, and Create PR buttons in the Changes panel
+- **Settings** (Ctrl/Cmd+,): theme, chat text size, Enter-to-send, notifications, defaults for new chats (model, mode, effort), saved permission rules with remove, MCP servers, plugins, account and version info. Keyboard shortcuts sheet with Ctrl/Cmd+/
 - Live task list (TodoWrite) docked above the composer. Sub-agent activity folds into its Task card
 - A terminal drawer in every chat (a shell in the same folder)
 - Session info: model, MCP servers and their status, context size, usage-limit meters and reset times
@@ -30,8 +33,8 @@ Sessions live on the server. Close the tab, open it on your phone, and the same 
 
 ### Not the same as the desktop app
 
-- Files live on the server. Attachments are images you paste or pick; you can't browse your phone's or laptop's disk from it.
-- No native OS integration (computer use, the Chrome extension, system notifications beyond the browser's, dictation).
+- Files live on the server. Attachments are uploaded copies; Claude can't browse your phone's or laptop's disk.
+- No native OS integration (computer use, the Chrome extension, system notifications beyond the browser's). Dictation uses the browser's speech recognition where available.
 - claude.ai features outside Claude Code (projects, artifacts, connectors set up on claude.ai) aren't part of the CLI, so they aren't here.
 - Cloud sessions and teleport are not supported. Everything runs on your machine.
 - The look is inspired by the desktop app but uses its own icons and no Anthropic brand assets.

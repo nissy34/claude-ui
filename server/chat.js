@@ -172,7 +172,7 @@ export class ChatSession {
   }
 
   broadcastState() {
-    this.broadcast({ t: 'state', state: this.state, live: this.running, meta: this.meta });
+    this.broadcast({ t: 'state', state: this.state, live: this.running, meta: this.meta, turns: this.turns });
     this.store.changed();
   }
 
@@ -187,6 +187,7 @@ export class ChatSession {
       meta: this.meta,
       state: this.state,
       live: this.running,
+      turns: this.turns,
       events: this.events.slice(-MAX_EVENTS_SENT),
       truncated: Math.max(0, this.events.length - MAX_EVENTS_SENT),
       pending: [...this.pending.values()],
@@ -213,6 +214,9 @@ export class ChatSession {
     if (m.permissionMode && m.permissionMode !== 'default') args.push('--permission-mode', m.permissionMode);
     if (m.model) args.push('--model', m.model);
     if (m.effort) args.push('--effort', m.effort);
+    const uploads = path.join(config.dataDir, 'uploads', m.id);
+    fs.mkdirSync(uploads, { recursive: true });
+    args.push('--add-dir', uploads);
     const fork = this.forkAt;
     this.forkAt = undefined;
     if (fork && fork.from && fs.existsSync(transcriptPath(m.cwd, fork.from))) {
@@ -393,6 +397,12 @@ export class ChatSession {
         this.store.save();
         this.broadcastState();
         this.touchIdle();
+        break;
+      case 'autocompact_state':
+        if (msg.value?.effective_window) {
+          m.contextWindow = msg.value.effective_window;
+          m.compactAt = msg.value.threshold;
+        }
         break;
       case 'rate_limit_event':
         m.rateLimit = msg.rate_limit_info;

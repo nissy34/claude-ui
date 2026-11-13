@@ -26,7 +26,7 @@ function UnifiedDiff({ diff, path }) {
   );
 }
 
-function Changes({ sessionId, refreshKey, onOpenFile }) {
+function Changes({ sessionId, refreshKey, onOpenFile, onPrompt, busy }) {
   const [data, setData] = useState(null);
   const [open, setOpen] = useState({});
   const [loading, setLoading] = useState(false);
@@ -61,6 +61,19 @@ function Changes({ sessionId, refreshKey, onOpenFile }) {
           </button>
         )}
       </div>
+      {onPrompt && (
+        <div className="git-actions">
+          <button className="btn small" disabled={busy || !data.files.length} onClick={() => onPrompt('Commit the current changes with a clear commit message. Stage only the files that belong to this work.')}>
+            Commit
+          </button>
+          <button className="btn small" disabled={busy || !data.files.length} onClick={() => onPrompt('Commit the current changes with a clear commit message, then push the branch.')}>
+            Commit and push
+          </button>
+          <button className="btn small primary" disabled={busy} onClick={() => onPrompt('Commit any uncommitted changes, push this branch, and open a pull request with a clear title and description. Use the gh CLI if it is available, and give me the PR link.')}>
+            Create PR
+          </button>
+        </div>
+      )}
       {data.files.length === 0 && <div className="panel-empty">No uncommitted changes.</div>}
       {data.files.map((f) => (
         <div key={f.path} className="change-file">
@@ -128,7 +141,7 @@ function FileView({ sessionId, path, refreshKey }) {
   );
 }
 
-export default function SidePanel({ sessionId, tab, files, onTab, onCloseFile, onClose, refreshKey, onOpenFile }) {
+export default function SidePanel({ sessionId, tab, files, onTab, onCloseFile, onClose, refreshKey, onOpenFile, onPrompt, busy }) {
   return (
     <aside className="side-panel">
       <div className="panel-head">
@@ -156,7 +169,7 @@ export default function SidePanel({ sessionId, tab, files, onTab, onCloseFile, o
         </button>
       </div>
       <div className="panel-body">
-        {tab === 'changes' ? <Changes sessionId={sessionId} refreshKey={refreshKey} onOpenFile={onOpenFile} /> : <FileView sessionId={sessionId} path={tab} refreshKey={refreshKey} />}
+        {tab === 'changes' ? <Changes sessionId={sessionId} refreshKey={refreshKey} onOpenFile={onOpenFile} onPrompt={onPrompt} busy={busy} /> : <FileView sessionId={sessionId} path={tab} refreshKey={refreshKey} />}
       </div>
     </aside>
   );

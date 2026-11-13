@@ -189,7 +189,7 @@ export default function ToolCard({ item, cwd, children }) {
   const hideResultByDefault = ['Read', 'Edit', 'Write', 'MultiEdit', 'TodoWrite', 'Glob', 'Grep'].includes(name);
 
   return (
-    <div className={`tool ${status}`}>
+    <div className={`tool ${status} ${open ? 'open' : ''}`}>
       <button className="tool-head" onClick={() => setOpen((o) => !o)}>
         <span className="ticon">{ICONS[name] || '⚙'}</span>
         <span className="tname">{isSessionTool ? { start_session: 'Started session', send_to_session: 'Messaged session', read_session: 'Checked session' }[name.split('__')[2]] : name.replace(/^mcp__([^_]+)__/, '$1 · ')}</span>
@@ -246,6 +246,51 @@ export default function ToolCard({ item, cwd, children }) {
         </div>
       )}
       {children}
+    </div>
+  );
+}
+
+const GROUP_LABELS = [
+  [['Read', 'NotebookRead'], (n) => `read ${n} file${n > 1 ? 's' : ''}`],
+  [['Grep', 'Glob', 'LS'], (n) => `searched ${n} pattern${n > 1 ? 's' : ''}`],
+  [['Bash', 'BashOutput', 'KillShell'], (n) => `ran ${n} command${n > 1 ? 's' : ''}`],
+  [['WebFetch', 'WebSearch'], (n) => `${n} web lookup${n > 1 ? 's' : ''}`],
+];
+
+export function groupSummary(tools) {
+  const counts = new Map();
+  let other = 0;
+  for (const t of tools) {
+    const g = GROUP_LABELS.find(([names]) => names.includes(t.name));
+    if (g) counts.set(g, (counts.get(g) || 0) + 1);
+    else other++;
+  }
+  const parts = [...counts].map(([g, n]) => g[1](n));
+  if (other) parts.push(`used ${other} other tool${other > 1 ? 's' : ''}`);
+  const s = parts.join(', ');
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+/** Several quiet tool calls in a row, folded into one line like "Read 3 files, ran 2 commands". */
+export function ToolGroup({ tools, cwd }) {
+  const running = tools.some((t) => !t.result);
+  const failed = tools.filter((t) => t.result?.isError).length;
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="tool-group">
+      <button className="tool-group-head" onClick={() => setOpen((o) => !o)}>
+        {running ? <span className="spinner" /> : <span className="ticon">⋯</span>}
+        <span>{groupSummary(tools)}</span>
+        {failed > 0 && <span className="del">({failed} failed)</span>}
+        <span className="chev">{open ? '▾' : '▸'}</span>
+      </button>
+      {open && (
+        <div className="tool-group-body">
+          {tools.map((t) => (
+            <ToolCard key={t.id} item={t} cwd={cwd} />
+          ))}
+        </div>
+      )}
     </div>
   );
 }

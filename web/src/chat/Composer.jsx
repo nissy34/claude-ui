@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { api } from '../api.js';
+import { getPrefs } from '../prefs.js';
 
 const isTouch = typeof window !== 'undefined' && window.matchMedia('(pointer: coarse)').matches;
 
@@ -36,7 +37,47 @@ function readFile(file) {
   });
 }
 
-export default function Composer({ sessionId, disabled, busy, onSend, onStop, mode, onMode, model, activeModel, onModel, effort, onEffort, commands, footer, onError, placeholder }) {
+const SpeechRec = typeof window !== 'undefined' && (window.SpeechRecognition || window.webkitSpeechRecognition);
+
+function fmtSize(n) {
+  return n > 1 << 20 ? `${(n / (1 << 20)).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`;
+}
+
+// A small ring that fills as the context window is used. Click for details and /compact.
+function ContextRing({ used, window: win, onCompact }) {
+  const [open, setOpen] = useState(false);
+  if (!used) return null;
+  const pct = Math.min(1, used / (win || 200000));
+  const r = 7;
+  const c = 2 * Math.PI * r;
+  return (
+    <div className="menu-wrap">
+      <button className={`chip icon ctx-ring ${pct > 0.8 ? 'hot' : ''}`} title={`${Math.round(pct * 100)}% of context used`} onClick={() => setOpen(!open)}>
+        <svg width="18" height="18" viewBox="0 0 18 18">
+          <circle cx="9" cy="9" r={r} fill="none" stroke="currentColor" strokeOpacity="0.2" strokeWidth="2.2" />
+          <circle cx="9" cy="9" r={r} fill="none" stroke="currentColor" strokeWidth="2.2" strokeDasharray={`${c * pct} ${c}`} transform="rotate(-90 9 9)" strokeLinecap="round" />
+        </svg>
+      </button>
+      {open && (
+        <div className="pop up right">
+          <div className="pad">
+            <b>{Math.round(pct * 100)}% of context used</b>
+            <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+              {used.toLocaleString()} of {(win || 200000).toLocaleString()} tokens. Claude compacts automatically when it gets full.
+            </div>
+          </div>
+          <div className="sep" />
+          <button onClick={() => (setOpen(false), onCompact())}>
+            <span className="check" />
+            Compact now
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export default function Composer({ sessionId, disabled, busy, onSend, onStop, mode, onMode, model, activeModel, onModel, effort, onEffort, commands, footer, onError, placeholder, context, onCompact, queued }) {
   const draftKey = `cw.draft.${sessionId}`;
   const [text, setText] = useState(() => {
     try {
@@ -46,6 +87,9 @@ export default function Composer({ sessionId, disabled, busy, onSend, onStop, mo
     }
   });
   const [images, setImages] = useState([]);
+  const [attachments, setAttachments] = useState([]); // {name, path, size} | {name, uploading:true}
+  const [listening, setListening] = useState(false);
+  const recRef = useRef(null);
   const [menu, setMenu] = useState(null); // 'mode' | 'model' | 'effort'
   const [suggest, setSuggest] = useState(null); // {type, items, start, end}
   const [sel, setSel] = useState(0);
@@ -112,19 +156,77 @@ export default function Composer({ sessionId, disabled, busy, onSend, onStop, mo
     });
   };
 
-  const addFiles = async (files) => {
-    const list = [...files].filter((f) => /^image\/(png|jpeg|gif|webp)$/.test(f.type));
-    if (!list.length) return;
-    if (list.some((f) => f.size > 5 * 1024 * 1024)) return onError(new Error('Images must be under 5 MB each'));
-    const read = await Promise.all(list.map(readFile));
-    setImages((im) => [...im, ...read].slice(0, 10));
+  // Images go inline to Claude; any other file is uploaded to the server and referenced by path.
+  const upload = async (file) => {
+    const tmp = { name: file.name, uploading: true, key: Math.random() };
+    setAttachments((a) => [...a, tmp]);
+    try {
+      const res = await fetch(`/api/sessions/${sessionId}/upload`, {
+        method: 'POST',
+        headers: { 'x-filename': encodeURIComponent(file.name), 'content-type': 'application/octet-stream' },
+        body: file,
+        credentials: 'same-origin',
+      });
+      const j = await res.json();
+      if (!res.ok) throw new Error(j.error || `Upload failed (${res.status})`);
+      setAttachments((a) => a.map((x) => (x === tmp ? { ...j, key: tmp.key } : x)));
+    } catch (e) {
+      setAttachments((a) => a.filter((x) => x !== tmp));
+      onError(e);
+    }
   };
 
+  const addFiles = async (files) => {
+    const all = [...files];
+    const imgs = all.filter((f) => /^image\/(png|jpeg|gif|webp)$/.test(f.type) && f.size <= 5 * 1024 * 1024);
+    const others = all.filter((f) => !imgs.includes(f));
+    if (others.some((f) => f.size > 50 * 1024 * 1024)) return onError(new Error('Files must be under 50 MB each'));
+    others.forEach(upload);
+    if (imgs.length) {
+      const read = await Promise.all(imgs.map(readFile));
+      setImages((im) => [...im, ...read].slice(0, 10));
+    }
+  };
+
+  const toggleDictation = () => {
+    if (listening) return recRef.current?.stop();
+    const rec = new SpeechRec();
+    rec.continuous = true;
+    rec.interimResults = false;
+    rec.lang = navigator.language || 'en-US';
+    const base = text ? text.replace(/\s*$/, ' ') : '';
+    let heard = '';
+    rec.onresult = (e) => {
+      for (let i = e.resultIndex; i < e.results.length; i++) if (e.results[i].isFinal) heard += e.results[i][0].transcript;
+      setText(base + heard.trim());
+    };
+    rec.onend = () => setListening(false);
+    rec.onerror = (e) => (e.error !== 'aborted' && e.error !== 'no-speech' ? onError(new Error(`Dictation: ${e.error}`)) : null);
+    recRef.current = rec;
+    rec.start();
+    setListening(true);
+  };
+
+  const openCommands = () => {
+    const next = text.startsWith('/') ? text : '/' + text;
+    setText(next);
+    updateSuggest('/', 1);
+    requestAnimationFrame(() => {
+      taRef.current?.focus();
+      taRef.current?.setSelectionRange(1, 1);
+    });
+  };
+
+  const ready = attachments.filter((a) => a.path);
+  const empty = !text.trim() && !images.length && !ready.length;
   const submit = () => {
-    if (disabled || (!text.trim() && !images.length)) return;
-    if (onSend(text, images.map(({ media_type, data }) => ({ media_type, data })))) {
+    if (disabled || empty || attachments.some((a) => a.uploading)) return;
+    recRef.current?.stop();
+    const files = ready.length ? `${text.trim() ? '\n\n' : ''}Attached files:\n${ready.map((a) => `- ${a.path}`).join('\n')}` : '';
+    if (onSend(text + files, images.map(({ media_type, data }) => ({ media_type, data })))) {
       setText('');
       setImages([]);
+      setAttachments([]);
       setSuggest(null);
     }
   };
@@ -143,7 +245,8 @@ export default function Composer({ sessionId, disabled, busy, onSend, onStop, mo
         }
       }
     }
-    if (e.key === 'Enter' && !e.shiftKey && !isTouch && !e.nativeEvent.isComposing) {
+    const enterSends = getPrefs().sendOnEnter ? !e.shiftKey && !isTouch : e.ctrlKey || e.metaKey;
+    if (e.key === 'Enter' && enterSends && !e.nativeEvent.isComposing) {
       e.preventDefault();
       submit();
     } else if (e.key === 'Escape' && busy) {
@@ -189,6 +292,22 @@ export default function Composer({ sessionId, disabled, busy, onSend, onStop, mo
           addFiles(e.dataTransfer.files);
         }}
       >
+        {queued > 0 && <div className="queued-note">{queued} message{queued > 1 ? 's' : ''} queued. Claude reads {queued > 1 ? 'them' : 'it'} when the current step finishes.</div>}
+        {attachments.length > 0 && (
+          <div className="attach-row">
+            {attachments.map((a) => (
+              <span key={a.key || a.path} className={`attach ${a.uploading ? 'loading' : ''}`} title={a.path || 'Uploading…'}>
+                📄 {a.name}
+                {a.size != null && <span className="muted"> · {fmtSize(a.size)}</span>}
+                {!a.uploading && (
+                  <button onClick={() => setAttachments((x) => x.filter((y) => y !== a))} aria-label="Remove">
+                    ✕
+                  </button>
+                )}
+              </span>
+            ))}
+          </div>
+        )}
         {images.length > 0 && (
           <div className="thumbs">
             {images.map((im, i) => (
@@ -220,10 +339,13 @@ export default function Composer({ sessionId, disabled, busy, onSend, onStop, mo
           }}
         />
         <div className="composer-bar">
-          <button className="chip icon" title="Attach image" onClick={() => fileRef.current?.click()}>
+          <button className="chip icon" title="Attach files or images" onClick={() => fileRef.current?.click()}>
             +
           </button>
-          <input ref={fileRef} type="file" accept="image/*" multiple hidden onChange={(e) => (addFiles(e.target.files), (e.target.value = ''))} />
+          <button className="chip icon hide-mobile" title="Slash commands" onClick={openCommands}>
+            /
+          </button>
+          <input ref={fileRef} type="file" multiple hidden onChange={(e) => (addFiles(e.target.files), (e.target.value = ''))} />
           <div className="menu-wrap">
             <button className={`chip mode-${mode}`} onClick={() => setMenu(menu === 'mode' ? null : 'mode')} title="Permission mode (Shift+Tab)">
               {isTouch ? modeInfo.short : modeInfo.label} <span className="chev">▾</span>
@@ -287,12 +409,18 @@ export default function Composer({ sessionId, disabled, busy, onSend, onStop, mo
             )}
           </div>
           <span className="footer-info">{footer}</span>
+          <ContextRing used={context?.used} window={context?.window} onCompact={onCompact} />
+          {SpeechRec && (
+            <button className={`chip icon ${listening ? 'rec' : ''}`} title={listening ? 'Stop dictation' : 'Dictate'} onClick={toggleDictation}>
+              {listening ? '●' : '🎙'}
+            </button>
+          )}
           {busy && (
             <button className="send stop" onClick={onStop} title="Stop (Esc)">
               ■
             </button>
           )}
-          <button className="send" disabled={disabled || (!text.trim() && !images.length)} onClick={submit} title="Send (Enter)">
+          <button className="send" disabled={disabled || empty} onClick={submit} title="Send (Enter)">
             ↑
           </button>
         </div>

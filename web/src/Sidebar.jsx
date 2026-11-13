@@ -21,7 +21,7 @@ export function baseName(p) {
   return (p || '').split(/[\\/]/).filter(Boolean).pop() || p;
 }
 
-export default function Sidebar({ sessions, activeId, onSelect, onCreate, onNewChat, onHistory, onLogout, onClose, onCollapse }) {
+export default function Sidebar({ sessions, activeId, onSelect, onCreate, onNewChat, onHistory, onSettings, onLogout, onClose, onCollapse }) {
   const [q, setQ] = useState('');
   const [showArchived, setShowArchived] = useState(false);
   const [collapsed, setCollapsed] = useState(() => {
@@ -181,6 +181,9 @@ export default function Sidebar({ sessions, activeId, onSelect, onCreate, onNewC
             </div>
           )}
         </div>
+        <button className="icon-btn" title="Settings (Ctrl+,)" onClick={onSettings}>
+          ⚙ <span className="lbl">Settings</span>
+        </button>
         <span className="spacer" />
         <button className="btn small ghost" onClick={onLogout}>
           Log out

@@ -254,7 +254,7 @@ class Store {
     return this.sessions.get(id);
   }
 
-  create({ cwd, kind = 'chat', name, resume, model, permissionMode, initialInput }) {
+  create({ cwd, kind = 'chat', name, resume, model, permissionMode, effort, initialInput }) {
     const id = crypto.randomUUID();
     kind = ['chat', 'claude', 'shell'].includes(kind) ? kind : 'chat';
     const meta = {
@@ -273,7 +273,8 @@ class Store {
       if (resume === 'continue') resume = latestTranscript(cwd);
       if (resume) meta.claudeSessionId = resume;
       if (model) meta.model = String(model).slice(0, 100);
-      if (permissionMode) meta.permissionMode = permissionMode;
+      if (['auto', 'acceptEdits', 'plan', 'bypassPermissions'].includes(permissionMode)) meta.permissionMode = permissionMode;
+      if (['low', 'medium', 'high', 'xhigh', 'max'].includes(effort)) meta.effort = effort;
       s = new ChatSession(meta, this);
       if (resume) s.seedFromTranscript();
       this.sessions.set(id, s);

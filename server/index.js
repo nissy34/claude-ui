@@ -19,6 +19,7 @@ import {
 } from './auth.js';
 import { store, claudeProjectDir } from './sessions.js';
 import { getChanges, searchFiles, readFileSafe, createWorktree } from './git.js';
+import { authStatus, mcpList, pluginList, cliVersion, permissionRules, removePermissionRule } from './claude-admin.js';
 
 if (!config.password && !config.passwordHash) {
   console.error('Refusing to start: set CW_PASSWORD or CW_PASSWORD_HASH (see README).');
@@ -296,12 +297,12 @@ app.get('/api/sessions', (req, res) => res.json({ sessions: store.list() }));
 app.post(
   '/api/sessions',
   wrap(async (req, res) => {
-    const { cwd, kind, name, resume, model, permissionMode, worktree, parentId } = req.body || {};
+    const { cwd, kind, name, resume, model, permissionMode, effort, worktree, parentId } = req.body || {};
     const project = resolveDir(cwd);
     const wt = worktree ? await createWorktree(project, name || 'chat') : null;
     const dir = wt ? wt.path : project;
     if (resume && resume !== 'continue' && !/^[0-9a-f-]{36}$/i.test(resume)) throw new Error('Bad resume id');
-    const s = store.create({ cwd: dir, kind, name: name ? String(name).slice(0, 80) : undefined, resume, model, permissionMode, initialInput: req.body?.login && kind === 'claude' ? '/login\r' : undefined });
+    const s = store.create({ cwd: dir, kind, name: name ? String(name).slice(0, 80) : undefined, resume, model, permissionMode, effort, initialInput: req.body?.login && kind === 'claude' ? '/login\r' : undefined });
     if (name) s.meta.customName = true;
     s.meta.project = project;
     if (wt) s.meta.worktree = wt;
@@ -366,6 +367,39 @@ app.get(
   wrap(async (req, res) => {
     const s = getSessionById(req.query.session);
     res.json(readFileSafe(s.meta.cwd, String(req.query.path || '')));
+  })
+);
+
+// ---------- settings ----------
+app.get('/api/claude/status', wrap(async (req, res) => res.json({ auth: await authStatus(), version: await cliVersion(), dataDir: config.dataDir, projectsRoot: config.projectsRoot, node: process.version, platform: process.platform })));
+app.get('/api/claude/mcp', wrap(async (req, res) => res.json(await mcpList(req.query.cwd ? resolveDir(req.query.cwd) : config.projectsRoot))));
+app.get('/api/claude/plugins', wrap(async (req, res) => res.json(await pluginList())));
+app.get('/api/claude/permissions', wrap(async (req, res) => res.json({ rules: permissionRules(req.query.cwd ? resolveDir(req.query.cwd) : null) })));
+app.post(
+  '/api/claude/permissions/remove',
+  wrap(async (req, res) => {
+    removePermissionRule(req.body?.cwd ? resolveDir(req.body.cwd) : null, req.body || {});
+    res.json({ ok: true });
+  })
+);
+
+// Attachments: stored outside the project and exposed to Claude with --add-dir.
+app.post(
+  '/api/sessions/:id/upload',
+  express.raw({ type: () => true, limit: '50mb' }),
+  wrap(async (req, res) => {
+    const s = getSession(req);
+    let raw = String(req.headers['x-filename'] || 'file');
+    try {
+      raw = decodeURIComponent(raw);
+    } catch {}
+    const name = path.basename(raw).replace(/[^\w.\- ]/g, '_').slice(0, 120) || 'file';
+    const dir = path.join(config.dataDir, 'uploads', s.id);
+    fs.mkdirSync(dir, { recursive: true });
+    let target = path.join(dir, name);
+    for (let i = 1; fs.existsSync(target); i++) target = path.join(dir, `${i}-${name}`);
+    fs.writeFileSync(target, req.body);
+    res.json({ path: target, name: path.basename(target), size: req.body.length });
   })
 );
 

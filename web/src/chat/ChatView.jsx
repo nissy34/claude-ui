@@ -2,9 +2,10 @@ import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useSta
 import { api, wsUrl } from '../api.js';
 import { buildItems, lastTodos } from './model.js';
 import { renderMarkdown } from './markdown.js';
-import ToolCard, { Todos } from './ToolCard.jsx';
+import ToolCard, { Todos, ToolGroup } from './ToolCard.jsx';
 import Permission from './Permission.jsx';
 import Composer from './Composer.jsx';
+import { getPrefs } from '../prefs.js';
 import SidePanel from './SidePanel.jsx';
 import { ChatCtx } from './ctx.js';
 import TerminalView from '../TerminalView.jsx';
@@ -12,7 +13,7 @@ import TerminalView from '../TerminalView.jsx';
 const AUTH_RE = /oauth|authenticat|\/login|not logged in|invalid api key|credentials/i;
 
 function notify(title, body) {
-  if (!document.hidden || !('Notification' in window) || Notification.permission !== 'granted') return;
+  if (!getPrefs().notifications || !document.hidden || !('Notification' in window) || Notification.permission !== 'granted') return;
   try {
     new Notification(title, { body, icon: '/icon.svg', tag: 'claude-web' });
   } catch {}
@@ -39,7 +40,21 @@ function Thinking({ text, streaming }) {
   );
 }
 
+function fmtTime(ts) {
+  const d = new Date(ts);
+  const today = new Date().toDateString() === d.toDateString();
+  return today ? d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : d.toLocaleDateString([], { month: 'short', day: 'numeric' }) + ', ' + d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+}
+
+// Messages sent with file attachments end with a list of uploaded paths; show those as chips.
+function splitAttachments(text) {
+  const m = /(?:^|\n\n)Attached files:\n((?:- .+(?:\n|$))+)$/.exec(text || '');
+  if (!m) return [text, []];
+  return [text.slice(0, m.index), m[1].trim().split('\n').map((l) => l.slice(2))];
+}
+
 function UserMessage({ item, canEdit, onEdit }) {
+  const [body, attached] = splitAttachments(item.text);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(item.text);
   if (editing) {
@@ -73,9 +88,19 @@ function UserMessage({ item, canEdit, onEdit }) {
     <div className="msg user">
       <div className="bubble">
         {item.images > 0 && <div className="img-note">🖼 {item.images} image{item.images > 1 ? 's' : ''}</div>}
-        {item.text}
+        {body}
+        {attached.length > 0 && (
+          <div className="attach-row in-bubble">
+            {attached.map((f) => (
+              <span key={f} className="attach" title={f}>
+                📄 {f.split(/[\\/]/).pop()}
+              </span>
+            ))}
+          </div>
+        )}
       </div>
       <div className="msg-actions">
+        {item.ts && <span className="ts" title={new Date(item.ts).toLocaleString()}>{fmtTime(item.ts)}</span>}
         <button className="icon-btn" title="Copy" onClick={() => copy(item.text)}>
           ⧉
         </button>
@@ -184,6 +209,7 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
   const [deltas, setDeltas] = useState({});
   const [meta, setMeta] = useState(session);
   const [state, setState] = useState(session.state || 'idle');
+  const [turns, setTurns] = useState(0);
   const [conn, setConn] = useState('connecting');
   const [status, setStatus] = useState(null);
   const [stick, setStick] = useState(true);
@@ -226,6 +252,7 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
           setOffset(m.truncated || 0);
           setMeta(m.meta);
           setState(m.state);
+          setTurns(m.turns || 0);
           setDeltas({});
           setConn('open');
           retry = 500;
@@ -252,6 +279,7 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
           }));
         } else if (m.t === 'state') {
           setState(m.state);
+          setTurns(m.turns || 0);
           setMeta(m.meta);
         } else if (m.t === 'status') setStatus(m.status);
         else if (m.t === 'reload') ws.close(4000, 'reload');
@@ -284,9 +312,30 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
   }, [session.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const items = useMemo(() => buildItems(events, deltas, offset), [events, deltas, offset]);
+  // Fold runs of quiet tool calls (reads, searches, commands) into one summary row.
+  const rows = useMemo(() => {
+    const QUIET = new Set(['Read', 'Grep', 'Glob', 'LS', 'Bash', 'BashOutput', 'WebFetch', 'WebSearch', 'ToolSearch', 'NotebookRead', 'KillShell']);
+    const out = [];
+    let run = [];
+    const flush = () => {
+      if (run.length >= 2) out.push({ type: 'group', tools: run, key: run[0].id });
+      else out.push(...run);
+      run = [];
+    };
+    for (const it of items) {
+      if (it.type === 'tool' && QUIET.has(it.name) && !(it.perm && !it.perm.done) && !it.result?.isError) run.push(it);
+      else {
+        flush();
+        out.push(it);
+      }
+    }
+    flush();
+    return out;
+  }, [items]);
   const todos = useMemo(() => lastTodos(events), [events]);
   const pendingPerms = items.filter((i) => i.type === 'tool' && i.perm && !i.perm.done).length + items.filter((i) => i.type === 'perm' && !i.done).length;
   const busy = state === 'busy' || state === 'waiting';
+  const queued = Math.max(0, turns - 1);
   const lastError = [...items].reverse().find((i) => i.type === 'error' || i.type === 'result');
   const authProblem = lastError && (lastError.type === 'error' || lastError.isError) && AUTH_RE.test(lastError.text || '');
   const parent = meta.parentId && sessions.find((s) => s.id === meta.parentId);
@@ -410,8 +459,10 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
                   <div className="wsub">{meta.cwd}</div>
                 </div>
               )}
-              {items.map((it, n) => {
+              {rows.map((it, n) => {
                 switch (it.type) {
+                  case 'group':
+                    return <ToolGroup key={it.key} tools={it.tools} cwd={meta.cwd} />;
                   case 'user':
                     return <UserMessage key={`u${it.index}`} item={it} canEdit={!busy && conn === 'open'} onEdit={(index, text) => send({ t: 'edit', index, text })} />;
                   case 'text':
@@ -521,7 +572,10 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
             effort={meta.effort || ''}
             onEffort={(effort) => send({ t: 'effort', effort })}
             commands={meta.commands || []}
-            footer={[meta.contextTokens ? `${fmtTokens(meta.contextTokens)} context` : '', rate ? `5h limit ${Math.round(rate.utilization * 100)}%` : ''].filter(Boolean).join(' · ')}
+            footer={rate ? `5h limit ${Math.round(rate.utilization * 100)}%` : ''}
+            context={{ used: meta.contextTokens, window: meta.contextWindow }}
+            onCompact={() => submit('/compact', [])}
+            queued={queued}
             onError={onError}
           />
 
@@ -556,6 +610,8 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
             }}
             refreshKey={changesKey}
             onOpenFile={ctx.openFile}
+            onPrompt={(t) => submit(t, [])}
+            busy={busy}
           />
         )}
         {info && <InfoDialog meta={meta} onClose={() => setInfo(false)} />}
