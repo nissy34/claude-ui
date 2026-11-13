@@ -16,6 +16,7 @@ fs.mkdirSync(CHAT_DIR, { recursive: true });
 
 const MAX_TEXT = 30_000; // cap stored tool output per result
 const MAX_EVENTS_SENT = 1500;
+const MODE_ALIASES = { ask: 'default', manual: 'default', normal: 'default', edits: 'acceptEdits', 'accept-edits': 'acceptEdits', acceptedits: 'acceptEdits', bypass: 'bypassPermissions', bypasspermissions: 'bypassPermissions', yolo: 'bypassPermissions' };
 const IDLE_MS = config.chatIdleMinutes * 60_000;
 
 export function claudeProjectDir(cwd) {
@@ -413,6 +414,11 @@ export class ChatSession {
       }
       case 'result':
         this.turns = Math.max(0, this.turns - 1);
+        // Effort changed mid-turn: restart once idle so the next message launches with it.
+        if (this.effortPending && this.turns === 0 && !this.pending.size) {
+          this.effortPending = false;
+          setTimeout(() => this.state === 'idle' && this.stop(), 200);
+        }
         if (this.interrupted) {
           this.interrupted = false;
           if (msg.is_error) {
@@ -597,8 +603,46 @@ export class ChatSession {
     this.meta.effort = effort || null;
     // Effort is a launch flag: restart the process when idle so the next message uses it.
     if (this.proc && this.state === 'idle') await this.stopAndWait();
+    else if (this.proc) this.effortPending = true;
     this.store.save();
     this.broadcastState();
+  }
+
+  /** Change model, effort and permission mode together (the sessions MCP's set_session_options). */
+  async setOptions({ model, effort, permissionMode } = {}) {
+    const done = [];
+    if (permissionMode != null) {
+      await this.setMode(MODE_ALIASES[String(permissionMode).toLowerCase()] || permissionMode);
+      done.push(`mode ${this.meta.permissionMode}`);
+    }
+    if (model != null) {
+      await this.setModel(model === 'default' ? '' : model);
+      done.push(`model ${this.meta.model || 'default'}`);
+    }
+    if (effort != null) {
+      const busy = this.proc && this.state !== 'idle';
+      await this.setEffort(effort === 'default' ? '' : effort);
+      done.push(`effort ${this.meta.effort || 'default'}${busy ? ' (from its next message; it is mid-turn now)' : ''}`);
+    }
+    return done;
+  }
+
+  /**
+   * "/model sonnet", "/effort high", "/mode plan": the CLI doesn't run these in stream-json
+   * mode, so handle them here like the composer's pickers. Returns true when handled.
+   */
+  async runLocalCommand(text) {
+    const m = /^\/(model|effort|mode|permission-mode|permissions-mode)\s+(\S+)\s*$/i.exec(String(text || '').trim());
+    if (!m) return false;
+    const [, cmd, arg] = m;
+    const key = cmd.toLowerCase() === 'model' ? 'model' : cmd.toLowerCase() === 'effort' ? 'effort' : 'permissionMode';
+    try {
+      const done = await this.setOptions({ [key]: arg });
+      this.record({ k: 'notice', text: `Set ${done.join(', ')}` });
+    } catch (e) {
+      this.record({ k: 'error', text: `${text.trim()}: ${e.message}` }, { persist: false });
+    }
+    return true;
   }
 
   stopAndWait() {
