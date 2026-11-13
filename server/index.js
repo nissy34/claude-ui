@@ -21,6 +21,7 @@ import { store, claudeProjectDir } from './sessions.js';
 import { getChanges, searchFiles, readFileSafe, createWorktree } from './git.js';
 import * as browser from './browser.js';
 import { listArtifacts, rawHandler, rawUrl } from './artifacts.js';
+import * as admin from './claude-admin.js';
 import { authStatus, mcpList, pluginList, cliVersion, permissionRules, removePermissionRule } from './claude-admin.js';
 
 if (!config.password && !config.passwordHash) {
@@ -361,7 +362,10 @@ app.patch(
       s.meta.customName = true;
     }
     if (typeof req.body?.archived === 'boolean') s.meta.archived = req.body.archived;
+    if (typeof req.body?.pinned === 'boolean') s.meta.pinned = req.body.pinned;
+    if (req.body?.unread === true) s.meta.attention = true;
     store.save();
+    store.changed?.();
     res.json({ session: s.toJSON() });
   })
 );
@@ -451,6 +455,33 @@ app.post(
   })
 );
 
+// Structured management of MCP servers, plugins and skills.
+const optCwd = (v) => (v ? resolveDir(v) : null);
+app.get('/api/claude/mcp-servers', wrap(async (req, res) => res.json(await admin.mcpServers(optCwd(req.query.cwd)))));
+app.post(
+  '/api/claude/mcp-servers/:action',
+  wrap(async (req, res) => {
+    const b = req.body || {};
+    const cwd = optCwd(b.cwd);
+    const fn = { add: admin.mcpAdd, remove: admin.mcpRemove, toggle: admin.mcpToggle }[req.params.action];
+    if (!fn) throw new Error('Unknown action');
+    res.json(await fn(cwd || config.projectsRoot, b));
+  })
+);
+app.get('/api/claude/plugins-full', wrap(async (req, res) => res.json(await admin.plugins())));
+app.post('/api/claude/plugins/action', wrap(async (req, res) => res.json(await admin.pluginAction(req.body || {}))));
+app.post('/api/claude/marketplaces/action', wrap(async (req, res) => res.json(await admin.marketplaceAction(req.body || {}))));
+app.get('/api/claude/skills', wrap(async (req, res) => res.json({ skills: admin.skills(optCwd(req.query.cwd)) })));
+app.post(
+  '/api/claude/skills/:action',
+  wrap(async (req, res) => {
+    const b = req.body || {};
+    const fn = { get: admin.skillGet, save: admin.skillSave, toggle: admin.skillToggle, delete: admin.skillDelete }[req.params.action];
+    if (!fn) throw new Error('Unknown action');
+    res.json(fn(optCwd(b.cwd), b));
+  })
+);
+
 // Attachments: stored outside the project and exposed to Claude with --add-dir.
 app.post(
   '/api/sessions/:id/upload',
@@ -468,6 +499,43 @@ app.post(
     for (let i = 1; fs.existsSync(target); i++) target = path.join(dir, `${i}-${name}`);
     fs.writeFileSync(target, req.body);
     res.json({ path: target, name: path.basename(target), size: req.body.length });
+  })
+);
+
+// Open a chat's conversation in Claude's own terminal UI (resumed with the same session id),
+// and come back to the chat afterwards.
+app.post(
+  '/api/sessions/:id/terminal',
+  wrap(async (req, res) => {
+    const s = getSession(req);
+    if (s.meta.kind !== 'chat') throw new Error('Not a chat');
+    const existing = s.meta.tuiId && store.get(s.meta.tuiId);
+    if (existing && existing.running) return res.json({ session: existing.toJSON() });
+    if (s.turns > 0) throw new Error('Wait for Claude to finish (or stop it) first');
+    await s.stopAndWait();
+    const t = store.create({ cwd: s.meta.cwd, kind: 'claude', name: `${s.meta.name} · terminal`, resume: s.meta.claudeSessionId && fs.existsSync(path.join(claudeProjectDir(s.meta.cwd), `${s.meta.claudeSessionId}.jsonl`)) ? s.meta.claudeSessionId : undefined });
+    t.meta.customName = true;
+    t.meta.parentId = s.id;
+    t.meta.tuiFor = s.id;
+    t.meta.project = s.meta.project;
+    s.meta.tuiId = t.id;
+    store.save();
+    res.json({ session: t.toJSON() });
+  })
+);
+app.post(
+  '/api/sessions/:id/back-to-chat',
+  wrap(async (req, res) => {
+    const t = getSession(req);
+    const chat = t.meta.tuiFor && store.get(t.meta.tuiFor);
+    if (!chat) throw new Error('This terminal is not linked to a chat');
+    if (!chat.meta.claudeSessionId && t.meta.claudeSessionId) chat.meta.claudeSessionId = t.meta.claudeSessionId;
+    store.remove(t.id);
+    chat.meta.tuiId = null;
+    await new Promise((r) => setTimeout(r, 300));
+    chat.resync();
+    store.save();
+    res.json({ session: chat.toJSON() });
   })
 );
 

@@ -21,7 +21,12 @@ Sessions live on the server. Close the tab, open it on your phone, and the same 
 - Commit, Commit and push, and Create PR buttons in the Changes panel
 - **Settings** (Ctrl/Cmd+,): theme, chat text size, Enter-to-send, notifications, defaults for new chats (model, mode, effort), saved permission rules with remove, MCP servers, plugins, account and version info. Keyboard shortcuts sheet with Ctrl/Cmd+/
 - Live task list (TodoWrite) docked above the composer. Sub-agent activity folds into its Task card
-- A terminal drawer in every chat (a shell in the same folder)
+- A terminal drawer in every chat (a shell in the same folder), and **Open in Claude's terminal** (chat ⋯ menu) to continue the same conversation in Claude Code's own terminal UI, then **Back to chat**
+- **Artifacts**: web pages and dashboards, images, SVG, Markdown, PDFs and CSVs that Claude writes open in the side panel with zoom, reload, download, new tab and full screen. HTML runs sandboxed. The **Artifacts** gallery in the sidebar lists them across all chats
+- **Built-in browser**: each chat has a headless Chromium tab on the server. Claude drives it with `browser` tools (open a URL, read the page, click, type, screenshot, console, phone/tablet viewports), so it can start your dev server and test it. The **Browser** panel shows the same tab live, and you can click, type and scroll in it
+- **Customize**: add, remove and turn on or off MCP servers (per project), browse/install/enable/disable/update/uninstall plugins and add marketplaces, and create, edit, turn off or delete skills
+- Sidebar with Pinned and Projects sections; each chat's ⋯ menu (or right-click) has Mark as unread, Pin, Rename, Archive and Delete, with U/P/R/A/D shortcuts
+- Composer **+** menu (upload files, open the browser, skills and commands, connectors and their status, add plugins) and a plan usage-limits popover
 - Session info: model, MCP servers and their status, context size, usage-limit meters and reset times
 - If Claude's login on the server expires, the chat shows a "Log in again" button that opens a terminal for `/login`
 - Resume any past Claude Code conversation for a folder from **Past conversations**, or **Continue** the latest one
@@ -34,7 +39,7 @@ Sessions live on the server. Close the tab, open it on your phone, and the same 
 ### Not the same as the desktop app
 
 - Files live on the server. Attachments are uploaded copies; Claude can't browse your phone's or laptop's disk.
-- No native OS integration (computer use, the Chrome extension, system notifications beyond the browser's). Dictation uses the browser's speech recognition where available.
+- No native OS integration (computer use, the Chrome extension, system notifications beyond the browser's). Dictation uses the browser's speech recognition where available. The built-in browser runs on the server, not on your laptop or phone.
 - claude.ai features outside Claude Code (projects, artifacts, connectors set up on claude.ai) aren't part of the CLI, so they aren't here.
 - Cloud sessions and teleport are not supported. Everything runs on your machine.
 - The look is inspired by the desktop app but uses its own icons and no Anthropic brand assets.
@@ -65,6 +70,7 @@ Sessions live on the server. Close the tab, open it on your phone, and the same 
 git clone https://github.com/nissy34/claude-ui ~/claude-ui
 cd ~/claude-ui
 npm install
+npx playwright-core install chromium   # for the built-in browser (skip if you set CW_BROWSER_PATH or have Chrome/Edge)
 npm run build
 
 npm run hash-password -- 'pick a strong password'   # copy the output
@@ -144,6 +150,8 @@ All settings are environment variables; see [`.env.example`](.env.example).
 | `CW_CHAT_IDLE_MINUTES` | `30` | Stop idle chat processes (they resume on the next message); `0` keeps them |
 | `CW_ALLOW_ANY_DIR` | `0` | `1` allows sessions outside the projects root |
 | `CW_CHILD_SESSIONS` | `1` | `0` turns off the built-in sessions tools (child sessions) |
+| `CW_BROWSER` | `1` | `0` turns off the built-in browser |
+| `CW_BROWSER_PATH` | | A Chrome/Chromium/Edge binary for the built-in browser. Without it, the Playwright Chromium is used, then an installed Chrome or Edge |
 | `CW_TRUST_PROXY` | `0` | `1` behind a reverse proxy / Tailscale Serve |
 | `CW_COOKIE_SECURE` | auto | Force the `Secure` cookie flag on/off |
 | `CW_SESSION_DAYS` | `30` | Login lifetime |

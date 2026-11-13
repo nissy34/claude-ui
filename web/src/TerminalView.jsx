@@ -36,7 +36,7 @@ function loadFontSize() {
   return Number.isFinite(v) ? v : isTouch ? 11 : 13;
 }
 
-export default function TerminalView({ session, onMenu, onError, onDeleted, onCreate }) {
+export default function TerminalView({ session, onMenu, onError, onDeleted, onCreate, onSelect }) {
   const holderRef = useRef(null);
   const termRef = useRef(null);
   const fitRef = useRef(null);
@@ -287,7 +287,22 @@ export default function TerminalView({ session, onMenu, onError, onDeleted, onCr
         </div>
       </div>
 
-      {onCreate && session.kind === 'claude' && (
+      {session.tuiFor && (
+        <div className="term-banner">
+          <span>This chat is open in Claude's own terminal UI. Everything you do here stays in the same conversation.</span>
+          <button
+            className="btn small primary"
+            onClick={() =>
+              api(`/api/sessions/${session.id}/back-to-chat`, { method: 'POST' })
+                .then((r) => onSelect?.(r.session.id))
+                .catch(onError)
+            }
+          >
+            Back to chat
+          </button>
+        </div>
+      )}
+      {onCreate && session.kind === 'claude' && !session.tuiFor && (
         <div className="term-banner">
           <span>
             {session.name === 'Log in to Claude'

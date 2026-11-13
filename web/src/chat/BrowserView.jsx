@@ -106,7 +106,7 @@ export default function BrowserView({ sessionId, onError }) {
   if (st && !st.available)
     return (
       <div className="panel-empty">
-        The built-in browser needs Playwright on the server. In the claude-ui folder run <code>npm install playwright-core</code> and <code>npx playwright install chromium</code>, then restart. You can also point <code>CW_BROWSER_PATH</code> at an installed Chrome or Edge.
+        The built-in browser needs Playwright on the server. In the claude-ui folder run <code>npm install</code> and <code>npx playwright-core install chromium</code>, then restart. You can also point <code>CW_BROWSER_PATH</code> at an installed Chrome or Edge.
       </div>
     );
 

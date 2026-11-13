@@ -3,6 +3,7 @@ import { api } from './api.js';
 import { getThemePref, setThemePref } from './theme.js';
 import { getPrefs, setPref } from './prefs.js';
 import { MODES } from './chat/Composer.jsx';
+import { McpTab, PluginsTab, SkillsTab } from './Customize.jsx';
 
 const TABS = [
   ['general', 'General'],
@@ -10,6 +11,7 @@ const TABS = [
   ['permissions', 'Permissions'],
   ['mcp', 'MCP servers'],
   ['plugins', 'Plugins'],
+  ['skills', 'Skills'],
   ['account', 'Account'],
   ['about', 'About'],
 ];
@@ -252,8 +254,8 @@ function About() {
   );
 }
 
-export default function Settings({ projects, activeCwd, onClose, onError, onKeys }) {
-  const [tab, setTab] = useState('general');
+export default function Settings({ projects, activeCwd, onClose, onError, onKeys, initialTab }) {
+  const [tab, setTab] = useState(initialTab || 'general');
   const [prefs, setPrefs] = useState(getPrefs);
   const set = (k, v) => setPrefs(setPref(k, v));
   return (
@@ -278,8 +280,9 @@ export default function Settings({ projects, activeCwd, onClose, onError, onKeys
             {tab === 'general' && <General prefs={prefs} set={set} onKeys={onKeys} />}
             {tab === 'chats' && <Chats prefs={prefs} set={set} />}
             {tab === 'permissions' && <Permissions projects={projects} activeCwd={activeCwd} onError={onError} />}
-            {tab === 'mcp' && <TextTab url={`/api/claude/mcp${activeCwd ? `?cwd=${encodeURIComponent(activeCwd)}` : ''}`} note="MCP servers Claude Code can use here, with their connection status. Each chat also gets a built-in sessions server for child sessions." />}
-            {tab === 'plugins' && <TextTab url="/api/claude/plugins" note="Plugins installed for Claude Code on the server." />}
+            {tab === 'mcp' && <McpTab projects={projects} activeCwd={activeCwd} onError={onError} />}
+            {tab === 'plugins' && <PluginsTab onError={onError} />}
+            {tab === 'skills' && <SkillsTab projects={projects} activeCwd={activeCwd} onError={onError} />}
             {tab === 'account' && <Account />}
             {tab === 'about' && <About />}
           </div>

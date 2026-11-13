@@ -203,7 +203,7 @@ function InfoDialog({ meta, onClose }) {
   );
 }
 
-export default function ChatView({ session, sessions, onSelect, onCreate, onMenu, onError, onDeleted }) {
+export default function ChatView({ session, sessions, onSelect, onCreate, onMenu, onError, onDeleted, onSettings }) {
   const [events, setEvents] = useState([]);
   const [offset, setOffset] = useState(0);
   const [deltas, setDeltas] = useState({});
@@ -395,11 +395,16 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
 
   // Opened from the Artifacts gallery: #s=<id>&a=<path>
   useEffect(() => {
-    const m = /[&#]a=([^&]+)/.exec(location.hash);
-    if (m && meta.cwd) {
-      ctxRef.current.openArtifact(decodeURIComponent(m[1]));
-      history.replaceState(null, '', `#s=${session.id}`);
-    }
+    const check = () => {
+      const m = /[&#]a=([^&]+)/.exec(location.hash);
+      if (m && meta.cwd) {
+        ctxRef.current.openArtifact(decodeURIComponent(m[1]));
+        history.replaceState(null, '', `#s=${session.id}`);
+      }
+    };
+    check();
+    window.addEventListener('hashchange', check);
+    return () => window.removeEventListener('hashchange', check);
   }, [meta.cwd, session.id]);
 
   const rename = () => {
@@ -422,6 +427,15 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
       if (!s) return;
     }
     setTerminal((t) => !t);
+  };
+  const openTui = async () => {
+    setMenu(false);
+    try {
+      const { session: t } = await api(`/api/sessions/${session.id}/terminal`, { method: 'POST' });
+      onSelect(t.id);
+    } catch (e) {
+      onError(e);
+    }
   };
   const relogin = () => onCreate({ cwd: meta.cwd, kind: 'claude', name: 'Log in to Claude', login: true });
 
@@ -464,6 +478,7 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
                 {menu && (
                   <div className="pop down">
                     <button onClick={() => (setMenu(false), setInfo(true))}>Session info and usage</button>
+                    <button onClick={openTui}>Open in Claude's terminal</button>
                     <button onClick={rename}>Rename</button>
                     <button onClick={archive}>{meta.archived ? 'Unarchive' : 'Archive'}</button>
                     {meta.live && <button onClick={() => (setMenu(false), send({ t: 'stop' }))}>Stop Claude process</button>}
@@ -600,7 +615,11 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
             effort={meta.effort || ''}
             onEffort={(effort) => send({ t: 'effort', effort })}
             commands={meta.commands || []}
-            footer={rate ? `5h limit ${Math.round(rate.utilization * 100)}%` : ''}
+            footer=""
+            usage={meta.rateLimit?.unifiedWindows}
+            mcpServers={meta.mcpServers}
+            onSettings={onSettings}
+            onBrowser={() => openPanel('browser')}
             context={{ used: meta.contextTokens, window: meta.contextWindow }}
             onCompact={() => submit('/compact', [])}
             queued={queued}

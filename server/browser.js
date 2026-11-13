@@ -25,7 +25,7 @@ export function browserAvailable() {
 }
 
 async function launch() {
-  if (!browserAvailable()) throw new Error('The built-in browser needs Playwright on the server: run `npm install playwright-core` and `npx playwright install chromium` in the claude-ui folder (or set CW_BROWSER_PATH to a Chrome/Edge binary).');
+  if (!browserAvailable()) throw new Error('The built-in browser needs Playwright on the server: run `npm install` and `npx playwright-core install chromium` in the claude-ui folder (or set CW_BROWSER_PATH to a Chrome/Edge binary).');
   const base = { headless: true, args: ['--no-sandbox', '--disable-dev-shm-usage'] };
   const attempts = config.browserPath ? [{ ...base, executablePath: config.browserPath }] : [base, { ...base, channel: 'chrome' }, { ...base, channel: 'msedge' }];
   let last;

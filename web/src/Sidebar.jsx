@@ -21,7 +21,7 @@ export function baseName(p) {
   return (p || '').split(/[\\/]/).filter(Boolean).pop() || p;
 }
 
-export default function Sidebar({ sessions, activeId, onSelect, onCreate, onNewChat, onHistory, onSettings, onLogout, onClose, onCollapse }) {
+export default function Sidebar({ sessions, activeId, onSelect, onCreate, onNewChat, onHistory, onSettings, onArtifacts, onCustomize, onLogout, onClose, onCollapse, onError }) {
   const [q, setQ] = useState('');
   const [showArchived, setShowArchived] = useState(false);
   const [collapsed, setCollapsed] = useState(() => {
@@ -80,6 +80,98 @@ export default function Sidebar({ sessions, activeId, onSelect, onCreate, onNewC
   }, [sessions, q, showArchived]);
 
   const archivedCount = sessions.filter((s) => s.archived).length;
+  const pinned = useMemo(() => (showArchived || q ? [] : sessions.filter((s) => s.pinned && !s.archived && !(s.kind === 'shell' && s.parentId)).sort((a, b) => b.lastActivity - a.lastActivity)), [sessions, showArchived, q]);
+  const searchRef = React.useRef(null);
+
+  const patch = (s, body) => api(`/api/sessions/${s.id}`, { method: 'PATCH', body }).catch(onError);
+  const rowAction = (s, action) => {
+    setMenu(null);
+    if (action === 'pin') patch(s, { pinned: !s.pinned });
+    else if (action === 'unread') patch(s, { unread: true });
+    else if (action === 'archive') patch(s, { archived: !s.archived });
+    else if (action === 'rename') {
+      const name = window.prompt('Rename chat', s.name);
+      if (name) patch(s, { name });
+    } else if (action === 'delete') {
+      if (!window.confirm(`Delete "${s.name}"? Claude keeps its own transcript, so you can resume it later from Past conversations.`)) return;
+      api(`/api/sessions/${s.id}`, { method: 'DELETE' })
+        .then(() => s.id === activeId && onSelect(null))
+        .catch(onError);
+    }
+  };
+
+  const Row = ({ s, depth = 0, keyPrefix = '' }) => (
+    <div
+      key={keyPrefix + s.id}
+      role="button"
+      tabIndex={0}
+      className={`session-row ${s.id === activeId ? 'active' : ''} ${depth ? 'child' : ''} ${menu === 'row:' + keyPrefix + s.id ? 'menu-open' : ''}`}
+      style={depth > 1 ? { paddingLeft: 26 + (depth - 1) * 14 } : undefined}
+      onClick={() => onSelect(s.id)}
+      onKeyDown={(e) => e.key === 'Enter' && onSelect(s.id)}
+      onContextMenu={(e) => (e.preventDefault(), setMenu('row:' + keyPrefix + s.id))}
+      title={s.cwd}
+    >
+      <StatusDot s={s} />
+      <span className="sname">
+        {s.kind === 'shell' && <span className="tag">sh</span>}
+        {s.kind === 'claude' && <span className="tag">tty</span>}
+        {s.worktree && (
+          <span className="tag" title={s.worktree.branch}>
+            wt
+          </span>
+        )}
+        {s.name}
+      </span>
+      <span className="when">{timeAgo(s.lastActivity)}</span>
+      <span className="menu-wrap row-menu" onClick={(e) => e.stopPropagation()}>
+        <button className="icon-btn" title="More" onClick={() => setMenu(menu === 'row:' + keyPrefix + s.id ? null : 'row:' + keyPrefix + s.id)}>
+          ⋯
+        </button>
+        {menu === 'row:' + keyPrefix + s.id && (
+          <div className="pop down">
+            <button onClick={() => rowAction(s, 'unread')}>
+              Mark as unread <kbd>U</kbd>
+            </button>
+            <button onClick={() => rowAction(s, 'pin')}>
+              {s.pinned ? 'Unpin' : 'Pin'} <kbd>P</kbd>
+            </button>
+            <button onClick={() => rowAction(s, 'rename')}>
+              Rename <kbd>R</kbd>
+            </button>
+            <div className="sep" />
+            <button onClick={() => rowAction(s, 'archive')}>
+              {s.archived ? 'Unarchive' : 'Archive'} <kbd>A</kbd>
+            </button>
+            <button className="danger" onClick={() => rowAction(s, 'delete')}>
+              Delete <kbd>D</kbd>
+            </button>
+          </div>
+        )}
+      </span>
+    </div>
+  );
+
+  React.useEffect(() => {
+    if (!menu) return;
+    const onDown = (e) => !e.target.closest?.('.menu-wrap') && setMenu(null);
+    document.addEventListener('mousedown', onDown);
+    return () => document.removeEventListener('mousedown', onDown);
+  }, [menu]);
+
+  // Shortcut letters work while a row's menu is open, like the desktop app.
+  React.useEffect(() => {
+    if (!menu?.startsWith('row:')) return;
+    const id = menu.replace(/^row:(pin:)?/, '');
+    const s = sessions.find((x) => x.id === id);
+    const onKey = (e) => {
+      const a = { u: 'unread', p: 'pin', r: 'rename', a: 'archive', d: 'delete' }[e.key.toLowerCase()];
+      if (e.key === 'Escape') setMenu(null);
+      else if (a && s && !e.metaKey && !e.ctrlKey) (e.preventDefault(), rowAction(s, a));
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  });
   const cap = (t) => t[0].toUpperCase() + t.slice(1);
 
   return (
@@ -96,15 +188,32 @@ export default function Sidebar({ sessions, activeId, onSelect, onCreate, onNewC
         </button>
       </div>
 
-      <button className="side-new" onClick={onNewChat}>
-        <span className="plus">+</span> New chat
-      </button>
-      <div className="side-search">
-        <span className="s-ico">⌕</span>
-        <input placeholder="Search chats" value={q} onChange={(e) => setQ(e.target.value)} />
-      </div>
+      <nav className="side-nav">
+        <button onClick={onNewChat} title="New chat (Ctrl+K)">
+          <span className="nico">＋</span> New chat
+        </button>
+        <div className="side-search">
+          <span className="s-ico">⌕</span>
+          <input ref={searchRef} placeholder="Search" value={q} onChange={(e) => setQ(e.target.value)} />
+        </div>
+        <button onClick={onArtifacts}>
+          <span className="nico">◇</span> Artifacts
+        </button>
+        <button onClick={onCustomize}>
+          <span className="nico">⚒</span> Customize
+        </button>
+      </nav>
 
       <div className="side-scroll">
+        {pinned.length > 0 && (
+          <div className="group">
+            <div className="section-head">Pinned</div>
+            {pinned.map((s) => (
+              <Row key={'pin:' + s.id} s={s} keyPrefix="pin:" />
+            ))}
+          </div>
+        )}
+        {groups.length > 0 && !q && <div className="section-head">Projects</div>}
         {groups.length === 0 && <div className="side-empty">{q ? 'No matching chats' : showArchived ? 'No archived chats' : 'No chats yet. Start one with New chat.'}</div>}
         {groups.map((g) => (
           <div key={g.path} className="group">
@@ -127,26 +236,7 @@ export default function Sidebar({ sessions, activeId, onSelect, onCreate, onNewC
             </div>
             {!collapsed[g.path] &&
               g.rows.map(({ s, depth }) => (
-                <button
-                  key={s.id}
-                  className={`session-row ${s.id === activeId ? 'active' : ''} ${depth ? 'child' : ''}`}
-                  style={depth > 1 ? { paddingLeft: 26 + (depth - 1) * 14 } : undefined}
-                  onClick={() => onSelect(s.id)}
-                  title={s.cwd}
-                >
-                  <StatusDot s={s} />
-                  <span className="sname">
-                    {s.kind === 'shell' && <span className="tag">sh</span>}
-                    {s.kind === 'claude' && <span className="tag">tty</span>}
-                    {s.worktree && (
-                      <span className="tag" title={s.worktree.branch}>
-                        wt
-                      </span>
-                    )}
-                    {s.name}
-                  </span>
-                  <span className="when">{timeAgo(s.lastActivity)}</span>
-                </button>
+                <Row key={s.id} s={s} depth={depth} />
               ))}
           </div>
         ))}

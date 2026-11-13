@@ -154,6 +154,17 @@ export class ChatSession {
   }
 
   /** Seed history from an existing Claude transcript (used when resuming a past conversation). */
+  // Rebuild the chat from Claude's transcript (after the conversation continued in the terminal UI).
+  resync() {
+    const file = transcriptPath(this.meta.cwd, this.meta.claudeSessionId);
+    const evs = eventsFromTranscript(file);
+    if (!evs.length) return;
+    evs.push({ k: 'notice', text: 'Synced with the terminal session', ts: Date.now() });
+    fs.writeFileSync(this.logFile, evs.map((e) => JSON.stringify(e)).join('\n') + '\n');
+    this.events = evs;
+    this.broadcast({ t: 'reload' });
+  }
+
   seedFromTranscript() {
     const file = transcriptPath(this.meta.cwd, this.meta.claudeSessionId);
     const evs = eventsFromTranscript(file);
@@ -464,6 +475,11 @@ export class ChatSession {
     const imgs = Array.isArray(images) ? images.filter((i) => i && /^image\/(png|jpeg|gif|webp)$/.test(i.media_type) && typeof i.data === 'string').slice(0, 10) : [];
     if (!text.trim() && !imgs.length) return;
     const m = this.meta;
+    const tui = m.tuiId && this.store.get(m.tuiId);
+    if (tui && tui.running) {
+      this.record({ k: 'error', text: 'This conversation is open in the terminal. Use "Back to chat" there first, so the two don\'t write to it at once.' }, { persist: false });
+      return;
+    }
     if (!m.customName && !m.namedFromPrompt && text.trim()) {
       m.name = text.trim().split('\n')[0].slice(0, 60);
       m.namedFromPrompt = true;

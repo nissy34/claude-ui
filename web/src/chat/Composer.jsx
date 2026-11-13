@@ -39,6 +39,18 @@ function readFile(file) {
 
 const SpeechRec = typeof window !== 'undefined' && (window.SpeechRecognition || window.webkitSpeechRecognition);
 
+// Close a popover when clicking anywhere outside its .menu-wrap.
+function useOutsideClose(open, close) {
+  const ref = useRef(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e) => ref.current && !ref.current.contains(e.target) && close();
+    document.addEventListener('mousedown', onDown);
+    return () => document.removeEventListener('mousedown', onDown);
+  }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
+  return ref;
+}
+
 function fmtSize(n) {
   return n > 1 << 20 ? `${(n / (1 << 20)).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`;
 }
@@ -46,12 +58,13 @@ function fmtSize(n) {
 // A small ring that fills as the context window is used. Click for details and /compact.
 function ContextRing({ used, window: win, onCompact }) {
   const [open, setOpen] = useState(false);
+  const ref = useOutsideClose(open, () => setOpen(false));
   if (!used) return null;
   const pct = Math.min(1, used / (win || 200000));
   const r = 7;
   const c = 2 * Math.PI * r;
   return (
-    <div className="menu-wrap">
+    <div className="menu-wrap" ref={ref}>
       <button className={`chip icon ctx-ring ${pct > 0.8 ? 'hot' : ''}`} title={`${Math.round(pct * 100)}% of context used`} onClick={() => setOpen(!open)}>
         <svg width="18" height="18" viewBox="0 0 18 18">
           <circle cx="9" cy="9" r={r} fill="none" stroke="currentColor" strokeOpacity="0.2" strokeWidth="2.2" />
@@ -77,7 +90,52 @@ function ContextRing({ used, window: win, onCompact }) {
   );
 }
 
-export default function Composer({ sessionId, disabled, busy, onSend, onStop, mode, onMode, model, activeModel, onModel, effort, onEffort, commands, footer, onError, placeholder, context, onCompact, queued }) {
+const WINDOW_NAMES = { five_hour: '5-hour limit', seven_day: 'Weekly · all models', seven_day_opus: 'Weekly · Opus', seven_day_sonnet: 'Weekly · Sonnet' };
+function windowName(k) {
+  return WINDOW_NAMES[k] || k.replace(/_/g, ' ').replace(/^seven day/, 'Weekly').replace(/^five hour/, '5-hour');
+}
+function fmtReset(sec) {
+  if (!sec) return '';
+  const d = new Date(sec * 1000);
+  const soon = d - Date.now() < 86400000;
+  return `Resets ${soon ? d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : d.toLocaleDateString([], { weekday: 'short' }) + ' ' + d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`;
+}
+
+// Plan usage limits, like the desktop app's popover.
+function UsageButton({ usage }) {
+  const [open, setOpen] = useState(false);
+  const ref = useOutsideClose(open, () => setOpen(false));
+  const entries = Object.entries(usage || {}).filter(([, w]) => w && typeof w.utilization === 'number');
+  if (!entries.length) return null;
+  const main = (usage.five_hour || entries[0][1]).utilization;
+  return (
+    <div className="menu-wrap" ref={ref}>
+      <button className="footer-info usage-btn" onClick={() => setOpen(!open)} title="Plan usage limits">
+        {Math.round(main * 100)}% used
+      </button>
+      {open && (
+        <div className="pop up right usage-pop">
+          <div className="pad usage-title">Plan usage limits</div>
+          {entries.map(([k, w]) => (
+            <div key={k} className="usage-row">
+              <div className="usage-line">
+                <b>{windowName(k)}</b>
+                <span className="muted">
+                  {fmtReset(w.resetsAt)} {Math.round(w.utilization * 100)}%
+                </span>
+              </div>
+              <div className="meter">
+                <span style={{ width: `${Math.min(100, w.utilization * 100)}%` }} />
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+export default function Composer({ sessionId, disabled, busy, onSend, onStop, mode, onMode, model, activeModel, onModel, effort, onEffort, commands, footer, onError, placeholder, context, onCompact, queued, usage, mcpServers, onSettings, onBrowser }) {
   const draftKey = `cw.draft.${sessionId}`;
   const [text, setText] = useState(() => {
     try {
@@ -90,7 +148,8 @@ export default function Composer({ sessionId, disabled, busy, onSend, onStop, mo
   const [attachments, setAttachments] = useState([]); // {name, path, size} | {name, uploading:true}
   const [listening, setListening] = useState(false);
   const recRef = useRef(null);
-  const [menu, setMenu] = useState(null); // 'mode' | 'model' | 'effort'
+  const [menu, setMenu] = useState(null); // 'mode' | 'model' | 'effort' | 'plus'
+  const [sub, setSub] = useState(null);
   const [suggest, setSuggest] = useState(null); // {type, items, start, end}
   const [sel, setSel] = useState(0);
   const taRef = useRef(null);
@@ -113,6 +172,17 @@ export default function Composer({ sessionId, disabled, busy, onSend, onStop, mo
   useEffect(() => {
     if (!isTouch) taRef.current?.focus();
   }, []);
+
+  // Close an open menu on an outside click.
+  const barRef = useRef(null);
+  useEffect(() => {
+    if (!menu) return;
+    const onDown = (e) => {
+      if (!e.target.closest?.('.menu-wrap')) (setMenu(null), setSub(null));
+    };
+    document.addEventListener('mousedown', onDown);
+    return () => document.removeEventListener('mousedown', onDown);
+  }, [menu]);
 
   // Work out what to suggest from the text around the cursor: /commands at the start, @files anywhere.
   const updateSuggest = (value, cursor) => {
@@ -232,6 +302,10 @@ export default function Composer({ sessionId, disabled, busy, onSend, onStop, mo
   };
 
   const onKeyDown = (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'u') {
+      e.preventDefault();
+      return fileRef.current?.click();
+    }
     if (suggest) {
       if (e.key === 'ArrowDown') return e.preventDefault(), setSel((i) => (i + 1) % suggest.items.length);
       if (e.key === 'ArrowUp') return e.preventDefault(), setSel((i) => (i - 1 + suggest.items.length) % suggest.items.length);
@@ -339,9 +413,67 @@ export default function Composer({ sessionId, disabled, busy, onSend, onStop, mo
           }}
         />
         <div className="composer-bar">
-          <button className="chip icon" title="Attach files or images" onClick={() => fileRef.current?.click()}>
-            +
-          </button>
+          <div className="menu-wrap">
+            <button className="chip icon" title="Add files, skills, connectors and more" onClick={() => setMenu(menu === 'plus' ? null : 'plus')}>
+              +
+            </button>
+            {menu === 'plus' && (
+              <div className="pop up plus-pop">
+                <button onClick={() => (setMenu(null), fileRef.current?.click())}>
+                  <span className="check">⎙</span> Upload or add files <kbd>Ctrl U</kbd>
+                </button>
+                <button onClick={() => (setMenu(null), onBrowser?.())}>
+                  <span className="check">◎</span> Open the browser
+                </button>
+                <div className="sep" />
+                <button className={sub === 'skills' ? 'on' : ''} onMouseEnter={() => setSub('skills')} onClick={() => setSub(sub === 'skills' ? null : 'skills')}>
+                  <span className="check">✦</span> Skills and commands <span className="chev-r">›</span>
+                </button>
+                <button className={sub === 'mcp' ? 'on' : ''} onMouseEnter={() => setSub('mcp')} onClick={() => setSub(sub === 'mcp' ? null : 'mcp')}>
+                  <span className="check">⌗</span> Connectors
+                  {(mcpServers || []).some((m) => m.status !== 'connected' && m.status !== 'pending') && <span className="warn-pill">⚠ {(mcpServers || []).filter((m) => m.status !== 'connected' && m.status !== 'pending').length}</span>}
+                  <span className="chev-r">›</span>
+                </button>
+                <button onMouseEnter={() => setSub(null)} onClick={() => (setMenu(null), onSettings?.('plugins'))}>
+                  <span className="check">⚒</span> Add plugins
+                </button>
+                {sub === 'skills' && (
+                  <div className="pop sub">
+                    {commands.length === 0 && <span className="pad muted">Shown after the first message</span>}
+                    {commands.slice(0, 40).map((c) => (
+                      <button
+                        key={c}
+                        onClick={() => {
+                          setMenu(null);
+                          setSub(null);
+                          setText(`/${c} `);
+                          requestAnimationFrame(() => taRef.current?.focus());
+                        }}
+                      >
+                        /{c}
+                      </button>
+                    ))}
+                    <div className="sep" />
+                    <button onClick={() => (setMenu(null), onSettings?.('skills'))}>Manage skills…</button>
+                  </div>
+                )}
+                {sub === 'mcp' && (
+                  <div className="pop sub">
+                    {(mcpServers || []).length === 0 && <span className="pad muted">Shown after the first message</span>}
+                    {(mcpServers || []).map((m) => (
+                      <div key={m.name} className="pad mcp-line">
+                        <span className={`dot ${m.status === 'connected' ? 'on' : m.status === 'pending' ? 'busy' : 'err'}`} />
+                        <span style={{ flex: 1 }}>{m.name}</span>
+                        <span className="muted">{m.status}</span>
+                      </div>
+                    ))}
+                    <div className="sep" />
+                    <button onClick={() => (setMenu(null), onSettings?.('mcp'))}>Manage connectors…</button>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
           <button className="chip icon hide-mobile" title="Slash commands" onClick={openCommands}>
             /
           </button>
@@ -409,6 +541,7 @@ export default function Composer({ sessionId, disabled, busy, onSend, onStop, mo
             )}
           </div>
           <span className="footer-info">{footer}</span>
+          <UsageButton usage={usage} />
           <ContextRing used={context?.used} window={context?.window} onCompact={onCompact} />
           {SpeechRec && (
             <button className={`chip icon ${listening ? 'rec' : ''}`} title={listening ? 'Stop dictation' : 'Dictate'} onClick={toggleDictation}>

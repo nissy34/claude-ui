@@ -80,3 +80,194 @@ export function removePermissionRule(cwd, { scope, behavior, rule }) {
   j.permissions[behavior] = list.filter((r) => r !== rule);
   fs.writeFileSync(f.path, JSON.stringify(j, null, 2) + '\n');
 }
+
+// ---------- MCP servers (structured) ----------
+const homeConfigPath = () => (process.env.CLAUDE_CONFIG_DIR ? path.join(config.claudeConfigDir, '.claude.json') : path.join(path.dirname(config.claudeConfigDir), '.claude.json'));
+
+function statusMap(text) {
+  const out = {};
+  for (const line of text.split('\n')) {
+    const m = /^([^:\s][^:]*):\s.*\s-\s(.+)$/.exec(line.trim());
+    if (m) out[m[1]] = m[2].trim();
+  }
+  return out;
+}
+
+export async function mcpServers(cwd) {
+  const home = readJson(homeConfigPath()) || {};
+  const proj = (cwd && home.projects?.[cwd]) || {};
+  const disabled = new Set(proj.disabledMcpServers || []);
+  const list = [];
+  const add = (scope, servers) => {
+    for (const [name, cfg] of Object.entries(servers || {})) list.push({ name, scope, config: cfg, enabled: !disabled.has(name) });
+  };
+  add('user', home.mcpServers);
+  add('local', proj.mcpServers);
+  if (cwd) add('project', readJson(path.join(cwd, '.mcp.json'))?.mcpServers);
+  const r = await runClaude(['mcp', 'list'], cwd, 60_000);
+  const status = statusMap(r.out);
+  for (const s of list) s.status = s.enabled ? status[s.name] || 'unknown' : 'disabled';
+  return { servers: list, raw: r.out || r.err };
+}
+
+function checkName(name) {
+  if (typeof name !== 'string' || !/^[\w.-]{1,64}$/.test(name)) throw new Error('Name can use letters, numbers, dots, dashes and underscores');
+  return name;
+}
+const SCOPES = ['user', 'local', 'project'];
+const scopeOf = (s) => (SCOPES.includes(s) ? s : 'user');
+
+async function mustRun(args, cwd, timeout) {
+  const r = await runClaude(args, cwd, timeout);
+  if (!r.ok) throw new Error(r.err || r.out || 'Command failed');
+  return r.out;
+}
+
+export async function mcpAdd(cwd, { name, scope, server }) {
+  checkName(name);
+  if (!server || typeof server !== 'object') throw new Error('Server config is required');
+  return { out: await mustRun(['mcp', 'add-json', name, JSON.stringify(server), '-s', scopeOf(scope)], cwd) };
+}
+
+export async function mcpRemove(cwd, { name, scope }) {
+  checkName(name);
+  return { out: await mustRun(['mcp', 'remove', name, '-s', scopeOf(scope)], cwd) };
+}
+
+// Same switch as /mcp's enable/disable: the project's disabledMcpServers in ~/.claude.json.
+export function mcpToggle(cwd, { name, enabled }) {
+  checkName(name);
+  if (!cwd) throw new Error('Pick a project first');
+  const file = homeConfigPath();
+  const j = readJson(file) || {};
+  j.projects ||= {};
+  const p = (j.projects[cwd] ||= {});
+  const set = new Set(p.disabledMcpServers || []);
+  enabled ? set.delete(name) : set.add(name);
+  p.disabledMcpServers = [...set];
+  fs.writeFileSync(file, JSON.stringify(j, null, 2));
+  return { ok: true };
+}
+
+// ---------- plugins ----------
+function parseJson(text, fallback) {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return fallback;
+  }
+}
+
+export async function plugins() {
+  const [a, m] = await Promise.all([runClaude(['plugin', 'list', '--available', '--json'], null, 60_000), runClaude(['plugin', 'marketplace', 'list', '--json'], null, 30_000)]);
+  const data = parseJson(a.out, null);
+  return {
+    installed: data?.installed || (Array.isArray(data) ? data : []),
+    available: data?.available || [],
+    marketplaces: parseJson(m.out, []),
+    error: data ? undefined : a.err || a.out,
+  };
+}
+
+const PLUGIN_ID = /^[\w.@/:-]{1,200}$/;
+export async function pluginAction({ action, id, scope }) {
+  if (!PLUGIN_ID.test(id || '')) throw new Error('Bad plugin id');
+  const s = ['-s', scopeOf(scope)];
+  const args = {
+    install: ['plugin', 'install', id, ...s],
+    uninstall: ['plugin', 'uninstall', id, ...s, '-y'],
+    enable: ['plugin', 'enable', id, ...s],
+    disable: ['plugin', 'disable', id, ...s],
+    update: ['plugin', 'update', id],
+  }[action];
+  if (!args) throw new Error('Unknown action');
+  return { out: await mustRun(args, null, 180_000) };
+}
+
+export async function marketplaceAction({ action, source, name }) {
+  if (action === 'add') {
+    if (typeof source !== 'string' || !source.trim() || source.startsWith('-')) throw new Error('Give a GitHub repo (owner/repo), URL or path');
+    return { out: await mustRun(['plugin', 'marketplace', 'add', source.trim()], null, 180_000) };
+  }
+  if (action === 'remove') return { out: await mustRun(['plugin', 'marketplace', 'remove', checkName(name)], null) };
+  if (action === 'update') return { out: await mustRun(['plugin', 'marketplace', 'update', ...(name ? [checkName(name)] : [])], null, 180_000) };
+  throw new Error('Unknown action');
+}
+
+// ---------- skills ----------
+// A skill is a folder with SKILL.md. Disabling renames SKILL.md to SKILL.md.disabled.
+function skillRoots(cwd) {
+  const roots = [{ scope: 'user', dir: path.join(config.claudeConfigDir, 'skills') }];
+  if (cwd) roots.push({ scope: 'project', dir: path.join(cwd, '.claude', 'skills') });
+  return roots;
+}
+
+function frontmatter(text) {
+  const m = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text);
+  const out = {};
+  if (m) for (const line of m[1].split('\n')) {
+    const kv = /^(\w[\w-]*):\s*(.*)$/.exec(line);
+    if (kv) out[kv[1]] = kv[2].replace(/^["']|["']$/g, '');
+  }
+  return out;
+}
+
+export function skills(cwd) {
+  const list = [];
+  for (const { scope, dir } of skillRoots(cwd)) {
+    let names = [];
+    try {
+      names = fs.readdirSync(dir, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name);
+    } catch {}
+    for (const n of names) {
+      const on = path.join(dir, n, 'SKILL.md');
+      const off = on + '.disabled';
+      const file = fs.existsSync(on) ? on : fs.existsSync(off) ? off : null;
+      if (!file) continue;
+      const fm = frontmatter(fs.readFileSync(file, 'utf8').slice(0, 4000));
+      list.push({ id: n, scope, name: fm.name || n, description: fm.description || '', enabled: file === on, path: path.join(dir, n) });
+    }
+  }
+  return list;
+}
+
+function skillDir(cwd, scope, id) {
+  checkName(id);
+  const root = skillRoots(cwd).find((r) => r.scope === scope);
+  if (!root) throw new Error('Pick a project for project skills');
+  return { root: root.dir, dir: path.join(root.dir, id) };
+}
+
+export function skillGet(cwd, { scope, id }) {
+  const { dir } = skillDir(cwd, scope, id);
+  const f = fs.existsSync(path.join(dir, 'SKILL.md')) ? path.join(dir, 'SKILL.md') : path.join(dir, 'SKILL.md.disabled');
+  return { content: fs.readFileSync(f, 'utf8') };
+}
+
+export function skillSave(cwd, { scope, id, content, create }) {
+  const { dir } = skillDir(cwd, scope, id);
+  if (typeof content !== 'string' || content.length > 200_000) throw new Error('Bad content');
+  if (create && fs.existsSync(dir)) throw new Error('A skill with that name already exists');
+  fs.mkdirSync(dir, { recursive: true });
+  const off = path.join(dir, 'SKILL.md.disabled');
+  fs.writeFileSync(fs.existsSync(off) ? off : path.join(dir, 'SKILL.md'), content);
+  return { ok: true };
+}
+
+export function skillToggle(cwd, { scope, id, enabled }) {
+  const { dir } = skillDir(cwd, scope, id);
+  const on = path.join(dir, 'SKILL.md');
+  const off = on + '.disabled';
+  if (enabled && fs.existsSync(off)) fs.renameSync(off, on);
+  if (!enabled && fs.existsSync(on)) fs.renameSync(on, off);
+  return { ok: true };
+}
+
+export function skillDelete(cwd, { scope, id }) {
+  const { root, dir } = skillDir(cwd, scope, id);
+  // Move to a trash folder instead of deleting outright.
+  const trash = path.join(root, '.trash');
+  fs.mkdirSync(trash, { recursive: true });
+  fs.renameSync(dir, path.join(trash, `${id}-${Date.now()}`));
+  return { ok: true };
+}

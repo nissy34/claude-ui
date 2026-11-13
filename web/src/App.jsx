@@ -6,6 +6,7 @@ import TerminalView from './TerminalView.jsx';
 import ChatView from './chat/ChatView.jsx';
 import Settings, { Shortcuts } from './Settings.jsx';
 import { newChatDefaults } from './prefs.js';
+import ArtifactsGallery from './ArtifactsGallery.jsx';
 
 function readHash() {
   const m = location.hash.match(/s=([0-9a-f-]{36})/i);
@@ -163,6 +164,9 @@ export default function App() {
         onNewChat={() => setDialog({ type: 'new' })}
         onHistory={(path) => setDialog({ type: 'history', path })}
         onSettings={() => (setDrawer(false), setDialog({ type: 'settings' }))}
+        onCustomize={() => (setDrawer(false), setDialog({ type: 'settings', tab: 'plugins' }))}
+        onArtifacts={() => (setDrawer(false), setDialog({ type: 'artifacts' }))}
+        onError={showError}
         onLogout={async () => {
           await api('/api/logout', { method: 'POST' }).catch(() => {});
           setAuthed(false);
@@ -173,9 +177,9 @@ export default function App() {
       <div className="scrim" onClick={() => setDrawer(false)} />
       <main className="main">
         {active && active.kind === 'chat' ? (
-          <ChatView key={active.id} session={active} sessions={sessions} onSelect={select} onCreate={createSession} {...common} />
+          <ChatView key={active.id} session={active} sessions={sessions} onSelect={select} onCreate={createSession} onSettings={(tab) => setDialog({ type: 'settings', tab })} {...common} />
         ) : active ? (
-          <TerminalView key={active.id} session={active} onCreate={createSession} {...common} />
+          <TerminalView key={active.id} session={active} onCreate={createSession} onSelect={select} {...common} />
         ) : (
           <Empty onMenu={openMenu} onNew={() => setDialog({ type: 'new' })} missing={!!activeId && sessions.length > 0} />
         )}
@@ -191,8 +195,19 @@ export default function App() {
         />
       )}
       {dialog?.type === 'history' && <HistoryDialog path={dialog.path} onCreate={createSession} onClose={() => setDialog(null)} onError={showError} />}
-      {dialog?.type === 'settings' && <Settings projects={projects} activeCwd={active?.cwd} onClose={() => setDialog(null)} onError={showError} onKeys={() => setDialog({ type: 'keys' })} />}
+      {dialog?.type === 'settings' && <Settings initialTab={dialog.tab} projects={projects} activeCwd={active?.cwd} onClose={() => setDialog(null)} onError={showError} onKeys={() => setDialog({ type: 'keys' })} />}
       {dialog?.type === 'keys' && <Shortcuts onClose={() => setDialog(null)} />}
+      {dialog?.type === 'artifacts' && (
+        <ArtifactsGallery
+          onClose={() => setDialog(null)}
+          onError={showError}
+          onOpen={(a) => {
+            setDialog(null);
+            location.hash = `s=${a.sessionId}&a=${encodeURIComponent(a.path)}`;
+            setActiveId(a.sessionId);
+          }}
+        />
+      )}
       {toast && <div className="toast">{toast}</div>}
     </div>
   );
