@@ -1,0 +1,29 @@
+# systemd unit for claude-web. Install:
+#   sudo cp deploy/claude-web.service /etc/systemd/system/claude-web@.service
+#   sudo cp .env.example /etc/claude-web.env && sudo chmod 600 /etc/claude-web.env   # then edit it
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now claude-web@$USER
+#
+# Runs as your own user, so `claude` uses your login, ~/.claude settings, MCP servers and CLAUDE.md files.
+
+[Unit]
+Description=Claude Web (web UI for Claude Code) for %i
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=%i
+WorkingDirectory=/home/%i/claude-ui
+EnvironmentFile=/etc/claude-web.env
+# Make sure the claude CLI and node are on PATH (adjust for nvm/volta installs).
+Environment=PATH=/home/%i/.local/bin:/home/%i/.npm-global/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/bin/env node server/index.js
+Restart=on-failure
+RestartSec=3
+# Give sessions time to save on stop.
+TimeoutStopSec=10
+KillMode=mixed
+
+[Install]
+WantedBy=multi-user.target
