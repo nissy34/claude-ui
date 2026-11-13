@@ -347,9 +347,12 @@ export function NewChatDialog({ projects, onCreate, onClose, onReloadProjects, o
           <div className="pick-list">
             {list.map((p) => (
               <button key={p.path} className={sel === p.path ? 'on' : ''} onClick={() => setSel(p.path)} onDoubleClick={() => start(p.path)}>
-                <span className="muted">▢</span>
+                <svg className="pl-ico" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
+                  <path d="M1.5 4.5a1 1 0 0 1 1-1h3.6l1.4 1.5h6a1 1 0 0 1 1 1v6.5a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1z" fill="none" stroke="currentColor" strokeWidth="1.2" />
+                </svg>
                 <span className="pl-name">{p.name}</span>
                 {p.git && <span className="tag">git</span>}
+                <span className="pl-check">{sel === p.path ? '✓' : ''}</span>
               </button>
             ))}
             {list.length === 0 && <div className="pad muted">No folders match</div>}
@@ -364,10 +367,21 @@ export function NewChatDialog({ projects, onCreate, onClose, onReloadProjects, o
               <button className="btn small">Create</button>
             </form>
           )}
-          <label className="toggle" style={selProject && !selProject.git ? { opacity: 0.5 } : undefined} title="Needs a git repository">
-            <input type="checkbox" checked={worktree} disabled={selProject && !selProject.git} onChange={(e) => setWorktree(e.target.checked)} />
-            Work in an isolated git worktree (own branch)
-          </label>
+          <div className={`wt-row ${selProject && !selProject.git ? 'disabled' : ''}`}>
+            <div className="wt-text">
+              <div>Isolated worktree</div>
+              <div className="desc">{selProject && !selProject.git ? 'Needs a git repository' : 'Claude works on its own branch, so your checkout stays untouched'}</div>
+            </div>
+            <button
+              type="button"
+              className={`toggle ${worktree && !(selProject && !selProject.git) ? 'on' : ''}`}
+              role="switch"
+              aria-checked={worktree}
+              aria-label="Isolated worktree"
+              disabled={!!(selProject && !selProject.git)}
+              onClick={() => setWorktree((w) => !w)}
+            />
+          </div>
         </div>
         <div className="modal-foot">
           {sel && (
