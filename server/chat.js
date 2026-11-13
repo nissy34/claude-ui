@@ -1,0 +1,649 @@
+// Chat sessions: the real `claude` CLI in headless stream-JSON mode, one long-lived process
+// per session. Tool permission prompts come back over stdio (`--permission-prompt-tool stdio`),
+// the same control protocol the Agent SDK uses, so the browser can answer them.
+import fs from 'node:fs';
+import path from 'node:path';
+import crypto from 'node:crypto';
+import readline from 'node:readline';
+import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { browserAvailable } from './browser.js';
+import { config, PRIVATE_ENV } from './config.js';
+import { resolveCommand } from './launch.js';
+
+const CHAT_DIR = path.join(config.dataDir, 'chats');
+fs.mkdirSync(CHAT_DIR, { recursive: true });
+
+const MAX_TEXT = 30_000; // cap stored tool output per result
+const MAX_EVENTS_SENT = 1500;
+const IDLE_MS = config.chatIdleMinutes * 60_000;
+
+export function claudeProjectDir(cwd) {
+  return path.join(config.claudeConfigDir, 'projects', cwd.replace(/[^a-zA-Z0-9]/g, '-'));
+}
+export function transcriptPath(cwd, id) {
+  return path.join(claudeProjectDir(cwd), `${id}.jsonl`);
+}
+
+const MCP_SCRIPT = path.join(path.dirname(fileURLToPath(import.meta.url)), 'mcp-sessions.js');
+const MCP_BROWSER = path.join(path.dirname(fileURLToPath(import.meta.url)), 'mcp-browser.js');
+
+function childEnv(sessionId) {
+  const env = { ...process.env };
+  for (const k of PRIVATE_ENV) delete env[k];
+  // Lets "edit an earlier message" restore files to that point.
+  env.CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING = '1';
+  // Used by the built-in sessions MCP server (child sessions).
+  env.CW_INTERNAL_URL = config.internalUrl;
+  env.CW_INTERNAL_TOKEN = config.internalToken;
+  env.CW_SESSION_ID = sessionId;
+  return env;
+}
+
+function clip(s, n = MAX_TEXT) {
+  if (typeof s !== 'string') return s;
+  return s.length > n ? s.slice(0, n) + `\n… [${s.length - n} more characters]` : s;
+}
+
+function resultText(content) {
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    return content
+      .map((c) => (c.type === 'text' ? c.text : c.type === 'image' ? '[image]' : c.type === 'tool_reference' ? `[${c.tool_name}]` : ''))
+      .filter(Boolean)
+      .join('\n');
+  }
+  return content == null ? '' : JSON.stringify(content);
+}
+
+function promptText(content) {
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) return content.filter((c) => c.type === 'text').map((c) => c.text).join('\n');
+  return '';
+}
+
+/** Convert a Claude Code transcript (.jsonl) into chat events, so resumed conversations show their history. */
+export function eventsFromTranscript(file) {
+  const events = [];
+  let lines;
+  try {
+    lines = fs.readFileSync(file, 'utf8').split('\n');
+  } catch {
+    return events;
+  }
+  for (const line of lines) {
+    if (!line) continue;
+    let o;
+    try {
+      o = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (o.isSidechain || o.isMeta) continue;
+    const ts = o.timestamp ? Date.parse(o.timestamp) : undefined;
+    if (o.type === 'user' && o.message) {
+      const c = o.message.content;
+      const hasToolResult = Array.isArray(c) && c.some((x) => x.type === 'tool_result');
+      if (hasToolResult) {
+        for (const x of c) {
+          if (x.type === 'tool_result') events.push({ k: 'tool_result', toolUseId: x.tool_use_id, text: clip(resultText(x.content)), isError: !!x.is_error, ts });
+        }
+      } else {
+        const text = promptText(c).trim();
+        if (text && !text.startsWith('<')) events.push({ k: 'user', text, ts });
+      }
+    } else if (o.type === 'assistant' && o.message?.content) {
+      for (const b of o.message.content) {
+        if (b.type === 'text' || b.type === 'tool_use' || b.type === 'thinking') events.push({ k: 'block', msgId: o.message.id, block: b, ts });
+      }
+    }
+  }
+  return events;
+}
+
+export class ChatSession {
+  constructor(meta, store) {
+    this.meta = meta;
+    this.store = store;
+    this.proc = null;
+    this.clients = new Set();
+    this.pending = new Map(); // request_id -> permission request event
+    this.controlWaiters = new Map();
+    this.turns = 0; // user turns in flight
+    this.stderr = [];
+    this.seenBlocks = new Set();
+    this.idleTimer = null;
+    this.events = this.loadEvents();
+  }
+
+  get id() {
+    return this.meta.id;
+  }
+  get logFile() {
+    return path.join(CHAT_DIR, `${this.meta.id}.jsonl`);
+  }
+  get running() {
+    return !!this.proc;
+  }
+  get state() {
+    if (this.pending.size) return 'waiting';
+    return this.turns > 0 ? 'busy' : 'idle';
+  }
+
+  toJSON() {
+    return { ...this.meta, commands: undefined, tools: undefined, mcpServers: undefined, status: this.running ? 'running' : 'idle', state: this.state, live: this.running, clients: this.clients.size };
+  }
+
+  loadEvents() {
+    try {
+      return fs
+        .readFileSync(this.logFile, 'utf8')
+        .split('\n')
+        .filter(Boolean)
+        .map((l) => {
+          try {
+            return JSON.parse(l);
+          } catch {
+            return null;
+          }
+        })
+        .filter(Boolean);
+    } catch {
+      return [];
+    }
+  }
+
+  /** Seed history from an existing Claude transcript (used when resuming a past conversation). */
+  // Rebuild the chat from Claude's transcript (after the conversation continued in the terminal UI).
+  resync() {
+    const file = transcriptPath(this.meta.cwd, this.meta.claudeSessionId);
+    const evs = eventsFromTranscript(file);
+    if (!evs.length) return;
+    evs.push({ k: 'notice', text: 'Synced with the terminal session', ts: Date.now() });
+    fs.writeFileSync(this.logFile, evs.map((e) => JSON.stringify(e)).join('\n') + '\n');
+    this.events = evs;
+    this.broadcast({ t: 'reload' });
+  }
+
+  seedFromTranscript() {
+    const file = transcriptPath(this.meta.cwd, this.meta.claudeSessionId);
+    const evs = eventsFromTranscript(file);
+    if (evs.length) {
+      evs.push({ k: 'notice', text: 'Resumed from an earlier conversation', ts: Date.now() });
+      fs.writeFileSync(this.logFile, evs.map((e) => JSON.stringify(e)).join('\n') + '\n');
+      this.events = evs;
+    }
+  }
+
+  record(ev, { persist = true } = {}) {
+    ev.ts ||= Date.now();
+    if (persist) {
+      this.events.push(ev);
+      fs.appendFile(this.logFile, JSON.stringify(ev) + '\n', () => {});
+    }
+    this.broadcast({ t: 'ev', ev });
+  }
+
+  broadcastState() {
+    this.broadcast({ t: 'state', state: this.state, live: this.running, meta: this.meta, turns: this.turns });
+    this.store.changed();
+  }
+
+  broadcast(msg) {
+    const s = JSON.stringify(msg);
+    for (const ws of this.clients) if (ws.readyState === 1) ws.send(s);
+  }
+
+  snapshot() {
+    return {
+      t: 'chat',
+      meta: this.meta,
+      state: this.state,
+      live: this.running,
+      turns: this.turns,
+      events: this.events.slice(-MAX_EVENTS_SENT),
+      truncated: Math.max(0, this.events.length - MAX_EVENTS_SENT),
+      pending: [...this.pending.values()],
+    };
+  }
+
+  // ---------- process ----------
+  ensureProcess() {
+    if (this.proc) return;
+    const m = this.meta;
+    const args = [
+      '--output-format', 'stream-json',
+      '--input-format', 'stream-json',
+      '--verbose',
+      '--include-partial-messages',
+      '--permission-prompt-tool', 'stdio',
+      '--replay-user-messages',
+      ...config.claudeArgs,
+    ];
+    const builtin = {};
+    if (config.childSessions) builtin.sessions = { type: 'stdio', command: process.execPath, args: [MCP_SCRIPT] };
+    if (browserAvailable()) builtin.browser = { type: 'stdio', command: process.execPath, args: [MCP_BROWSER] };
+    if (Object.keys(builtin).length) args.push('--mcp-config', JSON.stringify({ mcpServers: builtin }));
+    // Looking at the page never needs a prompt; navigating, clicking and typing still ask.
+    if (builtin.browser) args.push('--allowedTools', ['snapshot', 'screenshot', 'console', 'scroll', 'wait_for', 'back', 'reload', 'resize'].map((t) => `mcp__browser__${t}`).join(','));
+    // 'default' is the CLI's normal ask-first mode; newer CLIs call it 'manual', so just omit the flag.
+    if (m.permissionMode && m.permissionMode !== 'default') args.push('--permission-mode', m.permissionMode);
+    if (m.model) args.push('--model', m.model);
+    if (m.effort) args.push('--effort', m.effort);
+    const uploads = path.join(config.dataDir, 'uploads', m.id);
+    fs.mkdirSync(uploads, { recursive: true });
+    args.push('--add-dir', uploads);
+    const fork = this.forkAt;
+    this.forkAt = undefined;
+    if (fork && fork.from && fs.existsSync(transcriptPath(m.cwd, fork.from))) {
+      args.push('--resume', fork.from, '--fork-session');
+      if (fork.at) args.push('--resume-session-at', fork.at);
+    } else if (fork) {
+      m.claudeSessionId = crypto.randomUUID();
+      args.push('--session-id', m.claudeSessionId);
+    } else if (m.claudeSessionId && fs.existsSync(transcriptPath(m.cwd, m.claudeSessionId))) {
+      args.push('--resume', m.claudeSessionId);
+    } else {
+      m.claudeSessionId ||= crypto.randomUUID();
+      args.push('--session-id', m.claudeSessionId);
+    }
+
+    let proc;
+    try {
+      const cmd = resolveCommand(config.claudeBin, args);
+      proc = spawn(cmd.file, cmd.args, { cwd: m.cwd, env: childEnv(m.id), stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+    } catch (e) {
+      this.record({ k: 'error', text: `Could not start ${config.claudeBin}: ${e.message}` });
+      return;
+    }
+    this.proc = proc;
+    this.stderr = [];
+    m.pid = proc.pid;
+    proc.on('error', (e) => this.record({ k: 'error', text: `Could not start ${config.claudeBin}: ${e.message}` }));
+    proc.stdin.on('error', () => {});
+    proc.stderr.setEncoding('utf8');
+    proc.stderr.on('data', (d) => {
+      this.stderr.push(d);
+      if (this.stderr.length > 50) this.stderr.shift();
+    });
+    readline.createInterface({ input: proc.stdout, crlfDelay: Infinity }).on('line', (line) => {
+      if (!line.trim()) return;
+      let msg;
+      try {
+        msg = JSON.parse(line);
+      } catch {
+        return;
+      }
+      try {
+        this.onMessage(msg);
+      } catch (e) {
+        console.error('chat message handling failed', e);
+      }
+    });
+    proc.on('exit', (code, signal) => {
+      if (this.proc !== proc) return;
+      this.proc = null;
+      m.pid = null;
+      const hadWork = this.turns > 0 || this.pending.size > 0;
+      this.turns = 0;
+      for (const id of this.pending.keys()) this.record({ k: 'perm_done', reqId: id, behavior: 'cancelled' });
+      this.pending.clear();
+      for (const w of this.controlWaiters.values()) w.reject(new Error('process exited'));
+      this.controlWaiters.clear();
+      if (hadWork || (code && code !== 0 && !this.stopping)) {
+        const err = this.stderr.join('').trim().split('\n').slice(-8).join('\n');
+        this.record({ k: 'error', text: `Claude exited (${signal || `code ${code}`})${err ? `:\n${err}` : ''}` });
+      }
+      this.stopping = false;
+      this.store.save();
+      this.broadcastState();
+    });
+    this.store.save();
+  }
+
+  writeLine(obj) {
+    if (!this.proc) return false;
+    this.proc.stdin.write(JSON.stringify(obj) + '\n');
+    return true;
+  }
+
+  control(request) {
+    const request_id = crypto.randomBytes(8).toString('hex');
+    return new Promise((resolve, reject) => {
+      if (!this.writeLine({ type: 'control_request', request_id, request })) return reject(new Error('not running'));
+      this.controlWaiters.set(request_id, { resolve, reject });
+      setTimeout(() => {
+        if (this.controlWaiters.delete(request_id)) reject(new Error('control request timed out'));
+      }, 15_000);
+    });
+  }
+
+  touchIdle() {
+    clearTimeout(this.idleTimer);
+    if (!IDLE_MS) return;
+    this.idleTimer = setTimeout(() => {
+      // Free the process when nothing is happening; the next message resumes the same conversation.
+      if (this.proc && this.state === 'idle') this.stop();
+    }, IDLE_MS);
+    this.idleTimer.unref?.();
+  }
+
+  onMessage(msg) {
+    const m = this.meta;
+    m.lastActivity = Date.now();
+    switch (msg.type) {
+      case 'system':
+        if (msg.subtype === 'init') {
+          if (msg.session_id) m.claudeSessionId = msg.session_id;
+          m.activeModel = msg.model;
+          m.permissionMode = msg.permissionMode || m.permissionMode;
+          m.commands = msg.slash_commands || [];
+          m.tools = msg.tools || [];
+          m.mcpServers = msg.mcp_servers || [];
+          m.cliVersion = msg.claude_code_version;
+          m.apiKeySource = msg.apiKeySource;
+          this.broadcastState();
+        } else if (msg.subtype === 'status') {
+          this.broadcast({ t: 'status', status: msg.status });
+        } else if (msg.subtype === 'compact_boundary') {
+          this.record({ k: 'notice', text: 'Conversation compacted' });
+        }
+        break;
+      case 'stream_event': {
+        const e = msg.event;
+        if (e?.type === 'content_block_delta') {
+          const d = e.delta;
+          const text = d.type === 'text_delta' ? d.text : d.type === 'thinking_delta' ? d.thinking : null;
+          if (text) this.broadcast({ t: 'delta', msgId: msg.api_message_id, index: e.index, kind: d.type === 'thinking_delta' ? 'thinking' : 'text', text, parent: msg.parent_tool_use_id || null });
+        }
+        break;
+      }
+      case 'assistant': {
+        const msgId = msg.message?.id;
+        for (const b of msg.message?.content || []) {
+          if (!['text', 'tool_use', 'thinking'].includes(b.type)) continue;
+          const key = `${msgId}:${b.id || b.type}:${(b.text || b.thinking || '').length}`;
+          if (this.seenBlocks.has(key)) continue;
+          this.seenBlocks.add(key);
+          this.record({ k: 'block', msgId, block: b, parent: msg.parent_tool_use_id || null, uuid: msg.uuid });
+        }
+        const u = msg.message?.usage;
+        if (u && !msg.parent_tool_use_id) {
+          m.contextTokens = (u.input_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0) + (u.output_tokens || 0);
+        }
+        break;
+      }
+      case 'user': {
+        const c = msg.message?.content;
+        const isToolResult = Array.isArray(c) && c.some((x) => x.type === 'tool_result');
+        if (!isToolResult && msg.uuid && !msg.parent_tool_use_id) {
+          // Echo of a prompt we sent (--replay-user-messages): remember its id for edit/rewind.
+          this.record({ k: 'user_uuid', uuid: msg.uuid });
+          break;
+        }
+        if (Array.isArray(c)) {
+          for (const x of c) {
+            if (x.type === 'tool_result') {
+              this.record({ k: 'tool_result', toolUseId: x.tool_use_id, text: clip(resultText(x.content)), isError: !!x.is_error, parent: msg.parent_tool_use_id || null, uuid: msg.uuid });
+            }
+          }
+        }
+        break;
+      }
+      case 'result':
+        this.turns = Math.max(0, this.turns - 1);
+        if (this.interrupted) {
+          this.interrupted = false;
+          if (msg.is_error) {
+            msg.result = 'Interrupted';
+            msg.errors = [];
+          }
+        }
+        m.totalCost = (m.totalCost || 0) + (msg.total_cost_usd || 0);
+        this.record({
+          k: 'result',
+          subtype: msg.subtype,
+          isError: !!msg.is_error,
+          text: msg.is_error ? msg.result || (msg.errors || []).join('; ') : undefined,
+          durationMs: msg.duration_ms,
+          cost: msg.total_cost_usd,
+          turns: msg.num_turns,
+        });
+        if (this.clients.size === 0) m.attention = true;
+        this.store.save();
+        this.broadcastState();
+        this.touchIdle();
+        break;
+      case 'autocompact_state':
+        if (msg.value?.effective_window) {
+          m.contextWindow = msg.value.effective_window;
+          m.compactAt = msg.value.threshold;
+        }
+        break;
+      case 'rate_limit_event':
+        m.rateLimit = msg.rate_limit_info;
+        this.broadcastState();
+        break;
+      case 'control_request':
+        this.onControlRequest(msg);
+        break;
+      case 'control_response': {
+        const r = msg.response || {};
+        const w = this.controlWaiters.get(r.request_id);
+        if (w) {
+          this.controlWaiters.delete(r.request_id);
+          r.subtype === 'error' ? w.reject(new Error(r.error)) : w.resolve(r.response);
+        }
+        break;
+      }
+      case 'control_cancel_request':
+        if (this.pending.delete(msg.request_id)) {
+          this.record({ k: 'perm_done', reqId: msg.request_id, behavior: 'cancelled' });
+          this.broadcastState();
+        }
+        break;
+    }
+  }
+
+  onControlRequest(msg) {
+    const req = msg.request || {};
+    if (req.subtype === 'can_use_tool') {
+      const ev = {
+        k: 'perm',
+        reqId: msg.request_id,
+        tool: req.tool_name,
+        input: req.input,
+        toolUseId: req.tool_use_id,
+        suggestions: req.permission_suggestions || null,
+        reason: req.decision_reason || null,
+        blockedPath: req.blocked_path || null,
+        parent: req.agent_id || null,
+      };
+      this.pending.set(msg.request_id, ev);
+      this.record(ev);
+      if (this.clients.size === 0) this.meta.attention = true;
+      this.broadcastState();
+      return;
+    }
+    // Anything else we don't implement: answer with an error so the CLI doesn't wait forever.
+    this.writeLine({ type: 'control_response', response: { subtype: 'error', request_id: msg.request_id, error: `Unsupported request: ${req.subtype}` } });
+  }
+
+  // ---------- actions from the browser ----------
+  send({ text, images }) {
+    text = typeof text === 'string' ? text : '';
+    const imgs = Array.isArray(images) ? images.filter((i) => i && /^image\/(png|jpeg|gif|webp)$/.test(i.media_type) && typeof i.data === 'string').slice(0, 10) : [];
+    if (!text.trim() && !imgs.length) return;
+    const m = this.meta;
+    const tui = m.tuiId && this.store.get(m.tuiId);
+    if (tui && tui.running) {
+      this.record({ k: 'error', text: 'This conversation is open in the terminal. Use "Back to chat" there first, so the two don\'t write to it at once.' }, { persist: false });
+      return;
+    }
+    if (!m.customName && !m.namedFromPrompt && text.trim()) {
+      m.name = text.trim().split('\n')[0].slice(0, 60);
+      m.namedFromPrompt = true;
+    }
+    m.attention = false;
+    this.ensureProcess();
+    if (!this.proc) return;
+    const content = imgs.length
+      ? [...imgs.map((i) => ({ type: 'image', source: { type: 'base64', media_type: i.media_type, data: i.data } })), ...(text ? [{ type: 'text', text }] : [])]
+      : text;
+    this.writeLine({ type: 'user', message: { role: 'user', content }, parent_tool_use_id: null, session_id: m.claudeSessionId });
+    this.turns++;
+    this.record({ k: 'user', text, images: imgs.length });
+    clearTimeout(this.idleTimer);
+    this.store.save();
+    this.broadcastState();
+  }
+
+  answerPermission({ reqId, behavior, updatedInput, message, always }) {
+    const p = this.pending.get(reqId);
+    if (!p) return;
+    this.pending.delete(reqId);
+    let response;
+    if (behavior === 'allow') {
+      response = { behavior: 'allow', updatedInput: updatedInput && typeof updatedInput === 'object' ? updatedInput : p.input };
+      if (always && Array.isArray(p.suggestions) && p.suggestions.length) response.updatedPermissions = p.suggestions;
+    } else {
+      response = { behavior: 'deny', message: message || 'The user denied this action.' };
+      if (message === undefined) response.interrupt = false;
+    }
+    if (p.toolUseId) response.toolUseID = p.toolUseId;
+    this.writeLine({ type: 'control_response', response: { subtype: 'success', request_id: reqId, response } });
+    this.meta.attention = false;
+    this.record({ k: 'perm_done', reqId, behavior, always: !!always });
+    this.broadcastState();
+  }
+
+  async interrupt() {
+    if (!this.proc || this.turns === 0) return;
+    this.interrupted = true;
+    // Deny anything waiting first, then ask Claude to stop the turn.
+    for (const id of [...this.pending.keys()]) this.answerPermission({ reqId: id, behavior: 'deny', message: 'Interrupted by user' });
+    try {
+      await this.control({ subtype: 'interrupt' });
+    } catch {
+      // Fall back to a signal if the CLI didn't answer.
+      try {
+        this.proc?.kill('SIGINT');
+      } catch {}
+    }
+  }
+
+  async setMode(mode) {
+    const ok = ['default', 'acceptEdits', 'plan', 'bypassPermissions', 'auto', 'dontAsk'];
+    if (!ok.includes(mode)) throw new Error('bad mode');
+    this.meta.permissionMode = mode;
+    if (this.proc) await this.control({ subtype: 'set_permission_mode', mode }).catch((e) => this.record({ k: 'error', text: `Could not change mode: ${e.message}` }));
+    this.store.save();
+    this.broadcastState();
+  }
+
+  async setModel(model) {
+    model = String(model || '').trim().slice(0, 100) || null;
+    this.meta.model = model;
+    if (this.proc) await this.control({ subtype: 'set_model', model: model || 'default' }).catch((e) => this.record({ k: 'error', text: `Could not change model: ${e.message}` }));
+    this.store.save();
+    this.broadcastState();
+  }
+
+  async setEffort(effort) {
+    const ok = ['', 'low', 'medium', 'high', 'xhigh', 'max'];
+    if (!ok.includes(effort || '')) throw new Error('bad effort');
+    this.meta.effort = effort || null;
+    // Effort is a launch flag: restart the process when idle so the next message uses it.
+    if (this.proc && this.state === 'idle') await this.stopAndWait();
+    this.store.save();
+    this.broadcastState();
+  }
+
+  stopAndWait() {
+    return new Promise((resolve) => {
+      const p = this.proc;
+      if (!p) return resolve();
+      p.once('exit', () => setTimeout(resolve, 50));
+      this.stop();
+    });
+  }
+
+  /** Last assistant text since the last user message (for read_session). */
+  lastReply() {
+    let out = [];
+    for (let i = this.events.length - 1; i >= 0; i--) {
+      const e = this.events[i];
+      if (e.k === 'user') break;
+      if (e.k === 'block' && e.block.type === 'text' && !e.parent) out.unshift(e.block.text);
+    }
+    return out.join('\n\n');
+  }
+
+  /**
+   * Edit an earlier user message: restore files to before it (when checkpoints exist),
+   * fork the Claude conversation just before it, drop later history, and send the new text.
+   */
+  async editMessage({ index, text }) {
+    const ev = this.events[index];
+    if (!ev || ev.k !== 'user') throw new Error('That message can no longer be edited');
+    if (this.turns > 0) throw new Error('Wait for Claude to finish (or stop it) before editing');
+    // The prompt's own id arrives as a user_uuid event right after it.
+    let userUuid = null;
+    for (let i = index + 1; i < this.events.length && !userUuid; i++) {
+      if (this.events[i].k === 'user_uuid') userUuid = this.events[i].uuid;
+      if (this.events[i].k === 'user') break;
+    }
+    let prevUuid = null;
+    for (let i = index - 1; i >= 0 && !prevUuid; i--) if (this.events[i].uuid && !this.events[i].parent) prevUuid = this.events[i].uuid;
+
+    let restored = false;
+    if (userUuid) {
+      try {
+        this.ensureProcess();
+        const r = await this.control({ subtype: 'rewind_files', user_message_id: userUuid });
+        restored = r?.canRewind !== false;
+      } catch {}
+    }
+    await this.stopAndWait();
+    this.forkAt = { from: this.meta.claudeSessionId, at: prevUuid };
+    this.events = this.events.slice(0, index);
+    fs.writeFileSync(this.logFile, this.events.map((e) => JSON.stringify(e)).join('\n') + (this.events.length ? '\n' : ''));
+    this.record({ k: 'notice', text: restored ? 'Edited message: conversation and files rewound to this point' : 'Edited message: conversation rewound to this point' });
+    this.broadcast({ t: 'reload' });
+    this.send({ text });
+  }
+
+  stop() {
+    if (!this.proc) return;
+    this.stopping = true;
+    try {
+      this.proc.stdin.end();
+      this.proc.kill('SIGTERM');
+    } catch {}
+    const p = this.proc;
+    setTimeout(() => {
+      if (this.proc === p) {
+        try {
+          p.kill('SIGKILL');
+        } catch {}
+      }
+    }, 3000).unref?.();
+  }
+
+  kill() {
+    this.stop();
+  }
+
+  start() {
+    this.ensureProcess();
+  }
+
+  saveScreen() {}
+
+  dispose() {
+    this.stop();
+    clearTimeout(this.idleTimer);
+    for (const ws of this.clients) ws.close(4004, 'session deleted');
+    fs.unlink(this.logFile, () => {});
+  }
+}
