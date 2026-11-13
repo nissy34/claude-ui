@@ -1,6 +1,6 @@
 // Turns the flat event log from the server into renderable items.
 
-export function buildItems(events, deltas) {
+export function buildItems(events, deltas, offset = 0) {
   const items = [];
   const tools = new Map(); // tool_use id -> item
   const perms = new Map();
@@ -11,7 +11,8 @@ export function buildItems(events, deltas) {
     lastText = null;
   };
 
-  for (const e of events) {
+  for (let idx = 0; idx < events.length; idx++) {
+    const e = events[idx];
     // Sub-agent activity is folded into its parent Task card.
     if (e.parent && e.k !== 'perm' && e.k !== 'perm_done') {
       const parent = tools.get(e.parent);
@@ -29,7 +30,7 @@ export function buildItems(events, deltas) {
     }
     switch (e.k) {
       case 'user':
-        push({ type: 'user', text: e.text, images: e.images || 0, ts: e.ts });
+        push({ type: 'user', text: e.text, images: e.images || 0, ts: e.ts, index: idx + offset });
         break;
       case 'block': {
         const b = e.block;

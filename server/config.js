@@ -49,6 +49,9 @@ export const config = {
   sessionDays: int(env.CW_SESSION_DAYS, 30),
   claudeConfigDir: expand(env.CLAUDE_CONFIG_DIR || path.join(home, '.claude')),
   chatIdleMinutes: int(env.CW_CHAT_IDLE_MINUTES, 30),
+  childSessions: env.CW_CHILD_SESSIONS !== '0',
+  internalToken: crypto.randomBytes(24).toString('hex'),
+  internalUrl: '',
   trustProxy: env.CW_TRUST_PROXY === '1',
 };
 

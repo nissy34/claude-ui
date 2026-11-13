@@ -1,4 +1,5 @@
-import React, { useMemo, useState } from 'react';
+import React, { useContext, useMemo, useState } from 'react';
+import { ChatCtx } from './ctx.js';
 import { diffLines } from 'diff';
 import { highlight, renderMarkdown } from './markdown.js';
 import { shortPath } from './model.js';
@@ -161,8 +162,22 @@ export function Todos({ todos }) {
   );
 }
 
+const FILE_TOOLS = { Read: 'file_path', Write: 'file_path', Edit: 'file_path', MultiEdit: 'file_path', NotebookEdit: 'notebook_path' };
+
+function childSessionId(result) {
+  try {
+    return JSON.parse(result?.text || '')?.session?.id || null;
+  } catch {
+    return null;
+  }
+}
+
 export default function ToolCard({ item, cwd, children }) {
   const { name, input, result } = item;
+  const ctx = useContext(ChatCtx);
+  const filePath = FILE_TOOLS[name] && input?.[FILE_TOOLS[name]];
+  const isSessionTool = /^mcp__sessions__(start_session|send_to_session|read_session)$/.test(name);
+  const linkedSession = isSessionTool ? childSessionId(result) || input?.id : null;
   const isEditLike = ['Edit', 'MultiEdit', 'Write', 'TodoWrite', 'ExitPlanMode'].includes(name);
   const [open, setOpen] = useState(isEditLike);
   const [showResult, setShowResult] = useState(false);
@@ -177,8 +192,21 @@ export default function ToolCard({ item, cwd, children }) {
     <div className={`tool ${status}`}>
       <button className="tool-head" onClick={() => setOpen((o) => !o)}>
         <span className="ticon">{ICONS[name] || '⚙'}</span>
-        <span className="tname">{name.replace(/^mcp__([^_]+)__/, '$1 · ')}</span>
-        <span className="tsum">{summary}</span>
+        <span className="tname">{isSessionTool ? { start_session: 'Started session', send_to_session: 'Messaged session', read_session: 'Checked session' }[name.split('__')[2]] : name.replace(/^mcp__([^_]+)__/, '$1 · ')}</span>
+        {filePath ? (
+          <span
+            className="tsum link"
+            title="Open file"
+            onClick={(e) => {
+              e.stopPropagation();
+              ctx.openFile(filePath);
+            }}
+          >
+            {summary}
+          </span>
+        ) : (
+          <span className="tsum">{isSessionTool ? input?.name || input?.prompt?.slice(0, 80) || input?.message?.slice(0, 80) || summary : summary}</span>
+        )}
         {stats && (
           <span className="tstats">
             {stats.add > 0 && <span className="add">+{stats.add}</span>}
@@ -208,6 +236,13 @@ export default function ToolCard({ item, cwd, children }) {
           ) : (
             <pre className={`code-sm result ${result.isError ? 'err' : ''}`}>{resultText}</pre>
           ))}
+        </div>
+      )}
+      {linkedSession && (
+        <div className="tool-body" style={{ borderTop: '1px solid var(--line)' }}>
+          <button className="btn small open-session" onClick={() => ctx.openSession(linkedSession)}>
+            Open session →
+          </button>
         </div>
       )}
       {children}

@@ -6,21 +6,35 @@ Sessions live on the server. Close the tab, open it on your phone, and the same 
 
 ## Features
 
-**Chat sessions** (the default) give you a Desktop-style chat:
+**Chat sessions** (the default) work like the Claude Code desktop app:
 
-- Streaming replies with Markdown and syntax-highlighted code (with copy buttons)
-- Tool calls as cards: shell commands and output, file reads, searches, and **diffs** for edits and new files
-- **Permission prompts** in the chat: Allow, Always allow (uses Claude's own suggested rule), or Deny with a note
-- Claude's **questions** (AskUserQuestion) as clickable options, and **plan approval** for plan mode
-- Live task list (TodoWrite) docked above the composer; sub-agent activity folded into its Task card
-- Composer with permission mode (Ask before edits, Accept edits, Plan, Bypass; Shift+Tab cycles), model picker, slash-command autocomplete, image paste/drag/attach, and a Stop button (Esc)
-- Context size and 5-hour usage shown under the composer
-- Resume any past Claude Code conversation for a folder from **History** (it reads Claude's own transcripts), or **Continue** the latest one
+- Light and dark themes (follows the system, or pick one), a project-grouped sidebar with search and archive, and a new-chat dialog (Ctrl/Cmd+K; Ctrl/Cmd+B hides the sidebar)
+- Streaming replies with Markdown and syntax-highlighted code, with copy buttons on code blocks and messages
+- Tool calls as cards: shell commands and output, file reads, searches, and **diffs** for edits and new files. Click a file name to open it in the preview pane
+- **Changes panel**: every uncommitted change in the session's folder (git diff, plus new files), per-file diffs, and file previews in tabs
+- **Permission prompts** in the chat: Allow, Always allow (Claude's own suggested rule), or Deny with a note. Claude's **questions** show as clickable options, and **plan approval** works in plan mode
+- **Edit an earlier message**: the conversation forks from that point and files Claude changed are restored (Claude Code file checkpoints)
+- **Child sessions**: ask Claude to "open another session for X" and it starts a parallel chat, nested under the parent in the sidebar. The parent can message it, wait for it and read its result, and you can open and talk to it directly
+- **Worktrees**: start a chat in an isolated git worktree on its own branch, from the new-chat dialog or a project's ⋯ menu
+- Composer with permission mode (Shift+Tab cycles), model, effort, `@` file mentions with autocomplete, slash-command autocomplete, image paste/drag/attach, and Stop (Esc)
+- Live task list (TodoWrite) docked above the composer. Sub-agent activity folds into its Task card
+- A terminal drawer in every chat (a shell in the same folder)
+- Session info: model, MCP servers and their status, context size, usage-limit meters and reset times
+- If Claude's login on the server expires, the chat shows a "Log in again" button that opens a terminal for `/login`
+- Resume any past Claude Code conversation for a folder from **Past conversations**, or **Continue** the latest one
 - Browser notifications when Claude finishes or needs approval while the tab is in the background
 
-**Terminal sessions** run the interactive `claude` TUI (or a plain shell) in a persistent pty, rendered with xterm.js, with a phone key bar (Esc, Tab, Shift+Tab, arrows, Ctrl, ^C, paste) and a compose box. Useful for `claude login`, `/config`, or anything the chat view doesn't cover.
+**Terminal sessions** run the interactive `claude` TUI (or a plain shell) in a persistent pty, rendered with xterm.js. They include a phone key bar (Esc, Tab, Shift+Tab, arrows, Ctrl, ^C, paste) and a compose box.
 
-**Everywhere:** password login, projects sidebar, live session list across devices, works as a home-screen app on iOS/Android.
+**Everywhere:** password login, a live session list across devices, and it works as a home-screen app on iOS and Android.
+
+### Not the same as the desktop app
+
+- Files live on the server. Attachments are images you paste or pick; you can't browse your phone's or laptop's disk from it.
+- No native OS integration (computer use, the Chrome extension, system notifications beyond the browser's, dictation).
+- claude.ai features outside Claude Code (projects, artifacts, connectors set up on claude.ai) aren't part of the CLI, so they aren't here.
+- Cloud sessions and teleport are not supported. Everything runs on your machine.
+- The look is inspired by the desktop app but uses its own icons and no Anthropic brand assets.
 
 ## How it works
 
@@ -126,6 +140,7 @@ All settings are environment variables; see [`.env.example`](.env.example).
 | `CW_CLAUDE_ARGS` | | Extra args for every `claude` process |
 | `CW_CHAT_IDLE_MINUTES` | `30` | Stop idle chat processes (they resume on the next message); `0` keeps them |
 | `CW_ALLOW_ANY_DIR` | `0` | `1` allows sessions outside the projects root |
+| `CW_CHILD_SESSIONS` | `1` | `0` turns off the built-in sessions tools (child sessions) |
 | `CW_TRUST_PROXY` | `0` | `1` behind a reverse proxy / Tailscale Serve |
 | `CW_COOKIE_SECURE` | auto | Force the `Secure` cookie flag on/off |
 | `CW_SESSION_DAYS` | `30` | Login lifetime |
@@ -150,7 +165,9 @@ Layout:
 
 ```
 server/index.js       HTTP API, auth, websocket routing, static files
-server/chat.js        chat sessions: claude stream-JSON process, events, permissions
+server/chat.js        chat sessions: claude stream-JSON process, events, permissions, edit/rewind
+server/mcp-sessions.js  stdio MCP server that gives each chat the child-session tools
+server/git.js         changes (git diff), file search and preview, worktrees
 server/sessions.js    session store + terminal (pty) sessions
 web/src/chat/         chat UI (messages, tool cards, diffs, permissions, composer)
 web/src/              app shell, sidebar, login, terminal view

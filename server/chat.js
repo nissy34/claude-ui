@@ -6,6 +6,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import readline from 'node:readline';
 import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { config, PRIVATE_ENV } from './config.js';
 import { resolveCommand } from './launch.js';
 
@@ -23,9 +24,17 @@ export function transcriptPath(cwd, id) {
   return path.join(claudeProjectDir(cwd), `${id}.jsonl`);
 }
 
-function childEnv() {
+const MCP_SCRIPT = path.join(path.dirname(fileURLToPath(import.meta.url)), 'mcp-sessions.js');
+
+function childEnv(sessionId) {
   const env = { ...process.env };
   for (const k of PRIVATE_ENV) delete env[k];
+  // Lets "edit an earlier message" restore files to that point.
+  env.CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING = '1';
+  // Used by the built-in sessions MCP server (child sessions).
+  env.CW_INTERNAL_URL = config.internalUrl;
+  env.CW_INTERNAL_TOKEN = config.internalToken;
+  env.CW_SESSION_ID = sessionId;
   return env;
 }
 
@@ -120,7 +129,7 @@ export class ChatSession {
   }
 
   toJSON() {
-    return { ...this.meta, commands: undefined, tools: undefined, status: this.running ? 'running' : 'idle', state: this.state, live: this.running, clients: this.clients.size };
+    return { ...this.meta, commands: undefined, tools: undefined, mcpServers: undefined, status: this.running ? 'running' : 'idle', state: this.state, live: this.running, clients: this.clients.size };
   }
 
   loadEvents() {
@@ -194,11 +203,24 @@ export class ChatSession {
       '--verbose',
       '--include-partial-messages',
       '--permission-prompt-tool', 'stdio',
+      '--replay-user-messages',
       ...config.claudeArgs,
     ];
+    if (config.childSessions) {
+      args.push('--mcp-config', JSON.stringify({ mcpServers: { sessions: { type: 'stdio', command: process.execPath, args: [MCP_SCRIPT] } } }));
+    }
     if (m.permissionMode) args.push('--permission-mode', m.permissionMode);
     if (m.model) args.push('--model', m.model);
-    if (m.claudeSessionId && fs.existsSync(transcriptPath(m.cwd, m.claudeSessionId))) {
+    if (m.effort) args.push('--effort', m.effort);
+    const fork = this.forkAt;
+    this.forkAt = undefined;
+    if (fork && fork.from && fs.existsSync(transcriptPath(m.cwd, fork.from))) {
+      args.push('--resume', fork.from, '--fork-session');
+      if (fork.at) args.push('--resume-session-at', fork.at);
+    } else if (fork) {
+      m.claudeSessionId = crypto.randomUUID();
+      args.push('--session-id', m.claudeSessionId);
+    } else if (m.claudeSessionId && fs.existsSync(transcriptPath(m.cwd, m.claudeSessionId))) {
       args.push('--resume', m.claudeSessionId);
     } else {
       m.claudeSessionId ||= crypto.randomUUID();
@@ -208,7 +230,7 @@ export class ChatSession {
     let proc;
     try {
       const cmd = resolveCommand(config.claudeBin, args);
-      proc = spawn(cmd.file, cmd.args, { cwd: m.cwd, env: childEnv(), stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+      proc = spawn(cmd.file, cmd.args, { cwd: m.cwd, env: childEnv(m.id), stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
     } catch (e) {
       this.record({ k: 'error', text: `Could not start ${config.claudeBin}: ${e.message}` });
       return;
@@ -296,6 +318,9 @@ export class ChatSession {
           m.permissionMode = msg.permissionMode || m.permissionMode;
           m.commands = msg.slash_commands || [];
           m.tools = msg.tools || [];
+          m.mcpServers = msg.mcp_servers || [];
+          m.cliVersion = msg.claude_code_version;
+          m.apiKeySource = msg.apiKeySource;
           this.broadcastState();
         } else if (msg.subtype === 'status') {
           this.broadcast({ t: 'status', status: msg.status });
@@ -319,7 +344,7 @@ export class ChatSession {
           const key = `${msgId}:${b.id || b.type}:${(b.text || b.thinking || '').length}`;
           if (this.seenBlocks.has(key)) continue;
           this.seenBlocks.add(key);
-          this.record({ k: 'block', msgId, block: b, parent: msg.parent_tool_use_id || null });
+          this.record({ k: 'block', msgId, block: b, parent: msg.parent_tool_use_id || null, uuid: msg.uuid });
         }
         const u = msg.message?.usage;
         if (u && !msg.parent_tool_use_id) {
@@ -329,10 +354,16 @@ export class ChatSession {
       }
       case 'user': {
         const c = msg.message?.content;
+        const isToolResult = Array.isArray(c) && c.some((x) => x.type === 'tool_result');
+        if (!isToolResult && msg.uuid && !msg.parent_tool_use_id) {
+          // Echo of a prompt we sent (--replay-user-messages): remember its id for edit/rewind.
+          this.record({ k: 'user_uuid', uuid: msg.uuid });
+          break;
+        }
         if (Array.isArray(c)) {
           for (const x of c) {
             if (x.type === 'tool_result') {
-              this.record({ k: 'tool_result', toolUseId: x.tool_use_id, text: clip(resultText(x.content)), isError: !!x.is_error, parent: msg.parent_tool_use_id || null });
+              this.record({ k: 'tool_result', toolUseId: x.tool_use_id, text: clip(resultText(x.content)), isError: !!x.is_error, parent: msg.parent_tool_use_id || null, uuid: msg.uuid });
             }
           }
         }
@@ -484,6 +515,70 @@ export class ChatSession {
     if (this.proc) await this.control({ subtype: 'set_model', model: model || 'default' }).catch((e) => this.record({ k: 'error', text: `Could not change model: ${e.message}` }));
     this.store.save();
     this.broadcastState();
+  }
+
+  async setEffort(effort) {
+    const ok = ['', 'low', 'medium', 'high', 'xhigh', 'max'];
+    if (!ok.includes(effort || '')) throw new Error('bad effort');
+    this.meta.effort = effort || null;
+    // Effort is a launch flag: restart the process when idle so the next message uses it.
+    if (this.proc && this.state === 'idle') await this.stopAndWait();
+    this.store.save();
+    this.broadcastState();
+  }
+
+  stopAndWait() {
+    return new Promise((resolve) => {
+      const p = this.proc;
+      if (!p) return resolve();
+      p.once('exit', () => setTimeout(resolve, 50));
+      this.stop();
+    });
+  }
+
+  /** Last assistant text since the last user message (for read_session). */
+  lastReply() {
+    let out = [];
+    for (let i = this.events.length - 1; i >= 0; i--) {
+      const e = this.events[i];
+      if (e.k === 'user') break;
+      if (e.k === 'block' && e.block.type === 'text' && !e.parent) out.unshift(e.block.text);
+    }
+    return out.join('\n\n');
+  }
+
+  /**
+   * Edit an earlier user message: restore files to before it (when checkpoints exist),
+   * fork the Claude conversation just before it, drop later history, and send the new text.
+   */
+  async editMessage({ index, text }) {
+    const ev = this.events[index];
+    if (!ev || ev.k !== 'user') throw new Error('That message can no longer be edited');
+    if (this.turns > 0) throw new Error('Wait for Claude to finish (or stop it) before editing');
+    // The prompt's own id arrives as a user_uuid event right after it.
+    let userUuid = null;
+    for (let i = index + 1; i < this.events.length && !userUuid; i++) {
+      if (this.events[i].k === 'user_uuid') userUuid = this.events[i].uuid;
+      if (this.events[i].k === 'user') break;
+    }
+    let prevUuid = null;
+    for (let i = index - 1; i >= 0 && !prevUuid; i--) if (this.events[i].uuid && !this.events[i].parent) prevUuid = this.events[i].uuid;
+
+    let restored = false;
+    if (userUuid) {
+      try {
+        this.ensureProcess();
+        const r = await this.control({ subtype: 'rewind_files', user_message_id: userUuid });
+        restored = r?.canRewind !== false;
+      } catch {}
+    }
+    await this.stopAndWait();
+    this.forkAt = { from: this.meta.claudeSessionId, at: prevUuid };
+    this.events = this.events.slice(0, index);
+    fs.writeFileSync(this.logFile, this.events.map((e) => JSON.stringify(e)).join('\n') + (this.events.length ? '\n' : ''));
+    this.record({ k: 'notice', text: restored ? 'Edited message: conversation and files rewound to this point' : 'Edited message: conversation rewound to this point' });
+    this.broadcast({ t: 'reload' });
+    this.send({ text });
   }
 
   stop() {

@@ -248,7 +248,7 @@ export default function TerminalView({ session, onMenu, onError, onDeleted }) {
 
   return (
     <div className="term-view">
-      <div className="topbar">
+      <div className="topbar bordered">
         <button className="icon-btn menu-btn" onClick={onMenu} aria-label="Menu">
           ☰
         </button>

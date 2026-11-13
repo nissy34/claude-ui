@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { api, wsUrl } from './api.js';
 import Login from './Login.jsx';
-import Sidebar from './Sidebar.jsx';
+import Sidebar, { NewChatDialog, HistoryDialog } from './Sidebar.jsx';
 import TerminalView from './TerminalView.jsx';
 import ChatView from './chat/ChatView.jsx';
 
@@ -16,22 +16,28 @@ export default function App() {
   const [projects, setProjects] = useState({ root: '', projects: [] });
   const [activeId, setActiveId] = useState(readHash);
   const [drawer, setDrawer] = useState(false);
+  const [collapsed, setCollapsed] = useState(() => {
+    try {
+      return localStorage.getItem('cw.sidebar') === 'hidden';
+    } catch {
+      return false;
+    }
+  });
+  const [dialog, setDialog] = useState(null); // {type:'new'} | {type:'history', path}
   const [toast, setToast] = useState('');
   const eventsRef = useRef(null);
 
   const showError = useCallback((e) => {
     if (e?.status === 401) return setAuthed(false);
     setToast(e?.message || String(e));
-    setTimeout(() => setToast(''), 4000);
+    setTimeout(() => setToast(''), 5000);
   }, []);
 
   useEffect(() => {
     api('/api/me').then((r) => setAuthed(r.authed)).catch(() => setAuthed(false));
   }, []);
 
-  const loadProjects = useCallback(() => {
-    api('/api/projects').then(setProjects).catch(showError);
-  }, [showError]);
+  const loadProjects = useCallback(() => api('/api/projects').then(setProjects).catch(showError), [showError]);
 
   // Live session list over a websocket, with reconnect.
   useEffect(() => {
@@ -50,16 +56,13 @@ export default function App() {
       };
       ws.onclose = () => {
         if (closed) return;
+        const again = () => {
+          timer = setTimeout(connect, retry);
+          retry = Math.min(retry * 2, 10000);
+        };
         api('/api/me')
-          .then((r) => {
-            if (!r.authed) return setAuthed(false);
-            timer = setTimeout(connect, retry);
-            retry = Math.min(retry * 2, 10000);
-          })
-          .catch(() => {
-            timer = setTimeout(connect, retry);
-            retry = Math.min(retry * 2, 10000);
-          });
+          .then((r) => (r.authed ? again() : setAuthed(false)))
+          .catch(again);
       };
     };
     connect();
@@ -91,84 +94,117 @@ export default function App() {
   }, []);
 
   const createSession = useCallback(
-    async (opts) => {
+    async (opts, { navigate = true } = {}) => {
       try {
         const { session } = await api('/api/sessions', { method: 'POST', body: opts });
         setSessions((list) => [session, ...list.filter((s) => s.id !== session.id)]);
-        select(session.id);
-        loadProjects();
+        if (navigate) select(session.id);
+        return session;
       } catch (e) {
         showError(e);
+        return null;
       }
     },
-    [select, showError, loadProjects]
+    [select, showError]
   );
+
+  const setSidebarHidden = (v) => {
+    setCollapsed(v);
+    try {
+      localStorage.setItem('cw.sidebar', v ? 'hidden' : 'shown');
+    } catch {}
+  };
+
+  // Ctrl/Cmd+K: new chat, Ctrl/Cmd+B: toggle sidebar.
+  useEffect(() => {
+    const onKey = (e) => {
+      if (!(e.metaKey || e.ctrlKey)) return;
+      if (e.key === 'k') {
+        e.preventDefault();
+        setDialog({ type: 'new' });
+      } else if (e.key === 'b') {
+        e.preventDefault();
+        setSidebarHidden(!collapsed);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [collapsed]);
 
   const active = sessions.find((s) => s.id === activeId) || null;
 
   useEffect(() => {
-    document.title = active ? `${active.attention ? '● ' : ''}${active.name} · Claude Web` : 'Claude Web';
-  }, [active]);
+    const waiting = sessions.filter((s) => s.state === 'waiting' || s.attention).length;
+    document.title = `${waiting ? `(${waiting}) ` : ''}${active ? active.name + ' · ' : ''}Claude Web`;
+  }, [active, sessions]);
 
   if (authed === null) return <div className="splash" />;
   if (!authed) return <Login onLogin={() => setAuthed(true)} />;
 
+  const openMenu = () => (window.matchMedia('(max-width: 860px)').matches ? setDrawer(true) : setSidebarHidden(false));
+  const common = { onMenu: openMenu, onError: showError, onDeleted: () => select(null) };
+
   return (
-    <div className={`app ${drawer ? 'drawer-open' : ''}`}>
+    <div className={`app ${drawer ? 'drawer-open' : ''} ${collapsed ? 'sidebar-collapsed' : ''}`}>
       <Sidebar
         sessions={sessions}
-        projects={projects}
         activeId={activeId}
         onSelect={select}
         onCreate={createSession}
-        onReloadProjects={loadProjects}
-        onError={showError}
+        onNewChat={() => setDialog({ type: 'new' })}
+        onHistory={(path) => setDialog({ type: 'history', path })}
         onLogout={async () => {
           await api('/api/logout', { method: 'POST' }).catch(() => {});
           setAuthed(false);
         }}
         onClose={() => setDrawer(false)}
+        onCollapse={() => setSidebarHidden(true)}
       />
       <div className="scrim" onClick={() => setDrawer(false)} />
       <main className="main">
         {active && active.kind === 'chat' ? (
-          <ChatView key={active.id} session={active} onMenu={() => setDrawer(true)} onError={showError} onDeleted={() => select(null)} />
+          <ChatView key={active.id} session={active} sessions={sessions} onSelect={select} onCreate={createSession} {...common} />
         ) : active ? (
-          <TerminalView
-            key={active.id}
-            session={active}
-            onMenu={() => setDrawer(true)}
-            onError={showError}
-            onDeleted={() => select(null)}
-          />
+          <TerminalView key={active.id} session={active} {...common} />
         ) : (
-          <Empty onMenu={() => setDrawer(true)} hasSessions={sessions.length > 0} missing={!!activeId && sessions.length > 0} />
+          <Empty onMenu={openMenu} onNew={() => setDialog({ type: 'new' })} missing={!!activeId && sessions.length > 0} />
         )}
       </main>
+      {dialog?.type === 'new' && (
+        <NewChatDialog
+          projects={projects}
+          onCreate={createSession}
+          onClose={() => setDialog(null)}
+          onReloadProjects={loadProjects}
+          onError={showError}
+          onHistory={(path) => setDialog({ type: 'history', path })}
+        />
+      )}
+      {dialog?.type === 'history' && <HistoryDialog path={dialog.path} onCreate={createSession} onClose={() => setDialog(null)} onError={showError} />}
       {toast && <div className="toast">{toast}</div>}
     </div>
   );
 }
 
-function Empty({ onMenu, hasSessions, missing }) {
+function greeting() {
+  const h = new Date().getHours();
+  return h < 5 ? 'Up late?' : h < 12 ? 'Good morning' : h < 18 ? 'Good afternoon' : 'Good evening';
+}
+
+function Empty({ onMenu, onNew, missing }) {
   return (
     <div className="empty">
       <div className="topbar">
         <button className="icon-btn menu-btn" onClick={onMenu} aria-label="Menu">
           ☰
         </button>
-        <div className="title">Claude Web</div>
       </div>
       <div className="empty-body">
-        <div className="logo">&gt;_</div>
-        <h2>{missing ? 'That session no longer exists' : 'No session selected'}</h2>
-        <p>
-          {hasSessions
-            ? 'Pick a session from the sidebar, or start a new one in a project.'
-            : 'Open a project in the sidebar and start a new chat. Claude keeps working on the server when you close this tab.'}
-        </p>
-        <button className="btn primary mobile-only" onClick={onMenu}>
-          Open projects
+        <span className="mark">&gt;_</span>
+        <h2>{missing ? 'That chat no longer exists' : greeting()}</h2>
+        <p>Start a chat in one of your projects. Claude keeps working on the server when you close this tab, and you can pick it up from any device.</p>
+        <button className="btn primary" onClick={onNew}>
+          New chat
         </button>
       </div>
     </div>

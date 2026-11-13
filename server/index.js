@@ -1,5 +1,6 @@
 import http from 'node:http';
 import os from 'node:os';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
@@ -17,6 +18,7 @@ import {
   loginSucceeded,
 } from './auth.js';
 import { store, claudeProjectDir } from './sessions.js';
+import { getChanges, searchFiles, readFileSafe, createWorktree } from './git.js';
 
 if (!config.password && !config.passwordHash) {
   console.error('Refusing to start: set CW_PASSWORD or CW_PASSWORD_HASH (see README).');
@@ -55,6 +57,87 @@ app.post('/api/logout', (req, res) => {
   res.json({ ok: true });
 });
 
+// ---------- internal API for the sessions MCP server (child sessions) ----------
+function isLoopback(req) {
+  const a = req.socket.remoteAddress || '';
+  // Loopback, or this machine calling its own listen address (e.g. a Tailscale IP).
+  return a === '127.0.0.1' || a === '::1' || a === '::ffff:127.0.0.1' || a === req.socket.localAddress;
+}
+app.use('/internal', (req, res, next) => {
+  const t = req.headers['x-cw-token'];
+  if (!isLoopback(req) || typeof t !== 'string' || t.length !== config.internalToken.length || !crypto.timingSafeEqual(Buffer.from(t), Buffer.from(config.internalToken))) {
+    return res.status(403).json({ error: 'forbidden' });
+  }
+  next();
+});
+
+function sessionSummary(s) {
+  const j = s.toJSON();
+  return { id: j.id, name: j.name, cwd: j.cwd, kind: j.kind, state: j.state || j.status, parentId: j.parentId || null, worktree: j.worktree || null };
+}
+
+app.post(
+  '/internal/sessions',
+  wrap(async (req, res) => {
+    const { parentId, prompt, name, cwd, worktree, permissionMode } = req.body || {};
+    if (!prompt || typeof prompt !== 'string') throw new Error('prompt is required');
+    const parent = store.get(parentId);
+    let dir = cwd ? resolveDir(cwd) : parent?.meta.project || parent?.meta.cwd;
+    if (!dir) throw new Error('cwd is required');
+    let wt = null;
+    if (worktree) {
+      wt = await createWorktree(dir, name || prompt.slice(0, 30));
+    }
+    const s = store.create({
+      cwd: wt ? wt.path : dir,
+      kind: 'chat',
+      name: name ? String(name).slice(0, 80) : undefined,
+      permissionMode: permissionMode || parent?.meta.permissionMode,
+      model: parent?.meta.model,
+    });
+    s.meta.parentId = parent ? parent.id : null;
+    s.meta.project = dir;
+    if (wt) s.meta.worktree = wt;
+    if (name) s.meta.customName = true;
+    s.send({ text: prompt });
+    store.save();
+    res.json({ session: sessionSummary(s), note: 'Started. It runs on its own; use read_session to check on it.' });
+  })
+);
+
+app.post(
+  '/internal/sessions/:id/send',
+  wrap(async (req, res) => {
+    const s = store.get(req.params.id);
+    if (!s || s.meta.kind !== 'chat') throw new Error('No such chat session');
+    s.send({ text: String(req.body?.message || '') });
+    res.json({ ok: true, session: sessionSummary(s) });
+  })
+);
+
+app.get(
+  '/internal/sessions/:id',
+  wrap(async (req, res) => {
+    const s = store.get(req.params.id);
+    if (!s || s.meta.kind !== 'chat') throw new Error('No such chat session');
+    if (req.query.wait === '1') {
+      const until = Date.now() + Math.min(Number(req.query.timeout) || 300, 1800) * 1000;
+      while (s.state !== 'idle' && Date.now() < until && store.get(s.id)) await new Promise((r) => setTimeout(r, 1000));
+    }
+    res.json({
+      session: sessionSummary(s),
+      waitingForPermission: s.pending.size > 0,
+      lastReply: s.lastReply(),
+    });
+  })
+);
+
+app.get('/internal/sessions', (req, res) => {
+  let list = [...store.sessions.values()];
+  if (req.query.parentId) list = list.filter((s) => s.meta.parentId === req.query.parentId);
+  res.json({ sessions: list.map(sessionSummary) });
+});
+
 app.get('/api/me', (req, res) => res.json({ authed: isAuthed(req) }));
 
 app.use('/api', (req, res, next) => {
@@ -82,13 +165,15 @@ function resolveDir(input) {
   return real;
 }
 
-const wrap = (fn) => async (req, res) => {
-  try {
-    await fn(req, res);
-  } catch (e) {
-    res.status(400).json({ error: e.message });
-  }
-};
+function wrap(fn) {
+  return async (req, res) => {
+    try {
+      await fn(req, res);
+    } catch (e) {
+      res.status(400).json({ error: e.message });
+    }
+  };
+}
 
 // ---------- info ----------
 app.get('/api/config', (req, res) => {
@@ -211,14 +296,26 @@ app.get('/api/sessions', (req, res) => res.json({ sessions: store.list() }));
 app.post(
   '/api/sessions',
   wrap(async (req, res) => {
-    const { cwd, kind, name, resume, model, permissionMode } = req.body || {};
-    const dir = resolveDir(cwd);
+    const { cwd, kind, name, resume, model, permissionMode, worktree, parentId } = req.body || {};
+    const project = resolveDir(cwd);
+    const wt = worktree ? await createWorktree(project, name || 'chat') : null;
+    const dir = wt ? wt.path : project;
     if (resume && resume !== 'continue' && !/^[0-9a-f-]{36}$/i.test(resume)) throw new Error('Bad resume id');
     const s = store.create({ cwd: dir, kind, name: name ? String(name).slice(0, 80) : undefined, resume, model, permissionMode });
     if (name) s.meta.customName = true;
+    s.meta.project = project;
+    if (wt) s.meta.worktree = wt;
+    if (parentId && store.get(parentId)) s.meta.parentId = parentId;
+    store.save();
     res.json({ session: s.toJSON() });
   })
 );
+
+function getSessionById(id) {
+  const s = store.get(id);
+  if (!s) throw new Error('No such session');
+  return s;
+}
 
 function getSession(req) {
   const s = store.get(req.params.id);
@@ -234,6 +331,7 @@ app.patch(
       s.meta.name = req.body.name.trim().slice(0, 80);
       s.meta.customName = true;
     }
+    if (typeof req.body?.archived === 'boolean') s.meta.archived = req.body.archived;
     store.save();
     res.json({ session: s.toJSON() });
   })
@@ -245,6 +343,29 @@ app.post(
     const s = getSession(req);
     if (!s.running) s.start();
     res.json({ session: s.toJSON() });
+  })
+);
+
+app.get(
+  '/api/sessions/:id/changes',
+  wrap(async (req, res) => {
+    res.json(await getChanges(getSession(req).meta.cwd));
+  })
+);
+
+app.get(
+  '/api/files',
+  wrap(async (req, res) => {
+    const s = getSessionById(req.query.session);
+    res.json({ files: await searchFiles(s.meta.cwd, String(req.query.q || '')) });
+  })
+);
+
+app.get(
+  '/api/file',
+  wrap(async (req, res) => {
+    const s = getSessionById(req.query.session);
+    res.json(readFileSafe(s.meta.cwd, String(req.query.path || '')));
   })
 );
 
@@ -376,6 +497,8 @@ function handleChat(ws, s) {
       else if (msg.t === 'mode') await s.setMode(msg.mode);
       else if (msg.t === 'model') await s.setModel(msg.model);
       else if (msg.t === 'stop') s.stop();
+      else if (msg.t === 'effort') await s.setEffort(msg.effort);
+      else if (msg.t === 'edit') await s.editMessage(msg);
     } catch (e) {
       ws.send(JSON.stringify({ t: 'error', error: e.message }));
     }
@@ -389,6 +512,8 @@ function handleChat(ws, s) {
 
 // ---------- lifecycle ----------
 server.listen(config.port, config.host, () => {
+  const h = ['0.0.0.0', '::', ''].includes(config.host) ? '127.0.0.1' : config.host.includes(':') ? `[${config.host}]` : config.host;
+  config.internalUrl = `http://${h}:${config.port}`;
   console.log(`claude-web listening on http://${config.host}:${config.port}`);
   console.log(`projects root: ${config.projectsRoot}`);
   console.log(`data dir:      ${config.dataDir}`);
