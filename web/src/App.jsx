@@ -7,6 +7,7 @@ import ChatView from './chat/ChatView.jsx';
 import Settings, { Shortcuts } from './Settings.jsx';
 import { newChatDefaults } from './prefs.js';
 import ArtifactsGallery from './ArtifactsGallery.jsx';
+import Scheduled from './Scheduled.jsx';
 
 function readHash() {
   const m = location.hash.match(/s=([0-9a-f-]{36})/i);
@@ -174,6 +175,7 @@ export default function App() {
         onSettings={() => (setDrawer(false), setDialog({ type: 'settings' }))}
         onCustomize={() => (setDrawer(false), setDialog({ type: 'settings', tab: 'plugins' }))}
         onArtifacts={() => (setDrawer(false), setDialog({ type: 'artifacts' }))}
+        onScheduled={() => (setDrawer(false), setDialog({ type: 'scheduled' }))}
         onError={showError}
         onLogout={async () => {
           await api('/api/logout', { method: 'POST' }).catch(() => {});
@@ -213,6 +215,18 @@ export default function App() {
             setDialog(null);
             location.hash = `s=${a.sessionId}&a=${encodeURIComponent(a.path)}`;
             setActiveId(a.sessionId);
+          }}
+        />
+      )}
+      {dialog?.type === 'scheduled' && (
+        <Scheduled
+          projects={projects}
+          defaultCwd={active?.project || active?.cwd}
+          onClose={() => setDialog(null)}
+          onError={showError}
+          onOpen={(id) => {
+            setDialog(null);
+            select(id);
           }}
         />
       )}

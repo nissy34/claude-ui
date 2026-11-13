@@ -52,6 +52,7 @@ export const config = {
   browser: env.CW_BROWSER !== '0',
   browserPath: env.CW_BROWSER_PATH || '',
   childSessions: env.CW_CHILD_SESSIONS !== '0',
+  schedules: env.CW_SCHEDULES !== '0',
   internalToken: crypto.randomBytes(24).toString('hex'),
   internalUrl: '',
   trustProxy: env.CW_TRUST_PROXY === '1',
