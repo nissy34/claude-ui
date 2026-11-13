@@ -78,13 +78,13 @@ app.use('/internal', (req, res, next) => {
 
 function sessionSummary(s) {
   const j = s.toJSON();
-  return { id: j.id, name: j.name, cwd: j.cwd, kind: j.kind, state: j.state || j.status, parentId: j.parentId || null, worktree: j.worktree || null };
+  return { id: j.id, name: j.name, cwd: j.cwd, kind: j.kind, state: j.state || j.status, parentId: j.parentId || null, worktree: j.worktree || null, model: j.model || 'default', effort: j.effort || 'default', permissionMode: j.permissionMode || 'default' };
 }
 
 app.post(
   '/internal/sessions',
   wrap(async (req, res) => {
-    const { parentId, prompt, name, cwd, worktree, permissionMode } = req.body || {};
+    const { parentId, prompt, name, cwd, worktree, permissionMode, model, effort } = req.body || {};
     if (!prompt || typeof prompt !== 'string') throw new Error('prompt is required');
     const parent = store.get(parentId);
     let dir = cwd ? resolveDir(cwd) : parent?.meta.project || parent?.meta.cwd;
@@ -98,7 +98,8 @@ app.post(
       kind: 'chat',
       name: name ? String(name).slice(0, 80) : undefined,
       permissionMode: permissionMode || parent?.meta.permissionMode,
-      model: parent?.meta.model,
+      model: model && model !== 'default' ? model : model === 'default' ? undefined : parent?.meta.model,
+      effort: effort || parent?.meta.effort,
     });
     s.meta.parentId = parent ? parent.id : null;
     s.meta.project = dir;
@@ -115,8 +116,23 @@ app.post(
   wrap(async (req, res) => {
     const s = store.get(req.params.id);
     if (!s || s.meta.kind !== 'chat') throw new Error('No such chat session');
-    s.send({ text: String(req.body?.message || '') });
+    const text = String(req.body?.message || '');
+    if (await s.runLocalCommand(text)) return res.json({ ok: true, ranCommand: true, session: sessionSummary(s) });
+    s.send({ text });
     res.json({ ok: true, session: sessionSummary(s) });
+  })
+);
+
+app.post(
+  '/internal/sessions/:id/options',
+  wrap(async (req, res) => {
+    const s = store.get(req.params.id);
+    if (!s || s.meta.kind !== 'chat') throw new Error('No such chat session');
+    const { model, effort, permissionMode } = req.body || {};
+    if (model == null && effort == null && permissionMode == null) throw new Error('Give model, effort or permission_mode');
+    const done = await s.setOptions({ model, effort, permissionMode });
+    s.record({ k: 'notice', text: `Set ${done.join(', ')} (by the parent chat)` });
+    res.json({ ok: true, changed: done, session: sessionSummary(s) });
   })
 );
 
@@ -664,7 +680,10 @@ function handleChat(ws, s) {
       return;
     }
     try {
-      if (msg.t === 'send') s.send(msg);
+      if (msg.t === 'send') {
+        if (!(msg.images?.length) && (await s.runLocalCommand(msg.text))) return;
+        s.send(msg);
+      }
       else if (msg.t === 'perm') s.answerPermission(msg);
       else if (msg.t === 'interrupt') await s.interrupt();
       else if (msg.t === 'mode') await s.setMode(msg.mode);
