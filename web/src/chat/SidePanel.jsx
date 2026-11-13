@@ -4,24 +4,74 @@ import { highlight } from './markdown.js';
 import ArtifactView from './ArtifactView.jsx';
 import BrowserView from './BrowserView.jsx';
 
-function UnifiedDiff({ diff, path }) {
+function UnifiedDiff({ diff, path, comments, onComment }) {
+  const [draft, setDraft] = useState(null); // { i, line, text }
   const rows = [];
+  let oldN = 0;
+  let newN = 0;
   for (const line of diff.split('\n')) {
     if (/^(diff --git|index |--- |\+\+\+ |new file|deleted file|similarity|rename |old mode|new mode)/.test(line)) continue;
-    if (line.startsWith('@@')) rows.push(['hunk', line.replace(/^(@@[^@]*@@).*/, '$1')]);
-    else if (line.startsWith('+')) rows.push(['add', line.slice(1)]);
-    else if (line.startsWith('-')) rows.push(['del', line.slice(1)]);
+    if (line.startsWith('@@')) {
+      const m = /@@ -(\d+)(?:,\d+)? \+(\d+)/.exec(line);
+      if (m) (oldN = +m[1]), (newN = +m[2]);
+      rows.push(['hunk', line.replace(/^(@@[^@]*@@).*/, '$1')]);
+    } else if (line.startsWith('+')) rows.push(['add', line.slice(1), newN++]);
+    else if (line.startsWith('-')) rows.push(['del', line.slice(1), oldN++, true]);
     else if (line.startsWith('\\')) continue;
-    else rows.push(['ctx', line.slice(1)]);
+    else rows.push(['ctx', line.slice(1), (oldN++, newN++)]);
   }
   const shown = rows.slice(0, 3000);
+  const save = () => {
+    if (draft?.text.trim()) onComment({ path, line: draft.line, old: draft.old, code: draft.code, text: draft.text.trim() });
+    setDraft(null);
+  };
   return (
     <div className="diff">
-      {shown.map(([k, l], i) => (
-        <div key={i} className={`dl ${k}`}>
-          <span className="dm">{k === 'add' ? '+' : k === 'del' ? '−' : ''}</span>
-          {k === 'hunk' ? <span>{l}</span> : <span dangerouslySetInnerHTML={{ __html: highlight(l, path) || ' ' }} />}
-        </div>
+      {shown.map(([k, l, n, old], i) => (
+        <React.Fragment key={i}>
+          <div className={`dl ${k}`}>
+            {onComment && k !== 'hunk' && (
+              <button className="dl-add" title="Comment on this line" onClick={() => setDraft({ i, line: n, old: !!old, code: l, text: '' })}>
+                +
+              </button>
+            )}
+            <span className="dm">{k === 'add' ? '+' : k === 'del' ? '−' : ''}</span>
+            {k === 'hunk' ? <span>{l}</span> : <span dangerouslySetInnerHTML={{ __html: highlight(l, path) || ' ' }} />}
+          </div>
+          {comments
+            ?.filter((c) => c.path === path && c.line === n && c.old === !!old && k !== 'hunk' && c.code === l)
+            .map((c) => (
+              <div key={c.id} className="dl-comment">
+                <span>{c.text}</span>
+                <button className="icon-btn" title="Remove comment" onClick={() => onComment({ remove: c.id })}>
+                  ✕
+                </button>
+              </div>
+            ))}
+          {draft?.i === i && (
+            <div className="dl-draft">
+              <textarea
+                autoFocus
+                rows={2}
+                placeholder="Comment for Claude (Ctrl/⌘ Enter to add)"
+                value={draft.text}
+                onChange={(e) => setDraft({ ...draft, text: e.target.value })}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) (e.preventDefault(), save());
+                  if (e.key === 'Escape') setDraft(null);
+                }}
+              />
+              <div className="row">
+                <button className="btn small ghost" onClick={() => setDraft(null)}>
+                  Cancel
+                </button>
+                <button className="btn small primary" disabled={!draft.text.trim()} onClick={save}>
+                  Add comment
+                </button>
+              </div>
+            </div>
+          )}
+        </React.Fragment>
       ))}
       {rows.length > shown.length && <div className="dl gap">… {rows.length - shown.length} more lines</div>}
     </div>
@@ -130,10 +180,22 @@ function PrCard({ sessionId, refreshKey, onPrompt, busy, onError }) {
   );
 }
 
+// Line comments on the diff, sent to Claude as one review (like Desktop's diff comments).
+function reviewPrompt(comments) {
+  const body = comments.map((c) => `- ${c.path}:${c.line}${c.old ? ' (removed line)' : ''}\n  > ${c.code.trim().slice(0, 200)}\n  ${c.text.replace(/\n/g, '\n  ')}`).join('\n');
+  return `Please address my review comments on the current changes:\n\n${body}`;
+}
+
 function Changes({ sessionId, refreshKey, onOpenFile, onPrompt, busy }) {
   const [data, setData] = useState(null);
   const [open, setOpen] = useState({});
   const [loading, setLoading] = useState(false);
+  const [comments, setComments] = useState([]);
+  const onComment = (c) => setComments((list) => (c.remove ? list.filter((x) => x.id !== c.remove) : [...list, { ...c, id: Math.random().toString(36).slice(2) }]));
+  const sendReview = () => {
+    onPrompt(reviewPrompt(comments));
+    setComments([]);
+  };
   const load = () => {
     setLoading(true);
     api(`/api/sessions/${sessionId}/changes`)
@@ -179,6 +241,20 @@ function Changes({ sessionId, refreshKey, onOpenFile, onPrompt, busy }) {
           </button>
         </div>
       )}
+      {comments.length > 0 && (
+        <div className="review-bar">
+          <span>
+            {comments.length} comment{comments.length === 1 ? '' : 's'}
+          </span>
+          <span style={{ flex: 1 }} />
+          <button className="btn small ghost" onClick={() => setComments([])}>
+            Discard
+          </button>
+          <button className="btn small primary" disabled={busy || !onPrompt} onClick={sendReview} title="Ctrl/⌘ Enter">
+            Send to Claude
+          </button>
+        </div>
+      )}
       {data.files.length === 0 && <div className="panel-empty">No uncommitted changes.</div>}
       {data.files.map((f) => (
         <div key={f.path} className="change-file">
@@ -205,7 +281,7 @@ function Changes({ sessionId, refreshKey, onOpenFile, onPrompt, busy }) {
               </span>
             )}
           </button>
-          {open[f.path] && <UnifiedDiff diff={f.diff} path={f.path} />}
+          {open[f.path] && <UnifiedDiff diff={f.diff} path={f.path} comments={comments} onComment={onPrompt ? onComment : null} />}
         </div>
       ))}
     </>

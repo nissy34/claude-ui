@@ -690,3 +690,42 @@ kbd { display: inline-block; font: 11.5px var(--mono); background: var(--panel-2
 .pr-meta { font-size: 12px; }
 .pr-meta:empty { display: none; }
 .pr-card .git-actions { padding: 0; margin: 0; border: 0; }
+/* Scheduled tasks */
+.sched-list { display: flex; flex-direction: column; gap: 8px; }
+.sched-item { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; display: grid; grid-template-columns: 1fr auto; gap: 6px 10px; align-items: center; }
+.sched-item.paused { opacity: .7; }
+.sched-main { cursor: pointer; min-width: 0; }
+.sched-name { font-weight: 600; display: flex; gap: 8px; align-items: center; }
+.sched-meta { font-size: 12.5px; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sched-btns { display: flex; gap: 6px; align-items: center; }
+.sched-detail { grid-column: 1 / -1; border-top: 1px solid var(--line); padding-top: 8px; }
+.sched-prompt { margin: 0; white-space: pre-wrap; font: 12.5px/1.5 var(--mono); background: var(--code-bg); border-radius: 7px; padding: 8px 10px; max-height: 200px; overflow: auto; }
+.sched-run { display: flex; gap: 10px; font-size: 13px; padding: 3px 0; align-items: center; }
+.sched-form { display: flex; flex-direction: column; gap: 12px; }
+.sched-form label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--text-2); flex: 1; min-width: 140px; }
+.sched-form input:not([type=checkbox]), .sched-form textarea, .sched-form select { font: inherit; font-size: 14px; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 7px; padding: 7px 9px; }
+.sched-form textarea { resize: vertical; }
+.sched-row { display: flex; gap: 10px; flex-wrap: wrap; }
+.sched-form label.check-row { flex-direction: row; align-items: center; gap: 8px; }
+.sched-note { font-size: 12.5px; }
+.sched-actions { display: flex; gap: 8px; justify-content: flex-end; }
+@media (max-width: 640px) { .sched-item { grid-template-columns: 1fr; } }
+/* Diff line comments */
+.dl { position: relative; }
+.dl-add { position: absolute; left: 2px; top: 1px; width: 17px; height: 17px; border-radius: 4px; border: 0; background: var(--accent); color: #fff; font: 600 12px/17px var(--sans, inherit); padding: 0; cursor: pointer; opacity: 0; }
+.dl:hover .dl-add, .dl-add:focus { opacity: 1; }
+@media (pointer: coarse) { .dl-add { opacity: .55; } }
+.dl-comment, .dl-draft { position: sticky; left: 0; margin: 4px 8px 4px 22px; max-width: min(520px, calc(100% - 30px)); font: 13px/1.45 var(--sans, inherit); white-space: pre-wrap; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 7px 9px; }
+.dl-comment { display: flex; gap: 8px; align-items: flex-start; border-left: 3px solid var(--accent); }
+.dl-comment span { flex: 1; }
+.dl-draft textarea { width: 100%; resize: vertical; font: inherit; background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; }
+.dl-draft .row { display: flex; gap: 6px; justify-content: flex-end; margin-top: 6px; }
+.review-bar { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; gap: 8px; margin: 6px 0; padding: 8px 10px; background: var(--accent-soft, var(--panel-2)); border: 1px solid var(--line); border-radius: 9px; font-size: 13px; }
+/* ! shell commands */
+.shell-run { border: 1px solid var(--line); border-radius: 9px; overflow: hidden; background: var(--code-bg); }
+.shell-cmd { font: 12.5px/1.5 var(--mono); padding: 6px 10px; display: flex; gap: 6px; align-items: center; border-bottom: 1px solid var(--line); }
+.shell-code { margin-left: auto; color: var(--red); font-size: 11.5px; }
+.shell-run pre { margin: 0; padding: 8px 10px; font: 12px/1.5 var(--mono); white-space: pre-wrap; max-height: 320px; overflow: auto; }
+.shell-note { font-size: 11.5px; padding: 4px 10px 6px; }
+.shell-hint { font-size: 12px; color: var(--muted); padding: 6px 12px 0; }
+.pop button kbd { margin-left: auto; }
