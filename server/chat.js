@@ -33,8 +33,14 @@ const MCP_BROWSER = path.join(path.dirname(fileURLToPath(import.meta.url)), 'mcp
 
 /** How a message from another session is introduced to Claude. */
 function fromLabel(f) {
-  const what = f.kind === 'question' ? 'Question' : f.kind === 'update' ? 'Update' : 'Message';
-  return `[${what} from ${f.role} session "${f.name}" (session id ${f.id})${f.kind === 'question' ? ' - it is waiting for your answer; reply with send_to_session' : ''}]`;
+  const what = f.kind === 'question' ? 'Question' : f.kind === 'reply' ? 'Reply' : 'Message';
+  const tail =
+    f.kind === 'question'
+      ? ` - it is blocked waiting for your reply; answer with send_to_session to session id ${f.id}`
+      : f.kind === 'reply'
+        ? ' - a late reply to a question you asked earlier'
+        : '';
+  return `[${what} from ${f.role} session "${f.name}" (session id ${f.id})${tail}]`;
 }
 
 function childEnv(sessionId) {
@@ -102,8 +108,8 @@ export function eventsFromTranscript(file) {
         if (text && !text.startsWith('<')) {
           let t = text.replace(/\n\n<mentioned_chats>[\s\S]*<\/mentioned_chats>$/, '');
           let from;
-          const fm = /^\[(Question|Update|Message) from (\w+) session "(.*?)" \(session id ([\w-]+)\)[^\]\n]*\]\n\n/.exec(t);
-          if (fm) (from = { kind: fm[1] === 'Question' ? 'question' : fm[1] === 'Update' ? 'update' : undefined, role: fm[2], name: fm[3], id: fm[4] }), (t = t.slice(fm[0].length));
+          const fm = /^\[(Question|Reply|Message) from (\w+) session "(.*?)" \(session id ([\w-]+)\)[^\]\n]*\]\n\n/.exec(t);
+          if (fm) (from = { kind: fm[1] === 'Message' ? undefined : fm[1].toLowerCase(), role: fm[2], name: fm[3], id: fm[4] }), (t = t.slice(fm[0].length));
           events.push({ k: 'user', text: t, ts, ...(from ? { from } : {}) });
         }
       }
@@ -150,7 +156,7 @@ export class ChatSession {
   }
 
   toJSON() {
-    return { ...this.meta, commands: undefined, commandInfo: undefined, models: undefined, tools: undefined, mcpServers: undefined, status: this.running ? 'running' : 'idle', state: this.state, live: this.running, clients: this.clients.size };
+    return { ...this.meta, commands: undefined, commandInfo: undefined, models: undefined, tools: undefined, mcpServers: undefined, inbox: undefined, status: this.running ? 'running' : 'idle', state: this.state, live: this.running, clients: this.clients.size };
   }
 
   loadEvents() {
@@ -204,7 +210,7 @@ export class ChatSession {
   }
 
   broadcastState() {
-    this.broadcast({ t: 'state', state: this.state, live: this.running, meta: this.meta, turns: this.turns, inbox: this.inboxSummary() });
+    this.broadcast({ t: 'state', state: this.state, live: this.running, meta: this.meta, turns: this.turns, inbox: this.inboxSummary(), waitingOn: this.waitingSummary() });
     this.store.changed();
   }
 
@@ -213,8 +219,21 @@ export class ChatSession {
     for (const ws of this.clients) if (ws.readyState === 1) ws.send(s);
   }
 
+  // Messages from other sessions waiting for this chat's current turn to end. Kept in meta so a
+  // server restart doesn't lose them.
+  get inbox() {
+    return (this.meta.inbox ||= []);
+  }
+
   inboxSummary() {
-    return (this.inbox || []).map((b) => ({ name: b.from?.name || 'another chat', role: b.from?.role, kind: b.from?.kind, preview: b.text.slice(0, 140) }));
+    return this.inbox.map((b) => ({ name: b.from?.name || 'another chat', role: b.from?.role, kind: b.from?.kind, preview: b.text.slice(0, 200), ts: b.ts }));
+  }
+
+  waitingSummary() {
+    const w = this.waiting;
+    if (!w) return null;
+    const t = this.store.get(w.to);
+    return { id: w.to, name: t?.meta.name || 'another chat', since: w.since };
   }
 
   snapshot() {
@@ -225,6 +244,7 @@ export class ChatSession {
       live: this.running,
       turns: this.turns,
       inbox: this.inboxSummary(),
+      waitingOn: this.waitingSummary(),
       events: this.events.slice(-MAX_EVENTS_SENT),
       truncated: Math.max(0, this.events.length - MAX_EVENTS_SENT),
       pending: [...this.pending.values()],
@@ -249,8 +269,12 @@ export class ChatSession {
     if (browserAvailable()) builtin.browser = { type: 'stdio', command: process.execPath, args: [MCP_BROWSER] };
     if (Object.keys(builtin).length) args.push('--mcp-config', JSON.stringify({ mcpServers: builtin }));
     if (builtin.sessions) args.push('--append-system-prompt', this.sessionsPrompt());
-    // Looking at the page never needs a prompt; navigating, clicking and typing still ask.
-    if (builtin.browser) args.push('--allowedTools', ['snapshot', 'screenshot', 'console', 'scroll', 'wait_for', 'back', 'reload', 'resize'].map((t) => `mcp__browser__${t}`).join(','));
+    // Talking to other chats and looking at the browser page never need a prompt; starting
+    // sessions, changing their options, and navigating, clicking and typing still ask.
+    const allowed = [];
+    if (builtin.sessions) allowed.push(...['send_to_session', 'read_session', 'list_sessions'].map((t) => `mcp__sessions__${t}`));
+    if (builtin.browser) allowed.push(...['snapshot', 'screenshot', 'console', 'scroll', 'wait_for', 'back', 'reload', 'resize'].map((t) => `mcp__browser__${t}`));
+    if (allowed.length) args.push('--allowedTools', allowed.join(','));
     // 'default' is the CLI's normal ask-first mode; newer CLIs call it 'manual', so just omit the flag.
     if (m.permissionMode && m.permissionMode !== 'default') args.push('--permission-mode', m.permissionMode);
     if (m.model) args.push('--model', m.model);
@@ -322,6 +346,7 @@ export class ChatSession {
       this.proc = null;
       m.pid = null;
       const hadWork = this.turns > 0 || this.pending.size > 0;
+      this.cancelWait('Claude stopped');
       this.turns = 0;
       for (const id of this.pending.keys()) this.record({ k: 'perm_done', reqId: id, behavior: 'cancelled' });
       this.pending.clear();
@@ -434,7 +459,8 @@ export class ChatSession {
         this.turns = Math.max(0, this.turns - 1);
         // Effort changed mid-turn: restart once idle so the next message launches with it.
         // Then deliver messages other sessions sent while this turn ran.
-        if (this.turns === 0 && (this.effortPending || this.inbox?.length)) {
+        if (this.turns === 0) this.cancelWait('its turn ended');
+        if (this.turns === 0 && (this.effortPending || this.inbox.length)) {
           const restart = this.effortPending;
           this.effortPending = false;
           setTimeout(async () => {
@@ -525,9 +551,13 @@ export class ChatSession {
     const m = this.meta;
     const parent = m.parentId && this.store.get(m.parentId);
     let t =
-      'This chat runs in a web UI that can run several Claude sessions side by side. With the sessions tools you can start child sessions for parallel work (start_session), message them (send_to_session), check on them (read_session) and change their model, effort or mode (set_session_options). Children can write to you: a [Question from child session ...] means the child stopped and is waiting, so answer it with send_to_session to that session id; an [Update from child session ...] is progress or a final result and needs no reply unless you want to redirect the child. Messages that arrive while you are busy are queued and delivered together after your current turn.';
+      `This chat (session id ${m.id}) runs in a web UI that runs several Claude sessions side by side. With the sessions tools you can start child sessions for parallel work (start_session), check on them (read_session), change their model, effort or mode (set_session_options), and talk to any session with send_to_session.\n\n` +
+      'send_to_session is one messaging tool for every direction (parent to child, child to parent, any chat to any chat). The other side sees who sent it, with your session id, so it can reply to you the same way. Two ways to use it:\n' +
+      '- Plain message (default): non-blocking. Use it for instructions, progress updates on long tasks (at real milestones, not every step), things the other side should know early, and final results. Keep working after sending.\n' +
+      '- wait_for_reply=true: a blocking question. The tool call waits until that session answers with send_to_session to you, and returns the answer, so you carry on in the same turn. Use it when you are blocked, need a decision, or need information only that session or the user has. Ask one clear, self-contained question. Do not ask about things you can find out yourself.\n\n' +
+      'Incoming messages start with a label like [Message from child session "name" (session id ...)]. A [Question from ...] means that session is blocked until you reply, so answer it with send_to_session to its session id before going on with other long work. Messages that arrive while you are busy are queued and delivered together, in order, when your current turn ends. Child results arrive as messages, so you do not need to poll children with read_session.';
     if (parent)
-      t += `\n\nYou are a child session. Your parent is the chat "${parent.meta.name}" (session id ${parent.id}), which started you and may be orchestrating other sessions. Two ways to reach it:\n- message_parent: a non-blocking note. Use it for progress updates on long tasks (at real milestones, not every step), for things the parent should know early, and to report your final result when you finish. Keep working after sending.\n- ask_parent: a question when you are blocked, need a decision, or need information only the parent or the user has. Ask one clear, self-contained question, then end your turn; the answer arrives as your next message (it starts with [Message from parent session ...]). Don't ask about things you can find out yourself.`;
+      t += `\n\nYou are a child session. Your parent is the chat "${parent.meta.name}" (session id ${parent.id}). It started you and may be orchestrating other sessions; it is not the user, though it may pass on the user's wishes. Reach it with send_to_session and id "parent". When you finish the task you were given, send the parent your result (a concise summary plus where any files are). On a long task, send an update at real milestones. If you are stuck or need a decision, ask with wait_for_reply=true instead of guessing.`;
     return t;
   }
 
@@ -538,31 +568,72 @@ export class ChatSession {
    */
   deliver({ text, from }) {
     if (this.turns > 0 || this.pending.size) {
-      (this.inbox ||= []).push({ text, from, ts: Date.now() });
+      this.inbox.push({ text, from, ts: Date.now() });
+      this.store.save();
       this.broadcastState();
       return { queued: this.inbox.length };
     }
-    this.send({ text, from });
-    return { queued: 0 };
+    if (this.send({ text, from })) return { queued: 0 };
+    // Couldn't start a turn (e.g. the conversation is open in the terminal): keep it for later.
+    this.inbox.push({ text, from, ts: Date.now() });
+    this.store.save();
+    this.broadcastState();
+    return { queued: this.inbox.length, held: true };
   }
 
   flushInbox() {
-    if (!this.inbox?.length || this.turns > 0 || this.pending.size) return;
-    const batch = this.inbox;
-    this.inbox = [];
-    if (batch.length === 1) this.send(batch[0]);
-    else this.send({ text: batch.map((b) => b.text).join('\n\n'), batch });
+    if (!this.inbox.length || this.turns > 0 || this.pending.size) return;
+    const batch = this.meta.inbox;
+    this.meta.inbox = [];
+    const ok = batch.length === 1 ? this.send(batch[0]) : this.send({ text: batch.map((b) => b.text).join('\n\n'), batch });
+    if (!ok) this.meta.inbox = [...batch, ...this.meta.inbox];
+    this.store.save();
+    this.broadcastState();
+  }
+
+  /**
+   * This chat asked `to` a question (send_to_session with wait_for_reply) and its tool call is
+   * blocked until `to` replies with send_to_session, the wait times out, or the turn ends.
+   */
+  waitForReply(to, timeoutMs) {
+    this.cancelWait('it asked something else');
+    return new Promise((resolve) => {
+      const w = { to, since: Date.now(), resolve };
+      w.timer = setTimeout(() => this.settleWait(w, { answered: false, reason: 'timeout' }), timeoutMs);
+      w.timer.unref?.();
+      this.waiting = w;
+      this.broadcastState();
+    });
+  }
+
+  settleWait(w, result) {
+    if (this.waiting !== w) return false;
+    this.waiting = null;
+    clearTimeout(w.timer);
+    w.resolve(result);
+    this.broadcastState();
+    return true;
+  }
+
+  /** A message from `fromId`: if this chat is blocked waiting on exactly that session, it is the reply. */
+  takeReply(fromId, text, expectsReply = false) {
+    const w = this.waiting;
+    return !!(w && w.to === fromId && this.settleWait(w, { answered: true, reply: text, expectsReply }));
+  }
+
+  cancelWait(reason) {
+    if (this.waiting) this.settleWait(this.waiting, { answered: false, reason });
   }
 
   send({ text, images, refs, from, batch }) {
     text = typeof text === 'string' ? text : '';
     const imgs = Array.isArray(images) ? images.filter((i) => i && /^image\/(png|jpeg|gif|webp)$/.test(i.media_type) && typeof i.data === 'string').slice(0, 10) : [];
-    if (!text.trim() && !imgs.length) return;
+    if (!text.trim() && !imgs.length) return false;
     const m = this.meta;
     const tui = m.tuiId && this.store.get(m.tuiId);
     if (tui && tui.running) {
       this.record({ k: 'error', text: 'This conversation is open in the terminal. Use "Back to chat" there first, so the two don\'t write to it at once.' }, { persist: false });
-      return;
+      return false;
     }
     if (!m.customName && !m.namedFromPrompt && text.trim()) {
       m.name = text.trim().split('\n')[0].slice(0, 60);
@@ -570,7 +641,7 @@ export class ChatSession {
     }
     m.attention = false;
     this.ensureProcess();
-    if (!this.proc) return;
+    if (!this.proc) return false;
     // @-mentioned chats: Claude gets each one's conversation as context (the log shows only your text).
     let prompt = text;
     const chats = (Array.isArray(refs) ? refs : [])
@@ -604,6 +675,7 @@ export class ChatSession {
     clearTimeout(this.idleTimer);
     this.store.save();
     this.broadcastState();
+    return true;
   }
 
   answerPermission({ reqId, behavior, updatedInput, message, always }) {
@@ -628,6 +700,7 @@ export class ChatSession {
   async interrupt() {
     if (!this.proc || this.turns === 0) return;
     this.interrupted = true;
+    this.cancelWait('interrupted by the user');
     // Deny anything waiting first, then ask Claude to stop the turn.
     for (const id of [...this.pending.keys()]) this.answerPermission({ reqId: id, behavior: 'deny', message: 'Interrupted by user' });
     try {

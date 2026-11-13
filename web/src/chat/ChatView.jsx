@@ -53,7 +53,10 @@ function splitAttachments(text) {
   return [text.slice(0, m.index), m[1].trim().split('\n').map((l) => l.slice(2))];
 }
 
-function UserMessage({ item, canEdit, onEdit }) {
+const ROLE_NAME = { child: 'child chat', parent: 'parent chat' };
+const KIND_NAME = { question: 'Question from', reply: 'Reply from' };
+
+function UserMessage({ item, canEdit, onEdit, onOpen }) {
   const [body, attached] = splitAttachments(item.text);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(item.text);
@@ -88,7 +91,12 @@ function UserMessage({ item, canEdit, onEdit }) {
     <div className={`msg user ${item.from ? 'from-session' : ''}`}>
       {item.from && (
         <div className="from-label">
-          {item.from.kind === 'question' ? 'Question from' : item.from.kind === 'update' ? 'Update from' : 'From'} {item.from.role === 'child' ? 'child chat' : item.from.role === 'parent' ? 'parent chat' : 'chat'} <b>{item.from.name}</b>
+          {KIND_NAME[item.from.kind] || 'From'} {ROLE_NAME[item.from.role] || 'chat'}{' '}
+          <button className="linklike" onClick={() => onOpen?.(item.from.id)} title="Open that chat">
+            {item.from.name}
+          </button>
+          {item.from.kind === 'question' && <span className="from-hint"> · it waited for a reply</span>}
+          {item.from.kind === 'reply' && <span className="from-hint"> · answered the question Claude was waiting on</span>}
         </div>
       )}
       <div className="bubble">
@@ -236,6 +244,8 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
   const [info, setInfo] = useState(false);
   const [terminal, setTerminal] = useState(false);
   const [inbox, setInbox] = useState([]);
+  const [waitingOn, setWaitingOn] = useState(null);
+  const [inboxOpen, setInboxOpen] = useState(false);
   const wsRef = useRef(null);
   const listRef = useRef(null);
   const deltaOrder = useRef(0);
@@ -270,6 +280,7 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
           setState(m.state);
           setTurns(m.turns || 0);
           setInbox(m.inbox || []);
+          setWaitingOn(m.waitingOn || null);
           setDeltas({});
           setConn('open');
           retry = 500;
@@ -304,6 +315,7 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
           setState(m.state);
           setTurns(m.turns || 0);
           setInbox(m.inbox || []);
+          setWaitingOn(m.waitingOn || null);
           setMeta({ ...m.meta, live: m.live });
         } else if (m.t === 'status') setStatus(m.status);
         else if (m.t === 'reload') ws.close(4000, 'reload');
@@ -413,8 +425,9 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
       },
       openBrowser: () => openPanel('browser'),
       openSession: (id) => onSelect(id),
+      parentId: meta.parentId || null,
     }),
-    [meta.cwd, onSelect]
+    [meta.cwd, meta.parentId, onSelect]
   );
   const ctxRef = useRef(ctx);
   ctxRef.current = ctx;
@@ -533,7 +546,7 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
                   case 'group':
                     return <ToolGroup key={it.key} tools={it.tools} cwd={meta.cwd} />;
                   case 'user':
-                    return <UserMessage key={`u${it.index}`} item={it} canEdit={!busy && conn === 'open' && !it.from} onEdit={(index, text) => send({ t: 'edit', index, text })} />;
+                    return <UserMessage key={`u${it.index}`} item={it} canEdit={!busy && conn === 'open' && !it.from} onEdit={(index, text) => send({ t: 'edit', index, text })} onOpen={(id) => sessions?.some((x) => x.id === id) && onSelect?.(id)} />;
                   case 'text':
                     return (
                       <div key={it.key || n} className="msg assistant">
@@ -632,9 +645,33 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
             </div>
           )}
 
+          {waitingOn && (
+            <div className="inbox-bar waiting">
+              <span className="dot-pulse" /> Waiting for a reply from{' '}
+              <button className="linklike" onClick={() => onSelect?.(waitingOn.id)}>
+                {waitingOn.name}
+              </button>
+              <span>. Claude carries on as soon as it answers.</span>
+            </div>
+          )}
           {inbox.length > 0 && (
-            <div className="inbox-bar" title={inbox.map((b) => `${b.name}: ${b.preview}`).join('\n')}>
-              ✉ {inbox.length} message{inbox.length === 1 ? '' : 's'} from {[...new Set(inbox.map((b) => b.name))].join(', ')} waiting. Claude gets {inbox.length === 1 ? 'it' : 'them, in order,'} when this turn ends.
+            <div className={`inbox-bar ${inboxOpen ? 'open' : ''}`}>
+              <button className="inbox-head" onClick={() => setInboxOpen((v) => !v)} aria-expanded={inboxOpen}>
+                <span>
+                  ✉ {inbox.length} queued message{inbox.length === 1 ? '' : 's'} from {[...new Set(inbox.map((b) => b.name))].join(', ')}. Claude gets {inbox.length === 1 ? 'it' : 'them together, in order,'} when this turn ends.
+                </span>
+                <span className="chev">{inboxOpen ? '▾' : '▸'}</span>
+              </button>
+              {inboxOpen && (
+                <ol className="inbox-list">
+                  {inbox.map((b, i) => (
+                    <li key={i}>
+                      <b>{b.name}</b>
+                      {b.kind === 'question' ? ' asks' : ''}: {b.preview}
+                    </li>
+                  ))}
+                </ol>
+              )}
             </div>
           )}
           <Composer

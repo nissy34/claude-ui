@@ -178,7 +178,13 @@ export default function ToolCard({ item, cwd, children }) {
   const ctx = useContext(ChatCtx);
   const filePath = FILE_TOOLS[name] && input?.[FILE_TOOLS[name]];
   const isSessionTool = /^mcp__sessions__(start_session|send_to_session|read_session)$/.test(name);
-  const linkedSession = isSessionTool ? childSessionId(result) || input?.id : null;
+  const parentId = ctx.parentId;
+  const sessionArg = input?.id === 'parent' ? parentId : input?.id;
+  const linkedSession = isSessionTool ? childSessionId(result) || sessionArg : null;
+  const sessionLabel =
+    name === 'mcp__sessions__send_to_session'
+      ? `${input?.wait_for_reply ? 'Asked' : 'Messaged'} ${input?.id === 'parent' || (parentId && input?.id === parentId) ? 'parent' : 'session'}`
+      : { start_session: 'Started session', read_session: 'Checked session' }[name.split('__')[2]];
   const isEditLike = ['Edit', 'MultiEdit', 'Write', 'TodoWrite', 'ExitPlanMode'].includes(name);
   const [open, setOpen] = useState(isEditLike && !(name === 'Write' && filePath && artifactKind(filePath)));
   const [showResult, setShowResult] = useState(false);
@@ -193,7 +199,7 @@ export default function ToolCard({ item, cwd, children }) {
     <div className={`tool ${status} ${open ? 'open' : ''}`}>
       <button className="tool-head" onClick={() => setOpen((o) => !o)}>
         <span className="ticon">{ICONS[name] || '⚙'}</span>
-        <span className="tname">{isSessionTool ? { start_session: 'Started session', send_to_session: 'Messaged session', read_session: 'Checked session' }[name.split('__')[2]] : name.replace(/^mcp__([^_]+)__/, '$1 · ')}</span>
+        <span className="tname">{isSessionTool ? sessionLabel : name.replace(/^mcp__([^_]+)__/, '$1 · ')}</span>
         {filePath ? (
           <span
             className="tsum link"
