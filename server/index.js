@@ -120,14 +120,17 @@ app.post(
   '/internal/sessions/:id/send',
   wrap(async (req, res) => {
     const sender = store.get(req.headers['x-cw-session']);
-    let id = req.params.id;
-    if (id === 'parent') {
-      id = sender?.meta.parentId;
+    let id = String(req.params.id).trim();
+    const parentId = sender?.meta.parentId;
+    if (/^parent$/i.test(id) || (parentId && id === store.get(parentId)?.meta.name)) {
+      id = parentId;
       if (!id) throw new Error('This session has no parent chat. Ask the user in your reply instead.');
     }
     const s = store.get(id);
-    if (!s || s.meta.kind !== 'chat') throw new Error('No such chat session');
-    if (s === sender) throw new Error('That is this session');
+    if (!s || s.meta.kind !== 'chat') {
+      throw new Error(`No chat session with id "${id}".${parentId ? ' To reach the chat that started this one, use id "parent".' : ''} list_sessions shows the ids of your child sessions.`);
+    }
+    if (s === sender) throw new Error('That is this session. To reach the chat that started this one, use id "parent".');
     const text = String(req.body?.message || '');
     if (!text.trim()) throw new Error('message is required');
     const wait = !!req.body?.wait_for_reply;
