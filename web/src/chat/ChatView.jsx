@@ -92,7 +92,12 @@ function UserMessage({ item, canEdit, onEdit, onOpen, onFork }) {
   }
   return (
     <div className={`msg user ${item.from ? 'from-session' : ''}`}>
-      {item.from && (
+      {item.from?.role === 'desktop' && (
+        <div className="from-label">
+          {item.from.kind === 'handoff' ? 'Handed off from' : 'From'} Claude Desktop
+        </div>
+      )}
+      {item.from && item.from.role !== 'desktop' && (
         <div className="from-label">
           {KIND_NAME[item.from.kind] || 'From'} {ROLE_NAME[item.from.role] || 'chat'}{' '}
           <button className="linklike" onClick={() => onOpen?.(item.from.id)} title="Open that chat">
@@ -767,6 +772,7 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
           )}
           <Composer
             sessionId={session.id}
+            initialDraft={meta.draft}
             disabled={conn !== 'open'}
             busy={busy}
             onSend={submit}

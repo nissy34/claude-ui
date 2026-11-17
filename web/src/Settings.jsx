@@ -5,6 +5,7 @@ import { getPrefs, setPref } from './prefs.js';
 import { MODES } from './chat/Composer.jsx';
 import { useModels } from './models.js';
 import { McpTab, PluginsTab, SkillsTab } from './Customize.jsx';
+import DesktopTab from './DesktopTab.jsx';
 
 const TABS = [
   ['general', 'General'],
@@ -13,6 +14,7 @@ const TABS = [
   ['mcp', 'MCP servers'],
   ['plugins', 'Plugins'],
   ['skills', 'Skills'],
+  ['desktop', 'Claude Desktop'],
   ['account', 'Account'],
   ['about', 'About'],
 ];
@@ -288,6 +290,7 @@ export default function Settings({ projects, activeCwd, onClose, onError, onKeys
             {tab === 'mcp' && <McpTab projects={projects} activeCwd={activeCwd} onError={onError} />}
             {tab === 'plugins' && <PluginsTab onError={onError} />}
             {tab === 'skills' && <SkillsTab projects={projects} activeCwd={activeCwd} onError={onError} />}
+            {tab === 'desktop' && <DesktopTab onError={onError} />}
             {tab === 'account' && <Account />}
             {tab === 'about' && <About />}
           </div>

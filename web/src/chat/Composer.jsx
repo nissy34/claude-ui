@@ -165,15 +165,19 @@ function ModelItem({ m, on, onPick }) {
   );
 }
 
-export default function Composer({ sessionId, disabled, busy, onSend, onStop, mode, onMode, model, activeModel, onModel, effort, onEffort, commands, footer, onError, placeholder, context, onCompact, queued, usage, mcpServers, onSettings, onBrowser, chats }) {
+export default function Composer({ sessionId, disabled, busy, onSend, onStop, mode, onMode, model, activeModel, onModel, effort, onEffort, commands, footer, onError, placeholder, context, onCompact, queued, usage, mcpServers, onSettings, onBrowser, chats, initialDraft }) {
   const draftKey = `cw.draft.${sessionId}`;
   const [text, setText] = useState(() => {
     try {
-      return localStorage.getItem(draftKey) || '';
+      return localStorage.getItem(draftKey) || initialDraft || '';
     } catch {
-      return '';
+      return initialDraft || '';
     }
   });
+  // A brief handed off from Claude Desktop to send later: put it in the box when it shows up.
+  useEffect(() => {
+    if (initialDraft) setText((t) => t || initialDraft);
+  }, [initialDraft]);
   const [images, setImages] = useState([]);
   const [attachments, setAttachments] = useState([]); // {name, path, size} | {name, uploading:true}
   const [listening, setListening] = useState(false);
