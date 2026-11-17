@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { browserAvailable } from './browser.js';
 import { config, PRIVATE_ENV } from './config.js';
 import { resolveCommand } from './launch.js';
+import { elicitationEvent, elicitationResponse, mcpAuthMethods, slimServers } from './mcp-admin.js';
 
 const CHAT_DIR = path.join(config.dataDir, 'chats');
 fs.mkdirSync(CHAT_DIR, { recursive: true });
@@ -44,7 +45,7 @@ function fromLabel(f) {
   return `[${what} from ${f.role} session "${f.name}" (session id ${f.id})${tail}]`;
 }
 
-function childEnv(sessionId) {
+export function childEnv(sessionId) {
   const env = { ...process.env };
   for (const k of PRIVATE_ENV) delete env[k];
   // Lets "edit an earlier message" restore files to that point.
@@ -133,6 +134,7 @@ export class ChatSession {
     this.clients = new Set();
     this.pending = new Map(); // request_id -> permission request event
     this.controlWaiters = new Map();
+    this.elicits = new Map(); // request_id -> MCP elicitation (a form or link an MCP server asks the user for)
     this.oauth = new Map(); // MCP server name -> { state, port, authUrl, at } while a sign-in waits for its callback
     // A new chat shows the / menu (with descriptions) before its process has started.
     if (meta.commandInfo) commandCache.set(meta.cwd, meta.commandInfo);
@@ -155,7 +157,7 @@ export class ChatSession {
     return !!this.proc;
   }
   get state() {
-    if (this.pending.size) return 'waiting';
+    if (this.pending.size || this.elicits.size) return 'waiting';
     return this.turns > 0 ? 'busy' : 'idle';
   }
 
@@ -357,6 +359,8 @@ export class ChatSession {
       this.turns = 0;
       for (const id of this.pending.keys()) this.record({ k: 'perm_done', reqId: id, behavior: 'cancelled' });
       this.pending.clear();
+      for (const id of this.elicits.keys()) this.record({ k: 'elicit_done', reqId: id, action: 'cancelled' });
+      this.elicits.clear();
       for (const w of this.controlWaiters.values()) w.reject(new Error('process exited'));
       this.controlWaiters.clear();
       this.oauth.clear();
@@ -527,6 +531,10 @@ export class ChatSession {
           this.record({ k: 'perm_done', reqId: msg.request_id, behavior: 'cancelled' });
           this.broadcastState();
         }
+        if (this.elicits.delete(msg.request_id)) {
+          this.record({ k: 'elicit_done', reqId: msg.request_id, action: 'cancelled' });
+          this.broadcastState();
+        }
         break;
     }
   }
@@ -546,6 +554,15 @@ export class ChatSession {
         parent: req.agent_id || null,
       };
       this.pending.set(msg.request_id, ev);
+      this.record(ev);
+      if (this.clients.size === 0) this.meta.attention = true;
+      this.broadcastState();
+      return;
+    }
+    if (req.subtype === 'elicitation') {
+      // An MCP server asks the user for input (e.g. a username and password) or to open a link.
+      const ev = { k: 'elicit', ...elicitationEvent(msg.request_id, req) };
+      this.elicits.set(msg.request_id, ev);
       this.record(ev);
       if (this.clients.size === 0) this.meta.attention = true;
       this.broadcastState();
@@ -733,6 +750,15 @@ export class ChatSession {
     this.broadcastState();
   }
 
+  /** The user's answer to an MCP elicitation. The values are passed to Claude and never logged. */
+  answerElicit({ reqId, action, content }) {
+    if (!this.elicits.has(reqId)) return;
+    this.elicits.delete(reqId);
+    this.writeLine({ type: 'control_response', response: { subtype: 'success', request_id: reqId, response: elicitationResponse(action, content) } });
+    this.record({ k: 'elicit_done', reqId, action: elicitationResponse(action).action });
+    this.broadcastState();
+  }
+
   async interrupt() {
     if (!this.proc || this.turns === 0) return;
     this.interrupted = true;
@@ -749,86 +775,16 @@ export class ChatSession {
     }
   }
 
-  // ---------- MCP sign-in (OAuth) ----------
-  // Claude's OAuth flow redirects to http://localhost:<port>/callback on the machine running Claude.
-  // Opened from another device that page can't load, so the user pastes its address back here and
-  // we hand it to Claude (control request mcp_oauth_callback_url), which finishes the token exchange.
-
-  oauthWaiting() {
-    const now = Date.now();
-    for (const [name, f] of this.oauth) if (now - f.at > 15 * 60_000) this.oauth.delete(name);
-    return this.oauth.size > 0;
+  // ---------- MCP sign-in (OAuth): shared methods in mcp-admin.js (mcpAuthMethods) ----------
+  mcpServerList() {
+    return this.meta.mcpServers || [];
   }
-
-  oauthFlows() {
-    this.oauthWaiting();
-    return [...this.oauth].map(([name, f]) => ({ name, port: f.port, authUrl: f.authUrl, at: f.at }));
-  }
-
-  setMcpServers(list) {
-    this.meta.mcpServers = (list || []).map((x) => ({ name: x.name, status: x.status, ...(x.error ? { error: String(x.error).slice(0, 300) } : {}), ...(x.scope ? { scope: x.scope } : {}) }));
+  setMcpServers(list, { keep } = {}) {
+    if (!keep) this.meta.mcpServers = slimServers(list);
     this.broadcastState();
   }
-
-  async mcpStatus({ start = false } = {}) {
-    if (!this.proc) {
-      if (!start) return this.meta.mcpServers || [];
-      this.ensureProcess();
-      this.touchIdle();
-    }
-    const r = await this.control({ subtype: 'mcp_status' }, 60_000);
-    this.setMcpServers(r?.mcpServers);
-    return this.meta.mcpServers;
-  }
-
-  async mcpAuthenticate(name) {
-    name = String(name || '');
-    if (!name) throw new Error('Which server?');
-    this.ensureProcess();
-    if (!this.proc) throw new Error('Claude is not running');
-    this.touchIdle();
-    // No redirectUri: keep the provider's registered localhost callback.
-    const r = await this.control({ subtype: 'mcp_authenticate', serverName: name }, 120_000);
-    if (!r?.requiresUserAction) {
-      this.oauth.delete(name);
-      this.refreshMcpSoon(name, false);
-      return { done: true };
-    }
-    if (r.callbackExpected) this.oauth.set(name, { state: r.state, port: r.callbackPort, authUrl: r.authUrl, at: Date.now() });
-    this.broadcastState();
-    return { authUrl: r.authUrl, callbackExpected: !!r.callbackExpected, port: r.callbackPort };
-  }
-
-  /** The flow a pasted callback URL belongs to, matched by its OAuth state (or port). */
-  oauthFlowFor(url) {
-    this.oauthWaiting();
-    const state = url.searchParams.get('state');
-    for (const [name, f] of this.oauth) if (state && f.state === state) return name;
-    for (const [name, f] of this.oauth) if (!f.state && f.port && String(f.port) === url.port) return name;
-    return null;
-  }
-
-  async mcpCallback(name, callbackUrl) {
-    if (!this.proc) throw new Error('This sign-in has ended (Claude stopped). Press Sign in again.');
-    await this.control({ subtype: 'mcp_oauth_callback_url', serverName: name, callbackUrl }, 60_000);
-    this.oauth.delete(name);
+  onMcpSignedIn(name) {
     this.record({ k: 'notice', text: `Signed in to ${name}` });
-    this.refreshMcpSoon(name, true);
-    return { ok: true };
-  }
-
-  // Claude reconnects a configured server after sign-in by itself; nudge it if it hasn't yet.
-  refreshMcpSoon(name, reconnect) {
-    const check = async (tries) => {
-      try {
-        const list = await this.mcpStatus();
-        const s = list.find((x) => x.name === name);
-        if (!s || s.status === 'connected' || tries <= 0) return;
-        if (reconnect && tries === 3 && s.status !== 'pending') await this.control({ subtype: 'mcp_reconnect', serverName: name }, 60_000).catch(() => {});
-        setTimeout(() => check(tries - 1), 1500);
-      } catch {}
-    };
-    setTimeout(() => check(4), 1200);
   }
 
   async setMode(mode) {
@@ -1033,3 +989,5 @@ export class ChatSession {
     fs.unlink(this.logFile, () => {});
   }
 }
+
+Object.assign(ChatSession.prototype, mcpAuthMethods);

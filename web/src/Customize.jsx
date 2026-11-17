@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { api } from './api.js';
-import { PasteCallback } from './chat/McpAuth.jsx';
+import { McpLogins, PasteCallback } from './chat/McpAuth.jsx';
 
 const RESTART_NOTE = 'Changes apply to new chats, and to open chats after their next restart.';
 
@@ -129,7 +129,7 @@ function AddServer({ cwd, onDone, onError }) {
           {busy ? 'Adding…' : 'Add server'}
         </button>
       </div>
-      <p className="muted set-note">Servers that need a browser sign-in (OAuth) show a Sign in button in a chat’s + menu, under Connectors.</p>
+      <p className="muted set-note">Servers that need a browser sign-in (OAuth) can be signed in under Logins below, or from a chat’s + menu under Connectors.</p>
     </form>
   );
 }
@@ -197,6 +197,7 @@ export function McpTab({ projects, activeCwd, onError }) {
         ))}
       </div>
       {!cwd && data?.servers.length > 0 && <p className="muted set-note">Pick a project to turn servers on or off for it.</p>}
+      <McpLogins cwd={cwd} onError={onError} />
       <PasteCallback onError={onError} />
     </>
   );

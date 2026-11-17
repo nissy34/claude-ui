@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { api } from '../api.js';
 
 // MCP sign-in (OAuth) from any device. Claude's flow redirects to http://localhost:<port>/callback
@@ -11,13 +11,18 @@ export const needsSignIn = (s) => s && (s.status === 'needs-auth' || (s.status =
 
 /** Start a sign-in. Must be called from a click, so the new tab isn't blocked. */
 export async function startSignIn(sessionId, name, onError) {
+  return openSignIn(() => api(`/api/sessions/${sessionId}/mcp/auth`, { method: 'POST', body: { name } }), onError);
+}
+
+/** Opens a tab right away (inside the click), then points it at the provider page. */
+export async function openSignIn(begin, onError) {
   const w = window.open('', '_blank');
   try {
     if (w) w.document.write('<p style="font:15px system-ui;padding:24px">Starting sign-in…</p>');
   } catch {}
   try {
-    const r = await api(`/api/sessions/${sessionId}/mcp/auth`, { method: 'POST', body: { name } });
-    if (r.done) {
+    const r = await begin();
+    if (r.done || !r.authUrl) {
       w?.close();
       return r;
     }
@@ -128,5 +133,247 @@ export function PasteCallback({ onError }) {
       </div>
       {msg && <p className="muted set-note">{msg}</p>}
     </form>
+  );
+}
+
+// ---------- MCP elicitation: a form (or a link) an MCP server asks the user for ----------
+const SECRET = /pass(word|code|phrase)?|secret|token|api[_-]?key|\bpin\b|otp|credential/i;
+
+function fieldsOf(schema, order) {
+  const props = schema?.properties || {};
+  const keys = order?.length ? order.filter((k) => props[k]) : Object.keys(props);
+  const req = new Set(schema?.required || []);
+  return keys.map((k) => ({ key: k, ...props[k], required: req.has(k) }));
+}
+
+function Field({ f, value, onChange }) {
+  const label = f.title || f.key;
+  const options = f.enum ? f.enum.map((v, i) => ({ value: v, label: f.enumNames?.[i] ?? v })) : f.oneOf ? f.oneOf.map((o) => ({ value: o.const, label: o.title ?? o.const })) : null;
+  if (f.type === 'boolean')
+    return (
+      <label className="elicit-check">
+        <input type="checkbox" checked={!!value} onChange={(e) => onChange(e.target.checked)} /> {label}
+      </label>
+    );
+  let input;
+  if (options)
+    input = (
+      <select value={value ?? ''} onChange={(e) => onChange(e.target.value)} required={f.required}>
+        <option value="" disabled>
+          Choose…
+        </option>
+        {options.map((o) => (
+          <option key={String(o.value)} value={o.value}>
+            {o.label}
+          </option>
+        ))}
+      </select>
+    );
+  else {
+    const num = f.type === 'number' || f.type === 'integer';
+    const type = num ? 'number' : SECRET.test(`${f.key} ${f.title || ''}`) ? 'password' : f.format === 'email' ? 'email' : f.format === 'uri' ? 'url' : f.format === 'date' ? 'date' : 'text';
+    input = (
+      <input
+        type={type}
+        value={value ?? ''}
+        onChange={(e) => onChange(num ? (e.target.value === '' ? '' : Number(e.target.value)) : e.target.value)}
+        required={f.required}
+        minLength={f.minLength}
+        maxLength={f.maxLength}
+        min={f.minimum}
+        max={f.maximum}
+        step={f.type === 'integer' ? 1 : 'any'}
+        autoComplete={type === 'password' ? 'current-password' : /user|login|email/i.test(f.key) ? 'username' : 'off'}
+        spellCheck={false}
+      />
+    );
+  }
+  return (
+    <label className="elicit-field">
+      <span>
+        {label}
+        {f.required && <span className="req"> *</span>}
+      </span>
+      {input}
+      {f.description && <small className="muted">{f.description}</small>}
+    </label>
+  );
+}
+
+/** Answer with onAnswer({ reqId, action: 'accept'|'decline'|'cancel', content }). */
+export function Elicitation({ req, done, onAnswer }) {
+  const fields = fieldsOf(req.schema, req.order);
+  const [vals, setVals] = useState(() => Object.fromEntries(fields.filter((f) => f.default !== undefined).map((f) => [f.key, f.default])));
+  const [opened, setOpened] = useState(false);
+  const answer = (action, content) => onAnswer({ reqId: req.reqId, action, content });
+  if (done)
+    return (
+      <div className="elicit done">
+        <span className="muted">
+          {req.server}: {done === 'accept' ? 'sent' : done === 'decline' ? 'declined' : 'cancelled'}
+        </span>
+      </div>
+    );
+  const submit = (e) => {
+    e.preventDefault();
+    const content = {};
+    for (const f of fields) if (vals[f.key] !== undefined && vals[f.key] !== '') content[f.key] = vals[f.key];
+    answer('accept', content);
+  };
+  return (
+    <form className="elicit" onSubmit={submit} autoComplete="on">
+      <div className="elicit-head">
+        <b>{req.title || req.server}</b> <span className="muted">asks</span>
+      </div>
+      {req.message && <div className="elicit-msg">{req.message}</div>}
+      {req.mode === 'url' ? (
+        <div className="elicit-url">
+          <a className="btn small primary" href={req.url} target="_blank" rel="noreferrer" onClick={() => setOpened(true)}>
+            Open {(() => {
+              try {
+                return new URL(req.url).host;
+              } catch {
+                return 'link';
+              }
+            })()}
+          </a>
+          {opened && <span className="muted">Finish there, then press Done.</span>}
+        </div>
+      ) : (
+        fields.map((f) => <Field key={f.key} f={f} value={vals[f.key]} onChange={(v) => setVals((s) => ({ ...s, [f.key]: v }))} />)
+      )}
+      <div className="elicit-actions">
+        {req.mode === 'url' ? (
+          <button type="button" className="btn small primary" onClick={() => answer('accept')}>
+            Done
+          </button>
+        ) : (
+          <button className="btn small primary">Submit</button>
+        )}
+        <button type="button" className="btn small" onClick={() => answer('decline')}>
+          Decline
+        </button>
+        <button type="button" className="btn small ghost" onClick={() => answer('cancel')}>
+          Cancel
+        </button>
+      </div>
+      {req.mode !== 'url' && fields.some((f) => SECRET.test(`${f.key} ${f.title || ''}`)) && <small className="muted">Goes straight to {req.server}. Not saved in this chat.</small>}
+    </form>
+  );
+}
+
+// ---------- Settings → MCP logins ----------
+const canSignOut = (s) => /^(http|sse|ws|claudeai-proxy)/.test(s.transport || '') && s.status === 'connected';
+
+export function McpLogins({ cwd, onError }) {
+  const [data, setData] = useState(null);
+  const [busy, setBusy] = useState('');
+  const [paste, setPaste] = useState('');
+  const load = () =>
+    api(`/api/mcp-logins${cwd ? `?cwd=${encodeURIComponent(cwd)}` : ''}`)
+      .then(setData)
+      .catch((e) => (setData({ servers: [], oauth: [], elicits: [] }), onError(e)));
+  useEffect(() => {
+    setData(null);
+    load();
+  }, [cwd]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Keep it fresh while servers start, a sign-in waits, or a server asks for input.
+  const live = data && (data.servers.some((s) => s.status === 'pending') || data.oauth.length || data.elicits.length);
+  useEffect(() => {
+    if (!live) return;
+    const t = setTimeout(load, 2500);
+    return () => clearTimeout(t);
+  }); // eslint-disable-line react-hooks/exhaustive-deps
+  const act = async (action, body) => {
+    setBusy(body.name || action);
+    try {
+      setData(await api(`/api/mcp-logins/${action}`, { method: 'POST', body: { cwd, ...body } }));
+    } catch (e) {
+      onError(e);
+    } finally {
+      setBusy('');
+    }
+  };
+  const signIn = (name) =>
+    openSignIn(async () => {
+      const r = await api('/api/mcp-logins/signin', { method: 'POST', body: { cwd, name } });
+      setData(r);
+      return r;
+    }, onError);
+  const deliver = async (e) => {
+    e.preventDefault();
+    try {
+      await deliverCallback(paste);
+      setPaste('');
+      setTimeout(load, 1500);
+    } catch (err) {
+      onError(err);
+    }
+  };
+  const servers = (data?.servers || []).filter((s) => !['sessions', 'schedule', 'browser'].includes(s.name) || s.scope !== 'dynamic');
+  return (
+    <div className="mcp-logins">
+      <div className="label">Logins</div>
+      <p className="muted set-note">Sign in to servers that use a browser login, sign out, or retry. A sign-in here applies to every chat.</p>
+      {!data && <div className="muted">Starting Claude to check servers…</div>}
+      {data && servers.length === 0 && <div className="empty-box">No MCP servers.</div>}
+      {data?.elicits.map((r) => (
+        <Elicitation key={r.reqId} req={r} onAnswer={(a) => act('elicit', a)} />
+      ))}
+      <div className="item-list">
+        {servers.map((s) => {
+          const flow = data.oauth.find((f) => f.name === s.name);
+          return (
+            <div key={s.name} className="item">
+              <span className={`dot ${s.status === 'connected' ? 'on' : s.status === 'pending' || flow ? 'busy' : s.status === 'disabled' ? 'off' : 'err'}`} />
+              <div className="item-main">
+                <div className="item-title">
+                  {s.name} {s.scope && <span className="tag">{s.scope}</span>}
+                </div>
+                <div className={`item-sub ${s.status === 'failed' ? 'err' : ''}`}>{flow ? 'Approve in the tab that opened, then paste the localhost address below' : s.status === 'needs-auth' ? 'Needs sign-in' : s.status}{s.error && !flow ? ` · ${s.error}` : ''}</div>
+              </div>
+              <div className="login-actions">
+                {flow ? (
+                  <>
+                    <a className="btn small" href={flow.authUrl} target="_blank" rel="noreferrer">
+                      Open again
+                    </a>
+                    <button className="btn small ghost" onClick={() => act('cancel', { name: s.name })}>
+                      Cancel
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    {needsSignIn(s) && (
+                      <button className="btn small primary" disabled={busy === s.name} onClick={() => signIn(s.name)}>
+                        Sign in
+                      </button>
+                    )}
+                    {canSignOut(s) && (
+                      <button className="btn small" disabled={busy === s.name} onClick={() => window.confirm(`Sign out of ${s.name}? Chats lose access until you sign in again.`) && act('signout', { name: s.name })}>
+                        Sign out
+                      </button>
+                    )}
+                    {s.status === 'failed' && !needsSignIn(s) && (
+                      <button className="btn small" disabled={busy === s.name} onClick={() => act('reconnect', { name: s.name })}>
+                        Retry
+                      </button>
+                    )}
+                  </>
+                )}
+              </div>
+              {flow && (
+                <form className="mcp-auth-row login-paste" onSubmit={deliver}>
+                  <input value={paste} onChange={(e) => setPaste(e.target.value)} placeholder="Paste the http://localhost:…/callback?code=… address" autoComplete="off" spellCheck={false} />
+                  <button className="btn small primary" disabled={!paste.trim()}>
+                    Connect
+                  </button>
+                </form>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
   );
 }

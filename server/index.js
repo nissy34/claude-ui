@@ -22,6 +22,7 @@ import { getChanges, searchFiles, readFileSafe, createWorktree } from './git.js'
 import * as browser from './browser.js';
 import { listArtifacts, rawHandler, rawUrl } from './artifacts.js';
 import * as admin from './claude-admin.js';
+import { McpAdmin, onSignedIn, stopAllAdmins } from './mcp-admin.js';
 import { getModels } from './models.js';
 import { sideChat } from './side-chat.js';
 import { prStatus, mergeWhenReady } from './pr-status.js';
@@ -582,15 +583,53 @@ app.post(
     // A sign-in Claude started in one of our chats: hand it the URL so it checks the state and finishes.
     const prefer = req.body?.sessionId ? store.get(req.body.sessionId) : null;
     const chats = [prefer, ...store.sessions.values()].filter((s) => s && s.meta.kind === 'chat' && s.oauth?.size);
-    for (const s of chats) {
+    for (const s of [...chats, ...McpAdmin.all()]) {
       const name = s.oauthFlowFor(url);
-      if (name) return res.json({ ...(await s.mcpCallback(name, url.toString())), server: name, sessionId: s.id });
+      if (name) return res.json({ ...(await s.mcpCallback(name, url.toString())), server: name, sessionId: s.meta ? s.id : undefined });
     }
     // Anything else listening on this machine (a terminal's /mcp, an MCP server's own login): replay it.
     const r = await replayLoopback(url);
     res.json({ ok: r.status < 400, replayed: true, status: r.status, body: r.body });
   })
 );
+
+// Settings → MCP logins: a background claude process per folder (McpAdmin) does the sign-ins.
+const adminFor = (cwd) => McpAdmin.for(cwd ? resolveDir(cwd) : config.projectsRoot);
+app.get(
+  '/api/mcp-logins',
+  wrap(async (req, res) => {
+    const a = adminFor(req.query.cwd);
+    await a.mcpStatus({ start: true });
+    res.json(a.snapshot());
+  })
+);
+app.post(
+  '/api/mcp-logins/:action',
+  wrap(async (req, res) => {
+    const a = adminFor(req.body?.cwd);
+    const name = String(req.body?.name || '');
+    const act = req.params.action;
+    let out = {};
+    if (act === 'signin') out = await a.mcpAuthenticate(name);
+    else if (act === 'signout') out = await a.mcpSignOut(name);
+    else if (act === 'reconnect') {
+      a.ensureProcess();
+      await a.mcpReconnect(name);
+    } else if (act === 'cancel') a.cancelSignIn(name);
+    else if (act === 'elicit') a.answerElicit(req.body || {});
+    else throw new Error('Unknown action');
+    res.json({ ...out, ...a.snapshot() });
+  })
+);
+// After a sign-in anywhere, running chats (and other folders' helpers) pick the server up again.
+onSignedIn((name, from) => {
+  const hosts = [...[...store.sessions.values()].filter((s) => s.meta.kind === 'chat' && s.running), ...McpAdmin.all().filter((a) => a.proc)];
+  for (const h of hosts) {
+    if (h === from) continue;
+    const s = h.mcpServerList().find((x) => x.name === name);
+    if (s && s.status !== 'connected') setTimeout(() => h.mcpReconnect(name), 1500);
+  }
+});
 
 app.get(
   '/api/sessions/:id/changes',
@@ -916,6 +955,7 @@ function handleChat(ws, s) {
         s.send(msg);
       }
       else if (msg.t === 'perm') s.answerPermission(msg);
+      else if (msg.t === 'elicit') s.answerElicit(msg);
       else if (msg.t === 'interrupt') await s.interrupt();
       else if (msg.t === 'mode') await s.setMode(msg.mode);
       else if (msg.t === 'model') await s.setModel(msg.model);
@@ -964,6 +1004,7 @@ function shutdown(sig) {
   shuttingDown = true;
   console.log(`${sig}: saving sessions and shutting down`);
   store.shutdown();
+  stopAllAdmins();
   server.close();
   setTimeout(() => process.exit(0), 1500).unref();
 }

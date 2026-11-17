@@ -4,7 +4,7 @@ import { buildItems, lastTodos } from './model.js';
 import { renderMarkdown } from './markdown.js';
 import ToolCard, { Todos, ToolGroup } from './ToolCard.jsx';
 import Permission from './Permission.jsx';
-import { McpSignInBar, startSignIn, needsSignIn, deliverCallback, LOCAL_CALLBACK } from './McpAuth.jsx';
+import { Elicitation, McpSignInBar, startSignIn, needsSignIn, deliverCallback, LOCAL_CALLBACK } from './McpAuth.jsx';
 import Composer from './Composer.jsx';
 import { getPrefs } from '../prefs.js';
 import SidePanel from './SidePanel.jsx';
@@ -320,6 +320,7 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
             });
           }
           if (e.k === 'tool_result' || e.k === 'result') setChangesKey((k) => k + 1);
+          if (e.k === 'elicit') notify(`${e.server} needs your input`, session.name);
           if (e.k === 'perm') notify('Claude needs your permission', `${e.tool} in ${session.name}`);
           if (e.k === 'result') notify(e.isError ? 'Claude stopped with an error' : 'Claude finished', session.name);
           if (e.k === 'result' || e.k === 'error') setStatus(null);
@@ -388,7 +389,7 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
     return out;
   }, [items, verbose]);
   const todos = useMemo(() => lastTodos(events), [events]);
-  const pendingPerms = items.filter((i) => i.type === 'tool' && i.perm && !i.perm.done).length + items.filter((i) => i.type === 'perm' && !i.done).length;
+  const pendingPerms = items.filter((i) => i.type === 'tool' && i.perm && !i.perm.done).length + items.filter((i) => (i.type === 'perm' || i.type === 'elicit') && !i.done).length;
   const busy = state === 'busy' || state === 'waiting';
   // Resume shows on an exit error only while it is the latest thing in the chat.
   const lastResumable = busy ? -1 : rows.findLastIndex((r) => ['error', 'user', 'text', 'tool', 'group'].includes(r.type));
@@ -665,6 +666,8 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
                         {it.perm && <Permission perm={it.perm} cwd={meta.cwd} onAnswer={answer} onMode={setMode} showBody={false} />}
                       </ToolCard>
                     );
+                  case 'elicit':
+                    return <Elicitation key={'el' + it.req.reqId} req={it.req} done={it.done} onAnswer={(a) => send({ t: 'elicit', ...a })} />;
                   case 'perm':
                     return <Permission key={it.reqId} perm={it} cwd={meta.cwd} onAnswer={answer} onMode={setMode} />;
                   case 'result':
@@ -732,7 +735,7 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
               {busy && (
                 <div className="working">
                   <span className="spark">✳</span>
-                  {pendingPerms ? 'Waiting for your approval' : status === 'compacting' ? 'Compacting…' : 'Working…'}
+                  {items.some((i) => i.type === 'elicit' && !i.done) ? 'Waiting for your input' : pendingPerms ? 'Waiting for your approval' : status === 'compacting' ? 'Compacting…' : 'Working…'}
                 </div>
               )}
             </div>

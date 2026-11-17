@@ -14,7 +14,7 @@ export function buildItems(events, deltas, offset = 0) {
   for (let idx = 0; idx < events.length; idx++) {
     const e = events[idx];
     // Sub-agent activity is folded into its parent Task card.
-    if (e.parent && e.k !== 'perm' && e.k !== 'perm_done') {
+    if (e.parent && e.k !== 'perm' && e.k !== 'perm_done' && e.k !== 'elicit' && e.k !== 'elicit_done') {
       const parent = tools.get(e.parent);
       if (parent) {
         if (e.k === 'block' && e.block.type === 'tool_use') {
@@ -63,6 +63,17 @@ export function buildItems(events, deltas, offset = 0) {
         const t = e.toolUseId && tools.get(e.toolUseId);
         if (t) t.perm = it;
         else push(it);
+        break;
+      }
+      case 'elicit': {
+        const it = { type: 'elicit', req: e, done: null };
+        perms.set('el:' + e.reqId, it);
+        push(it);
+        break;
+      }
+      case 'elicit_done': {
+        const it = perms.get('el:' + e.reqId);
+        if (it) it.done = e.action;
         break;
       }
       case 'perm_done': {
