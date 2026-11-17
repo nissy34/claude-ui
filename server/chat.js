@@ -133,6 +133,7 @@ export class ChatSession {
     this.clients = new Set();
     this.pending = new Map(); // request_id -> permission request event
     this.controlWaiters = new Map();
+    this.oauth = new Map(); // MCP server name -> { state, port, authUrl, at } while a sign-in waits for its callback
     // A new chat shows the / menu (with descriptions) before its process has started.
     if (meta.commandInfo) commandCache.set(meta.cwd, meta.commandInfo);
     else if (commandCache.has(meta.cwd)) meta.commandInfo = commandCache.get(meta.cwd);
@@ -213,7 +214,7 @@ export class ChatSession {
   }
 
   broadcastState() {
-    this.broadcast({ t: 'state', state: this.state, live: this.running, meta: this.meta, turns: this.turns, inbox: this.inboxSummary(), waitingOn: this.waitingSummary() });
+    this.broadcast({ t: 'state', state: this.state, live: this.running, meta: this.meta, turns: this.turns, inbox: this.inboxSummary(), waitingOn: this.waitingSummary(), oauth: this.oauthFlows() });
     this.store.changed();
   }
 
@@ -248,6 +249,7 @@ export class ChatSession {
       turns: this.turns,
       inbox: this.inboxSummary(),
       waitingOn: this.waitingSummary(),
+      oauth: this.oauthFlows(),
       events: this.events.slice(-MAX_EVENTS_SENT),
       truncated: Math.max(0, this.events.length - MAX_EVENTS_SENT),
       pending: [...this.pending.values()],
@@ -357,6 +359,7 @@ export class ChatSession {
       this.pending.clear();
       for (const w of this.controlWaiters.values()) w.reject(new Error('process exited'));
       this.controlWaiters.clear();
+      this.oauth.clear();
       clearTimeout(this.watchdog);
       if (this.quietExit) this.quietExit = false;
       else if (hadWork || (code && code !== 0 && !this.stopping)) {
@@ -377,14 +380,14 @@ export class ChatSession {
     return true;
   }
 
-  control(request) {
+  control(request, timeoutMs = 15_000) {
     const request_id = crypto.randomBytes(8).toString('hex');
     return new Promise((resolve, reject) => {
       if (!this.writeLine({ type: 'control_request', request_id, request })) return reject(new Error('not running'));
       this.controlWaiters.set(request_id, { resolve, reject });
       setTimeout(() => {
         if (this.controlWaiters.delete(request_id)) reject(new Error('control request timed out'));
-      }, 15_000);
+      }, timeoutMs);
     });
   }
 
@@ -393,7 +396,9 @@ export class ChatSession {
     if (!IDLE_MS) return;
     this.idleTimer = setTimeout(() => {
       // Free the process when nothing is happening; the next message resumes the same conversation.
-      if (this.proc && this.state === 'idle') this.stop();
+      // Keep the process (and its localhost OAuth listener) while an MCP sign-in is waiting.
+      if (this.proc && this.state === 'idle' && !this.oauthWaiting()) this.stop();
+      else if (this.proc) this.touchIdle();
     }, IDLE_MS);
     this.idleTimer.unref?.();
   }
@@ -742,6 +747,88 @@ export class ChatSession {
         this.proc?.kill('SIGINT');
       } catch {}
     }
+  }
+
+  // ---------- MCP sign-in (OAuth) ----------
+  // Claude's OAuth flow redirects to http://localhost:<port>/callback on the machine running Claude.
+  // Opened from another device that page can't load, so the user pastes its address back here and
+  // we hand it to Claude (control request mcp_oauth_callback_url), which finishes the token exchange.
+
+  oauthWaiting() {
+    const now = Date.now();
+    for (const [name, f] of this.oauth) if (now - f.at > 15 * 60_000) this.oauth.delete(name);
+    return this.oauth.size > 0;
+  }
+
+  oauthFlows() {
+    this.oauthWaiting();
+    return [...this.oauth].map(([name, f]) => ({ name, port: f.port, authUrl: f.authUrl, at: f.at }));
+  }
+
+  setMcpServers(list) {
+    this.meta.mcpServers = (list || []).map((x) => ({ name: x.name, status: x.status, ...(x.error ? { error: String(x.error).slice(0, 300) } : {}), ...(x.scope ? { scope: x.scope } : {}) }));
+    this.broadcastState();
+  }
+
+  async mcpStatus({ start = false } = {}) {
+    if (!this.proc) {
+      if (!start) return this.meta.mcpServers || [];
+      this.ensureProcess();
+      this.touchIdle();
+    }
+    const r = await this.control({ subtype: 'mcp_status' }, 60_000);
+    this.setMcpServers(r?.mcpServers);
+    return this.meta.mcpServers;
+  }
+
+  async mcpAuthenticate(name) {
+    name = String(name || '');
+    if (!name) throw new Error('Which server?');
+    this.ensureProcess();
+    if (!this.proc) throw new Error('Claude is not running');
+    this.touchIdle();
+    // No redirectUri: keep the provider's registered localhost callback.
+    const r = await this.control({ subtype: 'mcp_authenticate', serverName: name }, 120_000);
+    if (!r?.requiresUserAction) {
+      this.oauth.delete(name);
+      this.refreshMcpSoon(name, false);
+      return { done: true };
+    }
+    if (r.callbackExpected) this.oauth.set(name, { state: r.state, port: r.callbackPort, authUrl: r.authUrl, at: Date.now() });
+    this.broadcastState();
+    return { authUrl: r.authUrl, callbackExpected: !!r.callbackExpected, port: r.callbackPort };
+  }
+
+  /** The flow a pasted callback URL belongs to, matched by its OAuth state (or port). */
+  oauthFlowFor(url) {
+    this.oauthWaiting();
+    const state = url.searchParams.get('state');
+    for (const [name, f] of this.oauth) if (state && f.state === state) return name;
+    for (const [name, f] of this.oauth) if (!f.state && f.port && String(f.port) === url.port) return name;
+    return null;
+  }
+
+  async mcpCallback(name, callbackUrl) {
+    if (!this.proc) throw new Error('This sign-in has ended (Claude stopped). Press Sign in again.');
+    await this.control({ subtype: 'mcp_oauth_callback_url', serverName: name, callbackUrl }, 60_000);
+    this.oauth.delete(name);
+    this.record({ k: 'notice', text: `Signed in to ${name}` });
+    this.refreshMcpSoon(name, true);
+    return { ok: true };
+  }
+
+  // Claude reconnects a configured server after sign-in by itself; nudge it if it hasn't yet.
+  refreshMcpSoon(name, reconnect) {
+    const check = async (tries) => {
+      try {
+        const list = await this.mcpStatus();
+        const s = list.find((x) => x.name === name);
+        if (!s || s.status === 'connected' || tries <= 0) return;
+        if (reconnect && tries === 3 && s.status !== 'pending') await this.control({ subtype: 'mcp_reconnect', serverName: name }, 60_000).catch(() => {});
+        setTimeout(() => check(tries - 1), 1500);
+      } catch {}
+    };
+    setTimeout(() => check(4), 1200);
   }
 
   async setMode(mode) {

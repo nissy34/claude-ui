@@ -327,6 +327,44 @@ function resolveDir(input) {
   return real;
 }
 
+function parseCallbackUrl(raw) {
+  let url;
+  try {
+    url = new URL(String(raw || '').trim());
+  } catch {
+    throw new Error('Paste the whole address from the browser bar, starting with http://localhost');
+  }
+  if (url.protocol !== 'http:' || !LOOPBACK.has(url.hostname)) throw new Error('That address is not a localhost callback (it should start with http://localhost or http://127.0.0.1)');
+  if (!url.searchParams.get('code') && !url.searchParams.get('error')) throw new Error('That address has no ?code=… in it. Copy it after you approve access, from the page that failed to load.');
+  return url;
+}
+const LOOPBACK = new Set(['localhost', '127.0.0.1', '[::1]']);
+
+// GET the callback on this machine, as the browser would have. Only loopback, only http.
+function replayLoopback(url) {
+  const hosts = url.hostname === '127.0.0.1' ? ['127.0.0.1'] : url.hostname === '[::1]' ? ['::1'] : ['127.0.0.1', '::1'];
+  const port = Number(url.port || 80);
+  let firstErr;
+  const tryHost = (i) =>
+    new Promise((resolve, reject) => {
+      const rq = http.get({ host: hosts[i], port, path: url.pathname + url.search, headers: { host: url.host }, timeout: 15_000 }, (r) => {
+        let body = '';
+        r.setEncoding('utf8');
+        r.on('data', (d) => body.length < 4000 && (body += d));
+        r.on('end', () => resolve({ status: r.statusCode, body: body.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 300) }));
+      });
+      rq.on('timeout', () => rq.destroy(new Error('timed out')));
+      rq.on('error', (e) => {
+        firstErr ||= e;
+        if (i + 1 < hosts.length && e.message !== 'timed out') tryHost(i + 1).then(resolve, reject);
+        else reject(firstErr);
+      });
+    });
+  return tryHost(0).catch((e) => {
+    throw new Error(e.code === 'ECONNREFUSED' ? `Nothing is waiting on port ${port} any more. The sign-in may have timed out or the app that started it stopped. Start the sign-in again.` : `Could not deliver it: ${e.message}`);
+  });
+}
+
 function wrap(fn) {
   return async (req, res) => {
     try {
@@ -524,6 +562,33 @@ app.post(
     const s = getSession(req);
     if (!s.running) s.start();
     res.json({ session: s.toJSON() });
+  })
+);
+
+// ---------- MCP sign-in (OAuth) ----------
+// See ChatSession.mcpAuthenticate: the provider redirects to localhost on this machine, which a
+// browser on another device can't reach, so the UI posts that address back here.
+function chatOf(req) {
+  const s = getSession(req);
+  if (s.meta.kind !== 'chat') throw new Error('MCP sign-in from here works in chats; in a terminal session run /mcp');
+  return s;
+}
+app.post('/api/sessions/:id/mcp/status', wrap(async (req, res) => res.json({ servers: await chatOf(req).mcpStatus({ start: !!req.body?.start }) })));
+app.post('/api/sessions/:id/mcp/auth', wrap(async (req, res) => res.json(await chatOf(req).mcpAuthenticate(req.body?.name))));
+app.post(
+  '/api/oauth/callback',
+  wrap(async (req, res) => {
+    const url = parseCallbackUrl(req.body?.url);
+    // A sign-in Claude started in one of our chats: hand it the URL so it checks the state and finishes.
+    const prefer = req.body?.sessionId ? store.get(req.body.sessionId) : null;
+    const chats = [prefer, ...store.sessions.values()].filter((s) => s && s.meta.kind === 'chat' && s.oauth?.size);
+    for (const s of chats) {
+      const name = s.oauthFlowFor(url);
+      if (name) return res.json({ ...(await s.mcpCallback(name, url.toString())), server: name, sessionId: s.id });
+    }
+    // Anything else listening on this machine (a terminal's /mcp, an MCP server's own login): replay it.
+    const r = await replayLoopback(url);
+    res.json({ ok: r.status < 400, replayed: true, status: r.status, body: r.body });
   })
 );
 
