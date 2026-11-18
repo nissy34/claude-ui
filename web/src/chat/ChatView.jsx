@@ -575,7 +575,7 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
   };
   const relogin = () => onCreate({ cwd: meta.cwd, kind: 'claude', name: 'Log in to Claude', login: true });
 
-  const project = (meta.project || meta.cwd)?.split(/[\\/]/).filter(Boolean).pop();
+  const project = meta.noFolder ? 'No folder' : (meta.project || meta.cwd)?.split(/[\\/]/).filter(Boolean).pop();
   const rate = meta.rateLimit?.unifiedWindows?.five_hour;
 
   return (
@@ -640,7 +640,7 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
               {items.length === 0 && conn === 'open' && (
                 <div className="welcome">
                   <span className="mark">&gt;_</span>
-                  <h2>What are we building in {project}?</h2>
+                  <h2>{meta.noFolder ? 'What can I help with?' : `What are we building in ${project}?`}</h2>
                   <div className="wsub">{meta.cwd}</div>
                 </div>
               )}

@@ -278,7 +278,7 @@ function Empty({ onMenu, onNew, missing }) {
       <div className="empty-body">
         <span className="mark">&gt;_</span>
         <h2>{missing ? 'That chat no longer exists' : greeting()}</h2>
-        <p>Start a chat in one of your projects. Claude keeps working on the server when you close this tab, and you can pick it up from any device.</p>
+        <p>Start a chat in one of your projects, or with no folder at all. Claude keeps working on the server when you close this tab, and you can pick it up from any device.</p>
         <button className="btn primary" onClick={onNew}>
           New chat
         </button>

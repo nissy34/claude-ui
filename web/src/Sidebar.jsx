@@ -83,7 +83,7 @@ export default function Sidebar({ sessions, activeId, onSelect, onCreate, onNewC
         (children.get(s.id) || []).sort((a, b) => a.createdAt - b.createdAt).forEach((c) => add(c, depth + 1));
       };
       roots.sort((a, b) => b.lastActivity - a.lastActivity).forEach((s) => add(s, 0));
-      out.push({ path: p, name: baseName(p), rows, latest: Math.max(...list.map((s) => s.lastActivity)) });
+      out.push({ path: p, name: list[0] && rootOf(list[0]).noFolder ? 'No folder' : baseName(p), rows, latest: Math.max(...list.map((s) => s.lastActivity)) });
     }
     return out.sort((a, b) => b.latest - a.latest);
   }, [sessions, q, showArchived]);
@@ -317,13 +317,45 @@ function ProjectMenu({ path, onClose, onCreate, onHistory }) {
   );
 }
 
+const NO_FOLDER = '__none__';
+const LAST_KEY = 'cw.lastFolder';
+
+function lastFolder() {
+  try {
+    return localStorage.getItem(LAST_KEY);
+  } catch {
+    return null;
+  }
+}
+
+const FolderIcon = () => (
+  <svg className="pl-ico" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
+    <path d="M1.5 4.5a1 1 0 0 1 1-1h3.6l1.4 1.5h6a1 1 0 0 1 1 1v6.5a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1z" fill="none" stroke="currentColor" strokeWidth="1.2" />
+  </svg>
+);
+const ChatIcon = () => (
+  <svg className="pl-ico" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
+    <path d="M2.5 3.5h11a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H7l-3 2.5v-2.5H2.5a1 1 0 0 1-1-1v-6a1 1 0 0 1 1-1z" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
+  </svg>
+);
+
 export function NewChatDialog({ projects, onCreate, onClose, onReloadProjects, onError, onHistory }) {
+  const all = projects.projects;
   const [q, setQ] = useState('');
-  const [sel, setSel] = useState(null);
+  // Start on the folder used last time (or "No folder"), else the most recently used folder.
+  const [sel, setSel] = useState(() => {
+    const last = lastFolder();
+    if (last === NO_FOLDER || (last && all.some((p) => p.path === last))) return last;
+    return all.find((p) => p.lastUsed)?.path || NO_FOLDER;
+  });
   const [worktree, setWorktree] = useState(false);
   const [newName, setNewName] = useState(null);
-  const list = projects.projects.filter((p) => !q || p.name.toLowerCase().includes(q.toLowerCase()));
-  const selProject = projects.projects.find((x) => x.path === sel);
+  const needle = q.trim().toLowerCase();
+  const list = all.filter((p) => !needle || p.name.toLowerCase().includes(needle));
+  const showNone = !needle || 'no folder'.includes(needle);
+  const showSearch = all.length > 6;
+  const selProject = all.find((x) => x.path === sel);
+  const noFolder = sel === NO_FOLDER;
 
   const create = async (e) => {
     e.preventDefault();
@@ -339,14 +371,25 @@ export function NewChatDialog({ projects, onCreate, onClose, onReloadProjects, o
 
   const start = (p = sel) => {
     if (!p) return;
-    const git = projects.projects.find((x) => x.path === p)?.git;
-    onCreate({ cwd: p, kind: 'chat', worktree: worktree && !!git });
+    try {
+      localStorage.setItem(LAST_KEY, p);
+    } catch {}
+    if (p === NO_FOLDER) onCreate({ noFolder: true, kind: 'chat' });
+    else onCreate({ cwd: p, kind: 'chat', worktree: worktree && !!all.find((x) => x.path === p)?.git });
     onClose();
+  };
+
+  const onSearchKey = (e) => {
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    if (needle && list.length) start(list[0].path);
+    else if (needle && showNone) start(NO_FOLDER);
+    else start();
   };
 
   return (
     <div className="modal" onClick={onClose}>
-      <div className="modal-card" onClick={(e) => e.stopPropagation()}>
+      <div className="modal-card new-chat" onClick={(e) => e.stopPropagation()}>
         <div className="modal-head">
           <span className="mtitle">New chat</span>
           <button className="icon-btn" onClick={onClose}>
@@ -354,50 +397,66 @@ export function NewChatDialog({ projects, onCreate, onClose, onReloadProjects, o
           </button>
         </div>
         <div className="modal-body">
-          <span className="label">Choose a folder</span>
-          <input className="field" autoFocus placeholder={`Search ${projects.root}`} value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && list.length === 1 && start(list[0].path)} />
-          <div className="pick-list">
+          <span className="label">Where should Claude work?</span>
+          {showSearch && <input className="field" autoFocus placeholder="Search folders" value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={onSearchKey} />}
+          <div className="pick-list" role="listbox" aria-label="Folder">
+            {showNone && (
+              <button role="option" aria-selected={noFolder} className={noFolder ? 'on' : ''} onClick={() => setSel(NO_FOLDER)} onDoubleClick={() => start(NO_FOLDER)} autoFocus={!showSearch}>
+                <ChatIcon />
+                <span className="pl-name">
+                  No folder
+                  <span className="pl-sub">Just chat. Claude works in a scratch folder.</span>
+                </span>
+                <span className="pl-check">{noFolder ? '✓' : ''}</span>
+              </button>
+            )}
+            {showNone && list.length > 0 && <div className="pl-sep" />}
             {list.map((p) => (
-              <button key={p.path} className={sel === p.path ? 'on' : ''} onClick={() => setSel(p.path)} onDoubleClick={() => start(p.path)}>
-                <svg className="pl-ico" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
-                  <path d="M1.5 4.5a1 1 0 0 1 1-1h3.6l1.4 1.5h6a1 1 0 0 1 1 1v6.5a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1z" fill="none" stroke="currentColor" strokeWidth="1.2" />
-                </svg>
+              <button key={p.path} role="option" aria-selected={sel === p.path} className={sel === p.path ? 'on' : ''} onClick={() => setSel(p.path)} onDoubleClick={() => start(p.path)}>
+                <FolderIcon />
                 <span className="pl-name">{p.name}</span>
                 {p.git && <span className="tag">git</span>}
+                {p.lastUsed > 0 && <span className="pl-when">{timeAgo(p.lastUsed)}</span>}
                 <span className="pl-check">{sel === p.path ? '✓' : ''}</span>
               </button>
             ))}
-            {list.length === 0 && <div className="pad muted">No folders match</div>}
+            {list.length === 0 && !showNone && <div className="pad muted">No folders match</div>}
           </div>
-          {newName === null ? (
-            <button className="link-btn" onClick={() => setNewName('')}>
-              + Create a new folder
-            </button>
-          ) : (
+          <div className="pl-foot">
+            <span className="muted" title={projects.root}>
+              {all.length === 0 ? 'No folders yet in ' : 'Folders in '}
+              {projects.root}
+            </span>
+            {newName === null && (
+              <button className="link-btn" onClick={() => setNewName('')}>
+                + New folder
+              </button>
+            )}
+          </div>
+          {newName !== null && (
             <form className="row" onSubmit={create}>
-              <input className="field" autoFocus placeholder="new-project" value={newName} onChange={(e) => setNewName(e.target.value)} />
+              <input className="field" autoFocus placeholder="new-project" value={newName} onChange={(e) => setNewName(e.target.value)} onKeyDown={(e) => e.key === 'Escape' && (e.stopPropagation(), setNewName(null))} />
               <button className="btn small">Create</button>
             </form>
           )}
-          <div className={`wt-row ${selProject && !selProject.git ? 'disabled' : ''}`}>
-            <div className="wt-text">
-              <div>Isolated worktree</div>
-              <div className="desc">{selProject && !selProject.git ? 'Needs a git repository' : 'Claude works on its own branch, so your checkout stays untouched'}</div>
+          {projects.rootCaseHint && (
+            <div className="pl-warn">
+              The projects folder is set as <code>{projects.root}</code>, but your home folder is spelled with different capitals. Set <code>CW_PROJECTS_ROOT={projects.rootCaseHint}</code> in <code>.env</code> and restart, so these chats line up with Claude on your computer.
             </div>
-            <button
-              type="button"
-              className={`toggle ${worktree && !(selProject && !selProject.git) ? 'on' : ''}`}
-              role="switch"
-              aria-checked={worktree}
-              aria-label="Isolated worktree"
-              disabled={!!(selProject && !selProject.git)}
-              onClick={() => setWorktree((w) => !w)}
-            />
-          </div>
+          )}
+          {selProject?.git && (
+            <div className="wt-row">
+              <div className="wt-text">
+                <div>Isolated worktree</div>
+                <div className="desc">Claude works on its own branch, so your checkout stays untouched</div>
+              </div>
+              <button type="button" className={`toggle ${worktree ? 'on' : ''}`} role="switch" aria-checked={worktree} aria-label="Isolated worktree" onClick={() => setWorktree((w) => !w)} />
+            </div>
+          )}
         </div>
         <div className="modal-foot">
           {sel && (
-            <button className="btn ghost" onClick={() => (onClose(), onHistory(sel))}>
+            <button className="btn ghost" onClick={() => (onClose(), onHistory(noFolder ? projects.scratch : sel))}>
               Resume a past conversation…
             </button>
           )}

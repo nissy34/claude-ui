@@ -233,6 +233,7 @@ All settings are environment variables; see [`.env.example`](.env.example).
 | `CW_CLAUDE_ARGS` | | Extra args for every `claude` process |
 | `CW_CHAT_IDLE_MINUTES` | `30` | Stop idle chat processes (they resume on the next message); `0` keeps them |
 | `CW_ALLOW_ANY_DIR` | `0` | `1` allows sessions outside the projects root |
+| `CW_SCRATCH_DIR` | `~/.claude-web/scratch` | Folder that "No folder" chats run in (shared, so Past conversations works there) |
 | `CW_CHILD_SESSIONS` | `1` | `0` turns off the built-in sessions tools (child sessions) |
 | `CW_DESKTOP_MCP` | `1` | `0` turns off the Claude Desktop handoff server (`/mcp`) and the shared notes tools |
 | `CW_MCP_TOKEN` | generated | Fixed bearer token for `/mcp` instead of the generated one |
@@ -245,7 +246,7 @@ All settings are environment variables; see [`.env.example`](.env.example).
 ## Security
 
 - One password, scrypt-hashed if you use `CW_PASSWORD_HASH`; login attempts are rate-limited per IP.
-- Auth is an HMAC-signed, `HttpOnly`, `SameSite=Strict` cookie. WebSocket upgrades check the cookie and the `Origin` header. Change `CW_SECRET` (or delete `~/.claude-web/secret`) to log out every device.
+- Auth is an HMAC-signed, `HttpOnly`, `SameSite=Strict` cookie. WebSocket upgrades check the cookie and the `Origin` header. Change `CW_SECRET` (or delete `~/.claude-web/secret`) to log out every device. Chats started with **No folder** run in `CW_SCRATCH_DIR`.
 - Sessions can only start inside `CW_PROJECTS_ROOT` unless you set `CW_ALLOW_ANY_DIR=1`.
 - The password, hash and secret are stripped from the environment of every process the server starts.
 - The Claude Desktop handoff endpoint (`/mcp`) uses its own bearer token, refuses browser origins, and rate-limits wrong tokens. Anyone with the token can start chats, so treat it like the password.
