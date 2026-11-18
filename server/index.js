@@ -22,7 +22,7 @@ import { getChanges, searchFiles, readFileSafe, createWorktree } from './git.js'
 import * as browser from './browser.js';
 import { listArtifacts, rawHandler, rawUrl } from './artifacts.js';
 import * as admin from './claude-admin.js';
-import { McpAdmin, onSignedIn, stopAllAdmins } from './mcp-admin.js';
+import { McpAdmin, onSignedIn, stopAllAdmins, pageTarget } from './mcp-admin.js';
 import { getModels } from './models.js';
 import { sideChat } from './side-chat.js';
 import { prStatus, mergeWhenReady } from './pr-status.js';
@@ -315,6 +315,59 @@ app.get('/api/me', (req, res) => res.json({ authed: isAuthed(req) }));
 // Handoff MCP for Claude Desktop (bearer token, not the login cookie).
 if (config.desktopMcp) {
   createDesktopMcp({ store, resolveDir, createWorktree, getChanges, listProjects }).mount(app);
+}
+
+// An MCP server's own localhost page (e.g. a login form from a URL-mode elicitation), forwarded so
+// a phone can open it. Authorised by the unguessable token in the path (see forwardedPageUrl), and
+// served sandboxed so the page can't act as this UI.
+app.all(['/mcp-page/:token', '/mcp-page/:token/*'], (req, res) => {
+  const t = pageTarget(req.params.token);
+  if (!t) return res.status(404).send('This sign-in page has expired. Start the sign-in again.');
+  const prefix = `/mcp-page/${req.params.token}`;
+  const cors = { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*', 'access-control-allow-methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS' };
+  if (req.method === 'OPTIONS') return res.set(cors).status(204).end();
+  const rest = req.originalUrl.slice(prefix.length) || '/';
+  // express.json may already have read a JSON body; send it on as it came.
+  let body = null;
+  if (req._body) body = Buffer.from(JSON.stringify(req.body));
+  const headers = { ...req.headers, host: `${t.host}:${t.port}` };
+  for (const h of ['cookie', 'origin', 'referer', 'x-forwarded-for', 'x-forwarded-proto', 'x-forwarded-host', 'connection', 'accept-encoding']) delete headers[h];
+  if (body) headers['content-length'] = String(body.length);
+  const hosts = t.host === '127.0.0.1' ? ['127.0.0.1'] : t.host === '[::1]' ? ['::1'] : ['127.0.0.1', '::1'];
+  const attempt = (i) => {
+    const up = http.request({ host: hosts[i], port: t.port, method: req.method, path: rest, headers, timeout: 30_000 }, (r) => {
+      const out = { ...r.headers, ...cors };
+      delete out['content-security-policy'];
+      delete out['set-cookie']; // would land on this UI's origin
+      delete out['content-length'];
+      out['content-security-policy'] = 'sandbox allow-forms allow-scripts allow-popups allow-modals';
+      out['cache-control'] = 'no-store';
+      if (out.location) out.location = rewriteLocation(out.location, t, prefix);
+      res.writeHead(r.statusCode, out);
+      if (!/text\/html/i.test(r.headers['content-type'] || '')) return r.pipe(res);
+      let html = '';
+      r.setEncoding('utf8');
+      r.on('data', (d) => (html += d));
+      r.on('end', () => res.end(html.replace(/\b(href|src|action)=(["'])\/(?!\/)/gi, `$1=$2${prefix}/`)));
+    });
+    up.on('timeout', () => up.destroy(new Error('timed out')));
+    up.on('error', (e) => {
+      if (!res.headersSent && i + 1 < hosts.length && e.message !== 'timed out') return attempt(i + 1);
+      if (!res.headersSent) res.status(502).send(`The page on port ${t.port} is not answering (${e.code || e.message}). The server that opened it may have stopped.`);
+      else res.end();
+    });
+    if (body) up.end(body);
+    else req.pipe(up);
+  };
+  attempt(0);
+});
+function rewriteLocation(loc, t, prefix) {
+  if (loc.startsWith('/') && !loc.startsWith('//')) return prefix + loc;
+  try {
+    const u = new URL(loc);
+    if (LOOPBACK.has(u.hostname) && Number(u.port || 80) === t.port) return prefix + u.pathname + u.search + u.hash;
+  } catch {}
+  return loc;
 }
 
 // Artifact files, authorised by a per-session signature in the path (no cookie: sandboxed

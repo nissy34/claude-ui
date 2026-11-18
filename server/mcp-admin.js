@@ -17,6 +17,40 @@ import { resolveCommand } from './launch.js';
 
 const FLOW_TTL = 15 * 60_000;
 
+// ---------- localhost pages from URL-mode elicitations ----------
+// An MCP server may ask the user to open http://localhost:<port>/… (its own login page). From a
+// phone that address is the phone itself, so the UI serves it at /mcp-page/<token>/… and forwards
+// to the port on this machine. The random token is the authorization: only ports named in a
+// pending request get one, and it expires.
+const PAGE_TTL = 30 * 60_000;
+const pageTokens = new Map(); // token -> { port, host, exp }
+const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
+
+export function forwardedPageUrl(raw) {
+  let u;
+  try {
+    u = new URL(raw);
+  } catch {
+    return null;
+  }
+  if (u.protocol !== 'http:' || !LOOPBACK_HOSTS.has(u.hostname)) return null;
+  const now = Date.now();
+  for (const [t, e] of pageTokens) if (e.exp < now) pageTokens.delete(t);
+  const token = crypto.randomBytes(18).toString('base64url');
+  pageTokens.set(token, { port: Number(u.port || 80), host: u.hostname, exp: now + PAGE_TTL });
+  return `/mcp-page/${token}${u.pathname}${u.search}${u.hash}`;
+}
+
+export function pageTarget(token) {
+  const e = pageTokens.get(token);
+  if (!e) return null;
+  if (e.exp < Date.now()) {
+    pageTokens.delete(token);
+    return null;
+  }
+  return e;
+}
+
 // ---------- elicitation ----------
 export function elicitationEvent(reqId, req) {
   return {
@@ -25,6 +59,7 @@ export function elicitationEvent(reqId, req) {
     message: String(req.message || '').slice(0, 4000),
     mode: req.mode || (req.url ? 'url' : 'form'),
     url: req.url || null,
+    pageUrl: req.url ? forwardedPageUrl(req.url) : null,
     schema: req.requested_schema || null,
     order: req.property_order || null,
     title: req.title || req.display_name || null,

@@ -228,14 +228,14 @@ export function Elicitation({ req, done, onAnswer }) {
       {req.message && <div className="elicit-msg">{req.message}</div>}
       {req.mode === 'url' ? (
         <div className="elicit-url">
-          <a className="btn small primary" href={req.url} target="_blank" rel="noreferrer" onClick={() => setOpened(true)}>
-            Open {(() => {
+          <a className="btn small primary" href={req.pageUrl || req.url} target="_blank" rel="noreferrer" onClick={() => setOpened(true)}>
+            {req.pageUrl ? 'Open the login page' : `Open ${(() => {
               try {
                 return new URL(req.url).host;
               } catch {
                 return 'link';
               }
-            })()}
+            })()}`}
           </a>
           {opened && <span className="muted">Finish there, then press Done.</span>}
         </div>
