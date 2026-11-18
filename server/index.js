@@ -447,7 +447,7 @@ app.get('/api/config', (req, res) => {
 // ---------- Claude Desktop handoff MCP + shared notes ----------
 app.get('/api/desktop-mcp', (req, res) => {
   if (!config.desktopMcp) return res.json({ enabled: false });
-  res.json({ enabled: true, token: getMcpToken(), fromEnv: !!process.env.CW_MCP_TOKEN, host: config.host, port: config.port, hostname: os.hostname() });
+  res.json({ enabled: true, token: getMcpToken(), fromEnv: !!process.env.CW_MCP_TOKEN, host: config.host, port: config.port, hostname: config.inDocker ? '' : os.hostname(), publicUrl: config.publicUrl, inDocker: config.inDocker });
 });
 app.post(
   '/api/desktop-mcp/token',

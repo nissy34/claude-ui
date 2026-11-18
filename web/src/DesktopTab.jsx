@@ -31,13 +31,14 @@ function Connect({ onError }) {
     api('/api/desktop-mcp')
       .then((i) => {
         setInfo(i);
-        if (!host && i.hostname) setHost(`${i.hostname}:${i.port}`);
+        if (i.publicUrl) setHost(i.publicUrl);
+        else if (!host && i.hostname) setHost(`${i.hostname}:${i.port}`);
       })
       .catch(onError);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
   if (!info) return <div className="muted">Loading…</div>;
   if (!info.enabled) return <p className="muted set-note">The handoff server is turned off (CW_DESKTOP_MCP=0).</p>;
-  const url = `${location.protocol}//${host || location.host}/mcp`;
+  const url = /^https?:\/\//i.test(host) ? `${host}/mcp` : `${location.protocol}//${host || location.host}/mcp`;
   const token = info.token;
   const server = (t) =>
     via === 'code'
@@ -66,6 +67,11 @@ function Connect({ onError }) {
       {localOnly && (
         <p className="set-note warn-note">
           This server listens on {info.host} only, so only Claude Desktop on this same computer can reach it. To use Desktop on another computer, set CW_HOST=0.0.0.0 (or your LAN or Tailscale address).
+        </p>
+      )}
+      {info.inDocker && !info.publicUrl && (
+        <p className="set-note warn-note">
+          This server runs in Docker, so it can't tell which address other computers use to reach it. Type it below, or set CW_PUBLIC_URL (e.g. http://myserver:8787) in .env and restart to fill it in for you.
         </p>
       )}
       <h4 className="set-h">1. Pick where you use Claude</h4>
@@ -114,7 +120,7 @@ function Connect({ onError }) {
       <div className="desk-fields">
         <label>
           Address Claude uses to reach this server
-          <input className="search-in" value={host} onChange={(e) => setHost(e.target.value.replace(/^https?:\/\//, '').replace(/\/.*$/, ''))} placeholder="192.168.1.20:8787" />
+          <input className="search-in" value={host} onChange={(e) => setHost(e.target.value.trim().replace(/^(https?:\/\/)?([^/]*).*$/i, '$1$2'))} placeholder="192.168.1.20:8787" />
         </label>
         {via === 'node' && (
           <label>
