@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { browserAvailable } from './browser.js';
 import { config, PRIVATE_ENV } from './config.js';
 import { resolveCommand } from './launch.js';
+import { withOpener } from './opener.js';
 import { elicitationEvent, elicitationResponse, mcpAuthMethods, slimServers } from './mcp-admin.js';
 
 const CHAT_DIR = path.join(config.dataDir, 'chats');
@@ -59,7 +60,7 @@ export function childEnv(sessionId) {
   env.CW_INTERNAL_URL = config.internalUrl;
   env.CW_INTERNAL_TOKEN = config.internalToken;
   env.CW_SESSION_ID = sessionId;
-  return env;
+  return withOpener(env, sessionId);
 }
 
 function clip(s, n = MAX_TEXT) {

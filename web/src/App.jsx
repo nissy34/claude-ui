@@ -7,6 +7,8 @@ import ChatView from './chat/ChatView.jsx';
 import Settings, { Shortcuts } from './Settings.jsx';
 import { newChatDefaults } from './prefs.js';
 import ArtifactsGallery from './ArtifactsGallery.jsx';
+import SigninWindow from './SigninWindow.jsx';
+import { setBrowserAvailable } from './chat/McpAuth.jsx';
 import Scheduled from './Scheduled.jsx';
 
 function readHash() {
@@ -27,6 +29,20 @@ export default function App() {
       return false;
     }
   });
+  const [signin, setSignin] = useState(null); // { open, active } for the sign-in window
+  const [signinPages, setSigninPages] = useState([]);
+  const [signinInfos, setSigninInfos] = useState({});
+  const closeSignin = useCallback(() => setSignin(null), []);
+  useEffect(() => {
+    const show = () => {
+      api('/api/signin-pages')
+        .then((r) => setSigninPages(r.pages || []))
+        .catch(() => {});
+      setSignin((s) => ({ open: true, active: s?.active }));
+    };
+    window.addEventListener('cw-show-signin', show);
+    return () => window.removeEventListener('cw-show-signin', show);
+  }, []);
   const [dialog, setDialog] = useState(null); // {type:'new'} | {type:'history', path} | {type:'settings'} | {type:'keys'}
   const [toast, setToast] = useState('');
   const eventsRef = useRef(null);
@@ -56,6 +72,11 @@ export default function App() {
       ws.onmessage = (ev) => {
         const msg = JSON.parse(ev.data);
         if (msg.t === 'sessions') setSessions(msg.sessions);
+        else if (msg.t === 'signin-page') {
+          setSigninInfos((m) => ({ ...m, [msg.id]: msg }));
+          setSignin({ open: true, active: msg.id });
+          notifyUser('Sign-in page opened', `${msg.server || msg.host}${msg.from ? ` · ${msg.from.name}` : ''}`);
+        } else if (msg.t === 'signin-pages') setSigninPages(msg.pages || []); else if (msg.t === 'error') showError(new Error(msg.error));
         retry = 500;
       };
       ws.onclose = () => {
@@ -77,6 +98,9 @@ export default function App() {
       }
     };
     document.addEventListener('visibilitychange', onVis);
+    api('/api/config')
+      .then((c) => setBrowserAvailable(!!c.browser))
+      .catch(() => {});
     return () => {
       closed = true;
       clearTimeout(timer);
@@ -204,6 +228,9 @@ export default function App() {
           onHistory={(path) => setDialog({ type: 'history', path })}
         />
       )}
+      {signin?.open && (
+        <SigninWindow pages={signinPages} active={signin.active} infos={signinInfos} onPick={(id) => setSignin({ open: true, active: id })} onClose={closeSignin} onError={showError} />
+      )}
       {dialog?.type === 'history' && <HistoryDialog path={dialog.path} onCreate={createSession} onClose={() => setDialog(null)} onError={showError} />}
       {dialog?.type === 'settings' && <Settings initialTab={dialog.tab} projects={projects} activeCwd={active?.cwd} onClose={() => setDialog(null)} onError={showError} onKeys={() => setDialog({ type: 'keys' })} />}
       {dialog?.type === 'keys' && <Shortcuts onClose={() => setDialog(null)} />}
@@ -258,4 +285,10 @@ function Empty({ onMenu, onNew, missing }) {
       </div>
     </div>
   );
+}
+
+function notifyUser(title, body) {
+  try {
+    if ('Notification' in window && Notification.permission === 'granted' && document.hidden) new Notification(title, { body });
+  } catch {}
 }

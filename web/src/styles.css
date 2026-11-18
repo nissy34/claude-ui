@@ -783,3 +783,17 @@ kbd { display: inline-block; font: 11.5px var(--mono); background: var(--panel-2
 .mcp-logins .mcp-auth-row { margin-top: 6px; }
 .mcp-logins .item { flex-wrap: wrap; }
 .mcp-logins .login-paste { flex-basis: 100%; margin-top: 4px; }
+
+/* Sign-in window (server-side browser) */
+.signin-card { width: min(1100px, calc(100vw - 24px)); max-width: none; height: min(860px, calc(100vh - 24px)); display: flex; flex-direction: column; }
+.signin-card .modal-head { gap: 8px; }
+.signin-card .spacer { flex: 1; }
+.signin-from { font-size: 12.5px; }
+.signin-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.signin-body > * { flex: 1; min-height: 0; }
+.signin-note { font-size: 12px; padding: 6px 14px 10px; }
+.signin-tabs { display: flex; gap: 4px; padding: 0 12px 6px; overflow-x: auto; }
+.signin-tab { border: 1px solid var(--line); background: var(--panel-2); border-radius: 7px; padding: 4px 10px; font-size: 12.5px; white-space: nowrap; color: var(--text); }
+.signin-tab.on { border-color: var(--accent); color: var(--accent); }
+.signin-foot { display: flex; align-items: center; gap: 8px; justify-content: space-between; padding: 6px 14px 10px; font-size: 12px; }
+.signin-empty { margin: auto; }
