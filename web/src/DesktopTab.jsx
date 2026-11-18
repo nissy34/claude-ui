@@ -163,31 +163,58 @@ function Connect({ onError }) {
   );
 }
 
-function Notes({ onError }) {
+function NoteScope({ projects, value, onChange }) {
+  const options = [...new Set([value, ...(projects?.projects || []).map((p) => p.path)].filter(Boolean))];
+  return (
+    <select className="proj-pick" value={value || ''} onChange={(e) => onChange(e.target.value)}>
+      <option value="">Global notes (every project)</option>
+      {options.map((p) => (
+        <option key={p} value={p}>
+          {p.split(/[\\/]/).filter(Boolean).pop()} — project memory
+        </option>
+      ))}
+    </select>
+  );
+}
+
+function Notes({ onError, projects, activeCwd }) {
+  const [project, setProject] = useState(activeCwd || '');
   const [list, setList] = useState(null);
+  const [dir, setDir] = useState('');
   const [q, setQ] = useState('');
   const [open, setOpen] = useState(null); // full note
   const [edit, setEdit] = useState(null); // {id?, title, content}
+  const qs = (extra = {}) => {
+    const p = new URLSearchParams({ ...(project ? { project } : {}), ...extra });
+    const t = p.toString();
+    return t ? `?${t}` : '';
+  };
   const load = () =>
-    api(`/api/notes${q ? `?q=${encodeURIComponent(q)}` : ''}`)
-      .then((r) => setList(r.notes))
+    api(`/api/notes${qs(q ? { q } : {})}`)
+      .then((r) => {
+        setList(project ? r.projectNotes.concat(r.globalNotes) : r.notes);
+        setDir(r.memoryDir || '');
+      })
       .catch(onError);
   useEffect(() => {
+    setOpen(null);
     load();
-  }, [q]); // eslint-disable-line react-hooks/exhaustive-deps
-  const view = async (id) => {
-    if (open?.id === id) return setOpen(null);
+  }, [q, project]); // eslint-disable-line react-hooks/exhaustive-deps
+  const scopeQs = (n) => (n.scope === 'project' ? qs() : '');
+  const key = (n) => `${n.scope}:${n.id}`;
+  const view = async (n) => {
+    if (open?.key === key(n)) return setOpen(null);
     try {
-      setOpen(await api(`/api/notes/${encodeURIComponent(id)}`));
+      setOpen({ ...(await api(`/api/notes/${encodeURIComponent(n.id)}${scopeQs(n)}`)), key: key(n) });
     } catch (e) {
       onError(e);
     }
   };
   const del = async (n) => {
-    if (!window.confirm(`Delete the note "${n.title}"?`)) return;
+    if (!window.confirm(`Delete the note "${n.title}"?${n.scope === 'project' ? ' It is removed from this project\'s Claude Code memory.' : ''}`)) return;
     try {
-      await api(`/api/notes/${encodeURIComponent(n.id)}`, { method: 'DELETE' });
-      if (open?.id === n.id) setOpen(null);
+      await api(`/api/notes/${encodeURIComponent(n.id)}${scopeQs(n)}`, { method: 'DELETE' });
+      if (open?.key === key(n)) setOpen(null);
       load();
     } catch (e) {
       onError(e);
@@ -196,7 +223,7 @@ function Notes({ onError }) {
   const save = async (e) => {
     e.preventDefault();
     try {
-      await api('/api/notes', { method: 'POST', body: edit });
+      await api('/api/notes', { method: 'POST', body: { ...edit, project: edit.scope === 'global' ? undefined : project || undefined } });
       setEdit(null);
       setOpen(null);
       load();
@@ -207,33 +234,39 @@ function Notes({ onError }) {
   return (
     <>
       <div className="tab-top">
+        <NoteScope projects={projects} value={project} onChange={setProject} />
         <input className="search-in" placeholder="Search notes" value={q} onChange={(e) => setQ(e.target.value)} />
         {!edit && (
-          <button className="btn small primary" onClick={() => setEdit({ title: '', content: '' })}>
+          <button className="btn small primary" onClick={() => setEdit({ title: '', content: '', scope: project ? 'project' : 'global' })}>
             + New note
           </button>
         )}
       </div>
-      <p className="muted set-note">Shared between Claude Desktop and every chat here. Claude reads them when you refer to earlier work, and writes them when you ask it to remember something.</p>
+      <p className="muted set-note">
+        {project
+          ? `This project's notes are its Claude Code memory${dir ? ` (${dir})` : ''}: every Claude Code session in the project loads them, including what Claude chose to remember itself. Global notes are listed below them.`
+          : 'Global notes are shared by every project, Claude Desktop and every chat. Pick a project to see its own notes.'}
+      </p>
       {edit && (
         <form className="add-form" onSubmit={save}>
-          <input value={edit.title} onChange={(e) => setEdit({ ...edit, title: e.target.value })} placeholder="Title" required />
+          <input value={edit.title} onChange={(e) => setEdit({ ...edit, title: e.target.value })} placeholder="Title" required disabled={!!edit.id} />
           <textarea rows={6} value={edit.content} onChange={(e) => setEdit({ ...edit, content: e.target.value })} placeholder="Markdown" />
           <div className="row end">
             <button type="button" className="btn small" onClick={() => setEdit(null)}>
               Cancel
             </button>
-            <button className="btn small primary">Save</button>
+            <button className="btn small primary">Save {edit.scope === 'global' ? 'global note' : 'to project memory'}</button>
           </div>
         </form>
       )}
       {list?.length === 0 && <div className="empty-box">{q ? 'No matching notes.' : 'No notes yet.'}</div>}
       <div className="item-list">
         {list?.map((n) => (
-          <div key={n.id} className="item note-item">
-            <div className="item-main" onClick={() => view(n.id)} style={{ cursor: 'pointer' }}>
+          <div key={key(n)} className="item note-item">
+            <div className="item-main" onClick={() => view(n)} style={{ cursor: 'pointer' }}>
               <div className="item-title">
-                {n.title} {n.tags.map((t) => (
+                {n.title} {project && <span className="tag">{n.scope === 'project' ? 'project' : 'global'}</span>}
+                {n.tags.map((t) => (
                   <span key={t} className="tag">
                     {t}
                   </span>
@@ -242,9 +275,17 @@ function Notes({ onError }) {
               <div className="item-sub">
                 {n.source} · {timeAgo(Date.parse(n.updated))}
               </div>
-              {open?.id === n.id ? <pre className="set-pre">{open.content}</pre> : <div className="item-sub">{n.preview.slice(0, 140)}</div>}
+              {open?.key === key(n) ? <pre className="set-pre">{open.content}</pre> : <div className="item-sub">{(n.description || n.preview).slice(0, 140)}</div>}
             </div>
-            <button className="icon-btn" title="Edit" onClick={() => api(`/api/notes/${encodeURIComponent(n.id)}`).then((f) => setEdit({ id: f.id, title: f.title, content: f.content })).catch(onError)}>
+            <button
+              className="icon-btn"
+              title="Edit"
+              onClick={() =>
+                api(`/api/notes/${encodeURIComponent(n.id)}${scopeQs(n)}`)
+                  .then((f) => setEdit({ id: f.id, title: f.title, content: f.content, scope: n.scope }))
+                  .catch(onError)
+              }
+            >
               ✎
             </button>
             <button className="icon-btn" title="Delete" onClick={() => del(n)}>
@@ -257,7 +298,7 @@ function Notes({ onError }) {
   );
 }
 
-export default function DesktopTab({ onError }) {
+export default function DesktopTab({ onError, projects, activeCwd }) {
   const [view, setView] = useState('connect');
   return (
     <>
@@ -266,10 +307,10 @@ export default function DesktopTab({ onError }) {
           Connect
         </button>
         <button className={view === 'notes' ? 'on' : ''} onClick={() => setView('notes')}>
-          Shared notes
+          Notes
         </button>
       </div>
-      {view === 'connect' ? <Connect onError={onError} /> : <Notes onError={onError} />}
+      {view === 'connect' ? <Connect onError={onError} /> : <Notes onError={onError} projects={projects} activeCwd={activeCwd} />}
     </>
   );
 }

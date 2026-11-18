@@ -171,9 +171,17 @@ Then use "Add to Home Screen" for a full-screen app.
 
 ## Claude Desktop handoff
 
-The server is also an MCP server that the Claude Desktop app can use, so the two can hand work to each other. From Desktop you can say "continue this tonight on my machine" (starts a chat here, or leaves the brief in a new chat's message box for you to send later), ask "what did that chat do?", send a chat new instructions, and keep **shared notes** that every chat here can read and write too (the built-in `notes` tools).
+The server is also an MCP server that the Claude Desktop app can use, so the two can hand work to each other. From Desktop you can say "continue this tonight on my machine" (starts a chat here, or leaves the brief in a new chat's message box for you to send later), ask "what did that chat do?", send a chat new instructions, and keep **notes** that every chat here can read and write too (the built-in `notes` tools).
 
-Tools Desktop gets: `list_projects`, `list_sessions`, `get_session` (transcript, files edited, commands run, uncommitted changes), `handoff`, `send_message`, `list_notes`, `read_note`, `write_note`, `delete_note`.
+Notes have two scopes:
+- **Project notes** are Claude Code's own memory for that project (`~/.claude/projects/<repo path>/memory/`, one file per note plus the `MEMORY.md` index). Every Claude Code session in the project loads the index, so chats here, the terminal and the Desktop app's Code tab on this machine all see them, and listing a project's notes also shows what Claude remembered by itself. Worktrees share their repo's memory. A user-level `autoMemoryDirectory` setting is respected.
+- **Global notes** (preferences, things that span projects) live in `~/.claude-web/notes.json`; chats here get a short list of them in their system prompt.
+
+A chat's notes tools default to its own project (`scope: "global"` for global notes). From Desktop, pass `project` (from `list_projects`) for project notes; leave it out for global notes. Settings > Claude Desktop > Notes lists, adds, edits and deletes both.
+
+Tools Desktop gets: `list_projects`, `list_sessions`, `get_session` (transcript, files edited, commands run, uncommitted changes), `handoff`, `send_message`, `stop_session`, `rename_session`, `archive_session`, `set_session_options` (model, effort, permission mode), `list_notes`, `read_note`, `write_note`, `delete_note`. `get_session` also returns the chat's current task list.
+
+Chats here get the same session control (`stop_session`, `rename_session`, `archive_session` next to `set_session_options`), and an `update_plan` tool that shows a live task list with a progress bar above the message box.
 
 **Set it up** in Settings > Claude Desktop, which shows your token and ready-to-copy snippets.
 

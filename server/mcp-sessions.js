@@ -67,6 +67,21 @@ const TOOLS = [
     },
   },
   {
+    name: 'stop_session',
+    description: "Stop another session's current turn (like the user pressing Stop). It keeps its conversation; send it a message to continue.",
+    inputSchema: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
+  },
+  {
+    name: 'archive_session',
+    description: 'Archive a session (hides it from the sidebar list; nothing is deleted), or unarchive it with archived=false.',
+    inputSchema: { type: 'object', properties: { id: { type: 'string' }, archived: { type: 'boolean', description: 'Default true.' } }, required: ['id'] },
+  },
+  {
+    name: 'rename_session',
+    description: "Set a session's title (shown in the sidebar). Use your own session id to rename this chat.",
+    inputSchema: { type: 'object', properties: { id: { type: 'string' }, title: { type: 'string' } }, required: ['id', 'title'] },
+  },
+  {
     name: 'list_sessions',
     description: 'List sessions. By default only the children of this session; set all=true for every session.',
     inputSchema: { type: 'object', properties: { all: { type: 'boolean' } } },
@@ -95,6 +110,12 @@ async function runTool(name, a = {}) {
       const t = Math.min(Math.max(Number(a.timeout_seconds) || 300, 1), 1800);
       return call('GET', `/internal/sessions/${encodeURIComponent(a.id)}?wait=${a.wait ? 1 : 0}&timeout=${t}`);
     }
+    case 'stop_session':
+      return call('POST', `/internal/sessions/${encodeURIComponent(a.id)}/control/stop`, {});
+    case 'archive_session':
+      return call('POST', `/internal/sessions/${encodeURIComponent(a.id)}/control/${a.archived === false ? 'unarchive' : 'archive'}`, {});
+    case 'rename_session':
+      return call('POST', `/internal/sessions/${encodeURIComponent(a.id === 'self' ? SELF : a.id)}/control/rename`, { title: a.title ?? a.name });
     case 'list_sessions':
       return call('GET', `/internal/sessions${a.all ? '' : `?parentId=${encodeURIComponent(SELF)}`}`);
     default:

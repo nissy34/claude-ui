@@ -13,6 +13,7 @@ import { fileURLToPath } from 'node:url';
 import { config } from './config.js';
 import { loginAllowed, loginFailed } from './auth.js';
 import * as notes from './notes.js';
+import { controlSession } from './session-control.js';
 
 const TOKEN_FILE = path.join(config.dataDir, 'mcp-token');
 const BRIDGE = path.join(path.dirname(fileURLToPath(import.meta.url)), 'desktop-bridge.mjs');
@@ -116,24 +117,56 @@ const TOOLS = [
     },
   },
   {
-    name: 'list_notes',
-    description:
-      'List the shared notes (newest first). Notes are shared between Claude Desktop and the Claude Code chats on the user\'s machine: handoffs, decisions, preferences, things to remember. Check them when the user refers to earlier work.',
-    inputSchema: { type: 'object', properties: { query: { type: 'string', description: 'Words to search for.' }, tag: { type: 'string' }, limit: { type: 'number' } } },
+    name: 'stop_session',
+    description: "Stop a chat's current turn (like pressing Stop in the UI). It keeps its conversation; send_message continues it.",
+    inputSchema: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
   },
   {
-    name: 'read_note',
-    description: 'Read one shared note in full, by id or exact title.',
-    inputSchema: { type: 'object', properties: { id: { type: 'string', description: 'Note id or exact title.' } }, required: ['id'] },
+    name: 'archive_session',
+    description: 'Archive a chat (hidden from the sidebar, nothing deleted), or unarchive it with archived=false.',
+    inputSchema: { type: 'object', properties: { id: { type: 'string' }, archived: { type: 'boolean', description: 'Default true.' } }, required: ['id'] },
   },
   {
-    name: 'write_note',
-    description: 'Create or update a shared note. A note with the same title (or the given id) is replaced, or added to with append=true.',
+    name: 'rename_session',
+    description: "Set a chat's title in the sidebar.",
+    inputSchema: { type: 'object', properties: { id: { type: 'string' }, title: { type: 'string' } }, required: ['id', 'title'] },
+  },
+  {
+    name: 'set_session_options',
+    description: "Change a chat's model, effort or permission mode. Takes effect from its next message (model and mode also mid-turn).",
     inputSchema: {
       type: 'object',
       properties: {
+        id: { type: 'string' },
+        model: { type: 'string', description: 'Model alias or id, e.g. opus, sonnet, haiku; "default" for the account default.' },
+        effort: { type: 'string', enum: EFFORTS },
+        permission_mode: { type: 'string', enum: MODES },
+      },
+      required: ['id'],
+    },
+  },
+  {
+    name: 'list_notes',
+    description:
+      "List notes. With project: that project's notes, which live in Claude Code's memory for the project (every Claude Code session there loads them, and they include what Claude remembered on its own), plus global notes. Without project: only global notes (preferences and things that span projects). Check them when the user refers to earlier work.",
+    inputSchema: { type: 'object', properties: { project: { type: 'string', description: 'Project folder name (from list_projects) or path.' }, query: { type: 'string', description: 'Words to search for.' }, tag: { type: 'string' }, limit: { type: 'number' } } },
+  },
+  {
+    name: 'read_note',
+    description: 'Read one note in full, by id or title. With project, looks in that project first, then global notes.',
+    inputSchema: { type: 'object', properties: { id: { type: 'string', description: 'Note id or title.' }, project: { type: 'string' } }, required: ['id'] },
+  },
+  {
+    name: 'write_note',
+    description:
+      "Create or update a note. With project, it goes into that project's Claude Code memory, so every future session in that project sees it. Without project it is a global note (use for preferences and things that span projects). A note with the same title (or id) is replaced, or added to with append=true.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project: { type: 'string', description: 'Project folder name (from list_projects) or path. Leave out for a global note.' },
         title: { type: 'string' },
         content: { type: 'string', description: 'Markdown.' },
+        description: { type: 'string', description: 'One line for the memory index (defaults to the first line of content).' },
         tags: { type: 'array', items: { type: 'string' } },
         append: { type: 'boolean', description: 'Add to the end of the existing note instead of replacing it.' },
         id: { type: 'string', description: 'Update this note (by id) instead of matching by title.' },
@@ -143,8 +176,8 @@ const TOOLS = [
   },
   {
     name: 'delete_note',
-    description: 'Delete a shared note by id or exact title.',
-    inputSchema: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
+    description: 'Delete a note by id or title. With project, from that project (then global).',
+    inputSchema: { type: 'object', properties: { id: { type: 'string' }, project: { type: 'string' } }, required: ['id'] },
   },
 ];
 
@@ -180,6 +213,21 @@ function activity(events) {
     if (name === 'Bash' && input.command) commands.push(String(input.command).slice(0, 300));
   }
   return { filesEdited: [...files.keys()], commands: commands.slice(-25), commandCount: commands.length, toolCounts: counts };
+}
+
+/** The latest task list the chat showed (update_plan or TodoWrite). */
+function currentPlan(events) {
+  for (let i = events.length - 1; i >= 0; i--) {
+    const e = events[i];
+    if (e.k !== 'block' || e.block?.type !== 'tool_use' || e.parent) continue;
+    const { name, input = {} } = e.block;
+    if (/__update_plan$/.test(name)) {
+      const earlier = events.slice(0, i).reverse().find((f) => f.k === 'block' && f.block?.type === 'tool_use' && !f.parent && /__update_plan$/.test(f.block.name) && f.block.input?.title);
+      return { title: input.title || earlier?.block.input.title || null, steps: (input.steps || []).map((x) => ({ step: x.step ?? x.title ?? x.content, status: x.status })) };
+    }
+    if (name === 'TodoWrite') return { title: null, steps: (input.todos || []).map((x) => ({ step: x.content, status: x.status })) };
+  }
+  return null;
 }
 
 export function createDesktopMcp({ store, resolveDir, createWorktree, getChanges, listProjects }) {
@@ -221,6 +269,7 @@ export function createDesktopMcp({ store, resolveDir, createWorktree, getChanges
           waitingForPermission: s.pending.size > 0 ? [...s.pending.values()].map((p) => p.tool) : false,
           queuedMessages: s.inbox.length,
           ...(s.meta.draft ? { draftWaitingToBeSent: s.meta.draft } : {}),
+          plan: currentPlan(s.events),
           activity: activity(s.events),
           uncommittedChanges: changes,
           transcript: s.transcriptText(max),
@@ -281,14 +330,24 @@ export function createDesktopMcp({ store, resolveDir, createWorktree, getChanges
         const r = s.deliver({ text, from: DESKTOP });
         return { ok: true, session: summary(s), note: r.held ? "Held: the chat can't take messages right now (it may be open in the terminal); delivered when it can." : r.queued ? `Queued: the chat is busy; ${r.queued} message(s) are delivered in order when its turn ends.` : 'Delivered; it is working on it.' };
       }
+      case 'stop_session':
+        return { ...(await controlSession(store, chat(a.id), 'stop', a, 'Claude Desktop')), session: summary(chat(a.id)) };
+      case 'archive_session':
+        return { ...(await controlSession(store, chat(a.id), a.archived === false ? 'unarchive' : 'archive', a, 'Claude Desktop')), session: summary(chat(a.id)) };
+      case 'rename_session':
+        return { ...(await controlSession(store, chat(a.id), 'rename', a, 'Claude Desktop')), session: summary(chat(a.id)) };
+      case 'set_session_options':
+        if (a.permission_mode && !MODES.includes(a.permission_mode)) throw new Error(`permission_mode must be one of ${MODES.join(', ')}`);
+        return { ...(await controlSession(store, chat(a.id), 'options', a, 'Claude Desktop')), session: summary(chat(a.id)) };
       case 'list_notes':
-        return { notes: notes.listNotes(a) };
       case 'read_note':
-        return notes.getNote(a.id ?? a.title);
       case 'write_note':
-        return notes.writeNote({ ...a, source: 'Claude Desktop' });
-      case 'delete_note':
-        return notes.deleteNote(a.id ?? a.title);
+      case 'delete_note': {
+        const projectDir = a.project ? resolveDir(String(a.project)) : null;
+        const res = notes.notesOp(name.split('_')[0], a, { projectDir, source: 'Claude Desktop' });
+        if (name === 'list_notes' && !projectDir) res.note = 'Global notes only. Pass project to include that project\'s notes (its Claude Code memory).';
+        return res;
+      }
       default:
         throw new Error(`Unknown tool ${name}`);
     }
@@ -307,7 +366,7 @@ export function createDesktopMcp({ store, resolveDir, createWorktree, getChanges
             capabilities: { tools: {} },
             serverInfo: { name: 'claude-ui', version: '1.0.0' },
             instructions:
-              "Connects to Claude Code running in the user's own web UI on their computer. Use it to hand work off there (handoff), check what a chat did (list_sessions, get_session), continue a chat (send_message), and share notes both ways (list_notes, read_note, write_note).",
+              "Connects to Claude Code running in the user's own web UI on their computer. Use it to hand work off there (handoff), check what a chat did (list_sessions, get_session), continue or manage a chat (send_message, stop_session, rename_session, archive_session, set_session_options), and share notes both ways (list_notes, read_note, write_note).",
           });
         }
         case 'ping':

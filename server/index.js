@@ -29,6 +29,7 @@ import { sideChat } from './side-chat.js';
 import { prStatus, mergeWhenReady } from './pr-status.js';
 import * as schedules from './schedules.js';
 import * as notes from './notes.js';
+import { controlSession } from './session-control.js';
 import { createDesktopMcp, getToken as getMcpToken, rotateToken as rotateMcpToken } from './desktop-mcp.js';
 import { authStatus, mcpList, pluginList, cliVersion, permissionRules, removePermissionRule } from './claude-admin.js';
 
@@ -201,6 +202,17 @@ app.post(
   })
 );
 
+app.post(
+  '/internal/sessions/:id/control/:action',
+  wrap(async (req, res) => {
+    const s = store.get(req.params.id);
+    if (!s) throw new Error('No such session. list_sessions shows the ids.');
+    const caller = store.get(req.headers['x-cw-session']);
+    if (s === caller && req.params.action === 'stop') throw new Error('That is this session.');
+    res.json({ ...(await controlSession(store, s, req.params.action, req.body || {}, caller ? `chat "${caller.meta.name}"` : 'another chat')), session: sessionSummary(s) });
+  })
+);
+
 app.get(
   '/internal/sessions/:id',
   wrap(async (req, res) => {
@@ -299,15 +311,10 @@ app.post(
   '/internal/notes/:op',
   wrap(async (req, res) => {
     const b = req.body || {};
-    const op = req.params.op;
-    if (op === 'list') return res.json({ notes: notes.listNotes(b) });
-    if (op === 'read') return res.json(notes.getNote(b.id));
-    if (op === 'delete') return res.json(notes.deleteNote(b.id));
-    if (op === 'write') {
-      const from = store.get(req.headers['x-cw-session']);
-      return res.json(notes.writeNote({ ...b, source: from ? `chat "${from.meta.name}"` : 'chat' }));
-    }
-    throw new Error('Unknown op');
+    const from = store.get(req.headers['x-cw-session']);
+    // Project notes default to the calling chat's project.
+    const projectDir = b.project ? resolveDir(String(b.project)) : from?.meta.project || from?.meta.cwd;
+    res.json(notes.notesOp(req.params.op, b, { projectDir, source: from ? `chat "${from.meta.name}"` : 'chat' }));
   })
 );
 
@@ -453,18 +460,22 @@ app.post(
   '/api/desktop-mcp/token',
   wrap(async (req, res) => res.json({ token: rotateMcpToken() }))
 );
-app.get('/api/notes', (req, res) => res.json({ notes: notes.listNotes({ query: req.query.q, limit: 200 }) }));
+const notesProject = (p) => (p && p !== 'global' ? resolveDir(String(p)) : null);
+app.get(
+  '/api/notes',
+  wrap(async (req, res) => res.json(notes.notesOp('list', { query: req.query.q, limit: 200, scope: req.query.project ? undefined : 'global' }, { projectDir: notesProject(req.query.project) })))
+);
 app.get(
   '/api/notes/:id',
-  wrap(async (req, res) => res.json(notes.getNote(req.params.id)))
+  wrap(async (req, res) => res.json(notes.notesOp('read', { id: req.params.id, scope: req.query.project ? 'project' : 'global' }, { projectDir: notesProject(req.query.project) })))
 );
 app.post(
   '/api/notes',
-  wrap(async (req, res) => res.json(notes.writeNote({ ...req.body, append: false, source: 'you (Settings)' })))
+  wrap(async (req, res) => res.json(notes.notesOp('write', { ...req.body, append: false, scope: req.body?.project ? 'project' : 'global' }, { projectDir: notesProject(req.body?.project), source: 'you (Settings)' })))
 );
 app.delete(
   '/api/notes/:id',
-  wrap(async (req, res) => res.json(notes.deleteNote(req.params.id)))
+  wrap(async (req, res) => res.json(notes.notesOp('delete', { id: req.params.id, scope: req.query.project ? 'project' : 'global' }, { projectDir: notesProject(req.query.project) })))
 );
 
 // ---------- projects ----------

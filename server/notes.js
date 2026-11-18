@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { config } from './config.js';
+import { listProjectNotes, getProjectNote, writeProjectNote, deleteProjectNote, memoryDir } from './project-memory.js';
 
 const FILE = path.join(config.dataDir, 'notes.json');
 const MAX_NOTES = 1000;
@@ -81,4 +82,56 @@ export function deleteNote(ref) {
   notes = notes.filter((x) => x !== n);
   save();
   return { ok: true, deleted: n.title };
+}
+
+// ---------- scopes: project notes (Claude Code's project memory) and global notes ----------
+
+/**
+ * One entry point for the notes tools. projectDir is the project the call is about (a chat's
+ * folder, or the "project" a Desktop call named); scope "global" skips it.
+ */
+export function notesOp(op, a = {}, { projectDir, source } = {}) {
+  const global = a.scope === 'global' || !projectDir;
+  const ref = a.id ?? a.title;
+  switch (op) {
+    case 'list': {
+      const g = listNotes(a).map((n) => ({ ...n, scope: 'global' }));
+      if (global) return { scope: 'global', notes: g };
+      const p = listProjectNotes(projectDir, a).map((n) => ({ ...n, scope: 'project' }));
+      return { project: projectDir, memoryDir: memoryDir(projectDir), projectNotes: p, globalNotes: g };
+    }
+    case 'read':
+      if (!global) {
+        try {
+          return { scope: 'project', project: projectDir, ...getProjectNote(projectDir, ref) };
+        } catch (e) {
+          if (a.scope === 'project') throw e;
+        }
+      }
+      return { scope: 'global', ...getNote(ref) };
+    case 'write':
+      if (global) return { scope: 'global', ...writeNote({ ...a, source }) };
+      return { scope: 'project', project: projectDir, ...writeProjectNote(projectDir, { ...a, source }) };
+    case 'delete':
+      if (!global) {
+        try {
+          return { scope: 'project', ...deleteProjectNote(projectDir, ref) };
+        } catch (e) {
+          if (a.scope === 'project') throw e;
+        }
+      }
+      return { scope: 'global', ...deleteNote(ref) };
+    default:
+      throw new Error(`Unknown op ${op}`);
+  }
+}
+
+/** A short list of global notes for a chat's system prompt, so it knows they exist. */
+export function globalNotesPrompt(max = 30) {
+  const list = listNotes({ limit: max });
+  if (!list.length) return '';
+  return (
+    'Shared notes (global, shared with the user\'s Claude Desktop and every chat; read one in full with read_note, add with write_note scope "global"):\n' +
+    list.map((n) => `- ${n.title}: ${n.preview.replace(/\s+/g, ' ').slice(0, 120)}`).join('\n')
+  );
 }
