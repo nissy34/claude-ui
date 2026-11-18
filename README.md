@@ -61,7 +61,7 @@ Sessions live on the server. Close the tab, open it on your phone, and the same 
 ## Requirements
 
 - A Linux, macOS or Windows machine that stays on
-- Node.js 20.6+
+- Node.js 20.6+ (or only Docker: see [Run it in Docker](#run-it-in-docker))
 - Optional, for Terminal sessions: build tools for `node-pty` (`build-essential` and `python3` on Debian/Ubuntu; Xcode CLT on macOS; see Windows below). If `node-pty` can't build, install still succeeds and chat sessions work.
 - Claude Code installed and logged in as the user that will run the server (`npm i -g @anthropic-ai/claude-code`, then run `claude` once)
 
@@ -92,6 +92,36 @@ journalctl -u claude-web@$USER -f
 ```
 
 The unit runs as your user so Claude finds your login and settings. If `node` or `claude` live somewhere unusual (nvm, volta), fix the `PATH=` line in the unit.
+
+### Run it in Docker
+
+Use this when the machine has Docker but no Node (or you can't install software on it). The image contains Node, the UI, the `claude` CLI, git, the GitHub CLI, `uv`/`uvx` for Python MCP servers, terminal support and the built-in browser. The container shares your host's Claude data, so chats started in the UI show up in `claude --resume` on the host and the other way round.
+
+How it lines up with the host:
+
+- `~/.claude` and `~/.claude.json` (login, sessions, settings, skills, MCP config) and `~/.claude-web` are mounted at the **same paths** as on the host. Claude files sessions under the folder path, so your projects folder is mounted at its host path too.
+- The server runs as **your user** (uid/gid taken from the owner of `~/.claude`), with `HOME` set to your host home, so every file it writes is yours.
+
+```bash
+git clone https://github.com/nissy34/claude-ui ~/claude-ui
+cd ~/claude-ui
+cp .env.example .env
+# In .env: set CW_PROJECTS_ROOT to a full path (e.g. /home/you/projects) if it isn't ~/projects
+docker compose build
+docker compose run --rm --no-deps claude-ui node server/hash-password.js 'pick a strong password'
+# paste the output into CW_PASSWORD_HASH in .env
+docker compose up -d
+docker compose logs -f
+```
+
+Open `http://<machine>:8787`. It listens on all interfaces; change the port mapping in `docker-compose.yml` to `127.0.0.1:8787:8787` to keep it local, or set `CW_PORT` in `.env` for another host port.
+
+- **Before the first start**, `~/.claude`, `~/.claude.json` and `~/.gitconfig` must exist on the host (they do once you've used `claude` and set `git config --global user.name`). Compose stops with an error instead of creating them as empty folders.
+- **Not logged in yet?** Log in from inside the container as yourself: `docker compose exec -u "$(id -u)" claude-ui claude` and run `/login`. The login lands in your host `~/.claude`. A plain `docker compose exec` runs as root, so always pass `-u "$(id -u)"`.
+- **Git over SSH:** the compose file has commented options. Forwarding your SSH agent (`${SSH_AUTH_SOCK}:/ssh-agent` plus `SSH_AUTH_SOCK: /ssh-agent`) keeps the keys on the host; mounting `~/.ssh` read-only also works. HTTPS remotes with a token (or `gh auth setup-git` after mounting `~/.config/gh`) need neither.
+- **Tools your projects or MCP servers need** (compilers, `make`, a Python or Go toolchain) must be in the image: set `EXTRA_APT_PACKAGES="golang make"` in `.env` and rebuild. MCP servers whose config points at a path under your home need that folder mounted too.
+- **Update** with `git pull && docker compose up -d --build`. The CLI doesn't update itself inside the container; the rebuild picks up the latest version (pin one with `CLAUDE_CODE_VERSION=` in `.env`). `WITH_BROWSER=0` builds a smaller image without the built-in browser.
+- Same-path sharing assumes a Linux host. Docker Desktop on Windows or macOS runs a Linux VM, so host paths and container paths don't match and sessions won't line up with a native `claude` there.
 
 ### Windows
 
