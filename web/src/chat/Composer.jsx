@@ -1,6 +1,7 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { api } from '../api.js';
 import { getPrefs } from '../prefs.js';
+import { needsSignIn } from './McpAuth.jsx';
 import { findModel, modelLabel, useModels } from '../models.js';
 
 const isTouch = typeof window !== 'undefined' && window.matchMedia('(pointer: coarse)').matches;
@@ -165,7 +166,7 @@ function ModelItem({ m, on, onPick }) {
   );
 }
 
-export default function Composer({ sessionId, disabled, busy, onSend, onStop, mode, onMode, model, activeModel, onModel, effort, onEffort, commands, footer, onError, placeholder, context, onCompact, queued, usage, mcpServers, onSettings, onBrowser, chats, initialDraft }) {
+export default function Composer({ sessionId, disabled, busy, onSend, onStop, mode, onMode, model, activeModel, onModel, effort, onEffort, commands, footer, onError, placeholder, context, onCompact, queued, usage, mcpServers, onMcpSignIn, onMcpRefresh, onSettings, onBrowser, chats, initialDraft }) {
   const draftKey = `cw.draft.${sessionId}`;
   const [text, setText] = useState(() => {
     try {
@@ -184,6 +185,13 @@ export default function Composer({ sessionId, disabled, busy, onSend, onStop, mo
   const recRef = useRef(null);
   const [menu, setMenu] = useState(null); // 'mode' | 'model' | 'effort' | 'plus'
   const [sub, setSub] = useState(null);
+  // While the Connectors list is open, keep checking servers that are still starting.
+  const mcpPending = !mcpServers?.length || mcpServers.some((m) => m.status === 'pending');
+  useEffect(() => {
+    if (menu !== 'plus' || sub !== 'mcp' || !mcpPending || !onMcpRefresh) return;
+    const t = setTimeout(onMcpRefresh, 2000);
+    return () => clearTimeout(t);
+  }, [menu, sub, mcpPending, mcpServers, onMcpRefresh]);
   const [suggest, setSuggest] = useState(null); // {type, items, start, end}
   const [sel, setSel] = useState(0);
   const taRef = useRef(null);
@@ -517,7 +525,11 @@ export default function Composer({ sessionId, disabled, busy, onSend, onStop, mo
                 <button className={sub === 'skills' ? 'on' : ''} onMouseEnter={() => setSub('skills')} onClick={() => setSub(sub === 'skills' ? null : 'skills')}>
                   <span className="check">✦</span> Skills and commands <span className="chev-r">›</span>
                 </button>
-                <button className={sub === 'mcp' ? 'on' : ''} onMouseEnter={() => setSub('mcp')} onClick={() => setSub(sub === 'mcp' ? null : 'mcp')}>
+                <button
+                  className={sub === 'mcp' ? 'on' : ''}
+                  onMouseEnter={() => (sub !== 'mcp' && onMcpRefresh?.(), setSub('mcp'))}
+                  onClick={() => (sub !== 'mcp' && onMcpRefresh?.(), setSub(sub === 'mcp' ? null : 'mcp'))}
+                >
                   <span className="check">⌗</span> Connectors
                   {(mcpServers || []).some((m) => m.status !== 'connected' && m.status !== 'pending') && <span className="warn-pill">⚠ {(mcpServers || []).filter((m) => m.status !== 'connected' && m.status !== 'pending').length}</span>}
                   <span className="chev-r">›</span>
@@ -548,12 +560,18 @@ export default function Composer({ sessionId, disabled, busy, onSend, onStop, mo
                 )}
                 {sub === 'mcp' && (
                   <div className="pop sub">
-                    {(mcpServers || []).length === 0 && <span className="pad muted">Shown after the first message</span>}
+                    {(mcpServers || []).length === 0 && <span className="pad muted">Checking…</span>}
                     {(mcpServers || []).map((m) => (
                       <div key={m.name} className="pad mcp-line">
                         <span className={`dot ${m.status === 'connected' ? 'on' : m.status === 'pending' ? 'busy' : 'err'}`} />
                         <span style={{ flex: 1 }}>{m.name}</span>
-                        <span className="muted">{m.status}</span>
+                        {needsSignIn(m) && onMcpSignIn ? (
+                          <button className="btn small primary mcp-signin" onClick={() => (setMenu(null), setSub(null), onMcpSignIn(m.name))}>
+                            Sign in
+                          </button>
+                        ) : (
+                          <span className="muted">{m.status}</span>
+                        )}
                       </div>
                     ))}
                     <div className="sep" />

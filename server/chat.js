@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { browserAvailable } from './browser.js';
 import { config, PRIVATE_ENV } from './config.js';
 import { resolveCommand } from './launch.js';
+import { elicitationEvent, elicitationResponse, mcpAuthMethods, slimServers } from './mcp-admin.js';
 
 const CHAT_DIR = path.join(config.dataDir, 'chats');
 fs.mkdirSync(CHAT_DIR, { recursive: true });
@@ -49,7 +50,7 @@ function fromLabel(f) {
   return `[${what} from ${f.role} session "${f.name}" (session id ${f.id})${tail}]`;
 }
 
-function childEnv(sessionId) {
+export function childEnv(sessionId) {
   const env = { ...process.env };
   for (const k of PRIVATE_ENV) delete env[k];
   // Lets "edit an earlier message" restore files to that point.
@@ -138,6 +139,8 @@ export class ChatSession {
     this.clients = new Set();
     this.pending = new Map(); // request_id -> permission request event
     this.controlWaiters = new Map();
+    this.elicits = new Map(); // request_id -> MCP elicitation (a form or link an MCP server asks the user for)
+    this.oauth = new Map(); // MCP server name -> { state, port, authUrl, at } while a sign-in waits for its callback
     // A new chat shows the / menu (with descriptions) before its process has started.
     if (meta.commandInfo) commandCache.set(meta.cwd, meta.commandInfo);
     else if (commandCache.has(meta.cwd)) meta.commandInfo = commandCache.get(meta.cwd);
@@ -159,7 +162,7 @@ export class ChatSession {
     return !!this.proc;
   }
   get state() {
-    if (this.pending.size) return 'waiting';
+    if (this.pending.size || this.elicits.size) return 'waiting';
     return this.turns > 0 ? 'busy' : 'idle';
   }
 
@@ -218,7 +221,7 @@ export class ChatSession {
   }
 
   broadcastState() {
-    this.broadcast({ t: 'state', state: this.state, live: this.running, meta: this.meta, turns: this.turns, inbox: this.inboxSummary(), waitingOn: this.waitingSummary() });
+    this.broadcast({ t: 'state', state: this.state, live: this.running, meta: this.meta, turns: this.turns, inbox: this.inboxSummary(), waitingOn: this.waitingSummary(), oauth: this.oauthFlows() });
     this.store.changed();
   }
 
@@ -253,6 +256,7 @@ export class ChatSession {
       turns: this.turns,
       inbox: this.inboxSummary(),
       waitingOn: this.waitingSummary(),
+      oauth: this.oauthFlows(),
       events: this.events.slice(-MAX_EVENTS_SENT),
       truncated: Math.max(0, this.events.length - MAX_EVENTS_SENT),
       pending: [...this.pending.values()],
@@ -362,8 +366,11 @@ export class ChatSession {
       this.turns = 0;
       for (const id of this.pending.keys()) this.record({ k: 'perm_done', reqId: id, behavior: 'cancelled' });
       this.pending.clear();
+      for (const id of this.elicits.keys()) this.record({ k: 'elicit_done', reqId: id, action: 'cancelled' });
+      this.elicits.clear();
       for (const w of this.controlWaiters.values()) w.reject(new Error('process exited'));
       this.controlWaiters.clear();
+      this.oauth.clear();
       clearTimeout(this.watchdog);
       if (this.quietExit) this.quietExit = false;
       else if (hadWork || (code && code !== 0 && !this.stopping)) {
@@ -384,14 +391,14 @@ export class ChatSession {
     return true;
   }
 
-  control(request) {
+  control(request, timeoutMs = 15_000) {
     const request_id = crypto.randomBytes(8).toString('hex');
     return new Promise((resolve, reject) => {
       if (!this.writeLine({ type: 'control_request', request_id, request })) return reject(new Error('not running'));
       this.controlWaiters.set(request_id, { resolve, reject });
       setTimeout(() => {
         if (this.controlWaiters.delete(request_id)) reject(new Error('control request timed out'));
-      }, 15_000);
+      }, timeoutMs);
     });
   }
 
@@ -400,7 +407,9 @@ export class ChatSession {
     if (!IDLE_MS) return;
     this.idleTimer = setTimeout(() => {
       // Free the process when nothing is happening; the next message resumes the same conversation.
-      if (this.proc && this.state === 'idle') this.stop();
+      // Keep the process (and its localhost OAuth listener) while an MCP sign-in is waiting.
+      if (this.proc && this.state === 'idle' && !this.oauthWaiting()) this.stop();
+      else if (this.proc) this.touchIdle();
     }, IDLE_MS);
     this.idleTimer.unref?.();
   }
@@ -529,6 +538,10 @@ export class ChatSession {
           this.record({ k: 'perm_done', reqId: msg.request_id, behavior: 'cancelled' });
           this.broadcastState();
         }
+        if (this.elicits.delete(msg.request_id)) {
+          this.record({ k: 'elicit_done', reqId: msg.request_id, action: 'cancelled' });
+          this.broadcastState();
+        }
         break;
     }
   }
@@ -548,6 +561,15 @@ export class ChatSession {
         parent: req.agent_id || null,
       };
       this.pending.set(msg.request_id, ev);
+      this.record(ev);
+      if (this.clients.size === 0) this.meta.attention = true;
+      this.broadcastState();
+      return;
+    }
+    if (req.subtype === 'elicitation') {
+      // An MCP server asks the user for input (e.g. a username and password) or to open a link.
+      const ev = { k: 'elicit', ...elicitationEvent(msg.request_id, req) };
+      this.elicits.set(msg.request_id, ev);
       this.record(ev);
       if (this.clients.size === 0) this.meta.attention = true;
       this.broadcastState();
@@ -736,6 +758,15 @@ export class ChatSession {
     this.broadcastState();
   }
 
+  /** The user's answer to an MCP elicitation. The values are passed to Claude and never logged. */
+  answerElicit({ reqId, action, content }) {
+    if (!this.elicits.has(reqId)) return;
+    this.elicits.delete(reqId);
+    this.writeLine({ type: 'control_response', response: { subtype: 'success', request_id: reqId, response: elicitationResponse(action, content) } });
+    this.record({ k: 'elicit_done', reqId, action: elicitationResponse(action).action });
+    this.broadcastState();
+  }
+
   async interrupt() {
     if (!this.proc || this.turns === 0) return;
     this.interrupted = true;
@@ -750,6 +781,18 @@ export class ChatSession {
         this.proc?.kill('SIGINT');
       } catch {}
     }
+  }
+
+  // ---------- MCP sign-in (OAuth): shared methods in mcp-admin.js (mcpAuthMethods) ----------
+  mcpServerList() {
+    return this.meta.mcpServers || [];
+  }
+  setMcpServers(list, { keep } = {}) {
+    if (!keep) this.meta.mcpServers = slimServers(list);
+    this.broadcastState();
+  }
+  onMcpSignedIn(name) {
+    this.record({ k: 'notice', text: `Signed in to ${name}` });
   }
 
   async setMode(mode) {
@@ -954,3 +997,5 @@ export class ChatSession {
     fs.unlink(this.logFile, () => {});
   }
 }
+
+Object.assign(ChatSession.prototype, mcpAuthMethods);

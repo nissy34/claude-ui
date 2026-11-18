@@ -4,6 +4,7 @@ import { buildItems, lastTodos } from './model.js';
 import { renderMarkdown } from './markdown.js';
 import ToolCard, { Todos, ToolGroup } from './ToolCard.jsx';
 import Permission from './Permission.jsx';
+import { Elicitation, McpSignInBar, startSignIn, needsSignIn, deliverCallback, LOCAL_CALLBACK } from './McpAuth.jsx';
 import Composer from './Composer.jsx';
 import { getPrefs } from '../prefs.js';
 import SidePanel from './SidePanel.jsx';
@@ -167,7 +168,7 @@ function fmtTokens(n) {
   return n >= 1000 ? `${(n / 1000).toFixed(n >= 100000 ? 0 : 1)}k` : String(n);
 }
 
-function InfoDialog({ meta, onClose }) {
+function InfoDialog({ meta, onClose, onSignIn }) {
   const rl = meta.rateLimit?.unifiedWindows || {};
   return (
     <div className="modal" onClick={onClose}>
@@ -230,6 +231,11 @@ function InfoDialog({ meta, onClose }) {
               <span className={`dot ${m.status === 'connected' ? 'on' : m.status === 'pending' ? 'busy' : 'off'}`} />
               <span style={{ flex: 1 }}>{m.name}</span>
               <span className="muted">{m.status}</span>
+              {needsSignIn(m) && (
+                <button className="btn small primary mcp-signin" onClick={() => onSignIn(m.name)}>
+                  Sign in
+                </button>
+              )}
             </div>
           ))}
         </div>
@@ -258,6 +264,7 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
   const [terminal, setTerminal] = useState(false);
   const [inbox, setInbox] = useState([]);
   const [waitingOn, setWaitingOn] = useState(null);
+  const [oauth, setOauth] = useState(session.oauth || []);
   const [inboxOpen, setInboxOpen] = useState(false);
   const [side, setSide] = useState(null); // { q } while the side chat is open
   const [verbose, setVerbose] = useState(() => localStorage.getItem('cw.verbose') === '1');
@@ -296,6 +303,7 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
           setTurns(m.turns || 0);
           setInbox(m.inbox || []);
           setWaitingOn(m.waitingOn || null);
+          setOauth(m.oauth || []);
           setDeltas({});
           setConn('open');
           retry = 500;
@@ -317,6 +325,7 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
             });
           }
           if (e.k === 'tool_result' || e.k === 'result') setChangesKey((k) => k + 1);
+          if (e.k === 'elicit') notify(`${e.server} needs your input`, session.name);
           if (e.k === 'perm') notify('Claude needs your permission', `${e.tool} in ${session.name}`);
           if (e.k === 'result') notify(e.isError ? 'Claude stopped with an error' : 'Claude finished', session.name);
           if (e.k === 'result' || e.k === 'error') setStatus(null);
@@ -331,6 +340,7 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
           setTurns(m.turns || 0);
           setInbox(m.inbox || []);
           setWaitingOn(m.waitingOn || null);
+          setOauth(m.oauth || []);
           setMeta({ ...m.meta, live: m.live });
         } else if (m.t === 'status') setStatus(m.status);
         else if (m.t === 'reload') ws.close(4000, 'reload');
@@ -384,7 +394,7 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
     return out;
   }, [items, verbose]);
   const todos = useMemo(() => lastTodos(events), [events]);
-  const pendingPerms = items.filter((i) => i.type === 'tool' && i.perm && !i.perm.done).length + items.filter((i) => i.type === 'perm' && !i.done).length;
+  const pendingPerms = items.filter((i) => i.type === 'tool' && i.perm && !i.perm.done).length + items.filter((i) => (i.type === 'perm' || i.type === 'elicit') && !i.done).length;
   const busy = state === 'busy' || state === 'waiting';
   // Resume shows on an exit error only while it is the latest thing in the chat.
   const lastResumable = busy ? -1 : rows.findLastIndex((r) => ['error', 'user', 'text', 'tool', 'group'].includes(r.type));
@@ -421,10 +431,18 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
       setSide({ q: btw[1] || '', key: Date.now() });
       return true;
     }
+    // A pasted localhost sign-in address goes to the waiting MCP sign-in, not to Claude.
+    if (oauth.length && !images?.length && LOCAL_CALLBACK.test((text || '').trim())) {
+      deliverCallback(text, session.id).catch(onError);
+      return true;
+    }
     if ('Notification' in window && Notification.permission === 'default') Notification.requestPermission().catch(() => {});
     setStick(true);
     return send({ t: 'send', text, images, refs });
   };
+
+  const signIn = (name) => startSignIn(session.id, name, onError);
+  const refreshMcp = () => api(`/api/sessions/${session.id}/mcp/status`, { method: 'POST', body: { start: !(meta.mcpServers || []).length } }).catch(() => {});
 
   const openPanel = (tab) => {
     setPanel(tab);
@@ -653,6 +671,8 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
                         {it.perm && <Permission perm={it.perm} cwd={meta.cwd} onAnswer={answer} onMode={setMode} showBody={false} />}
                       </ToolCard>
                     );
+                  case 'elicit':
+                    return <Elicitation key={'el' + it.req.reqId} req={it.req} done={it.done} onAnswer={(a) => send({ t: 'elicit', ...a })} />;
                   case 'perm':
                     return <Permission key={it.reqId} perm={it} cwd={meta.cwd} onAnswer={answer} onMode={setMode} />;
                   case 'result':
@@ -720,7 +740,7 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
               {busy && (
                 <div className="working">
                   <span className="spark">✳</span>
-                  {pendingPerms ? 'Waiting for your approval' : status === 'compacting' ? 'Compacting…' : 'Working…'}
+                  {items.some((i) => i.type === 'elicit' && !i.done) ? 'Waiting for your input' : pendingPerms ? 'Waiting for your approval' : status === 'compacting' ? 'Compacting…' : 'Working…'}
                 </div>
               )}
             </div>
@@ -770,6 +790,7 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
               )}
             </div>
           )}
+          <McpSignInBar sessionId={session.id} flows={oauth} onError={onError} />
           <Composer
             sessionId={session.id}
             initialDraft={meta.draft}
@@ -788,6 +809,8 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
             footer=""
             usage={meta.rateLimit?.unifiedWindows}
             mcpServers={meta.mcpServers}
+            onMcpSignIn={signIn}
+            onMcpRefresh={refreshMcp}
             onSettings={onSettings}
             onBrowser={() => openPanel('browser')}
             chats={mentionable}
@@ -835,7 +858,7 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
             onWide={() => setWide((w) => !w)}
           />
         )}
-        {info && <InfoDialog meta={meta} onClose={() => setInfo(false)} />}
+        {info && <InfoDialog meta={meta} onClose={() => setInfo(false)} onSignIn={signIn} />}
       </div>
     </ChatCtx.Provider>
   );
