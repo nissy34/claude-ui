@@ -31,6 +31,7 @@ export function transcriptPath(cwd, id) {
 const MCP_SCRIPT = path.join(path.dirname(fileURLToPath(import.meta.url)), 'mcp-sessions.js');
 const commandCache = new Map(); // cwd -> commands with descriptions
 import { setModels } from './models.js';
+import { globalNotesPrompt } from './notes.js';
 const MCP_BROWSER = path.join(path.dirname(fileURLToPath(import.meta.url)), 'mcp-browser.js');
 const MCP_UI = path.join(path.dirname(fileURLToPath(import.meta.url)), 'mcp-ui.js');
 const MCP_NOTES = path.join(path.dirname(fileURLToPath(import.meta.url)), 'mcp-notes.js');
@@ -285,7 +286,8 @@ export class ChatSession {
     if (config.desktopMcp) builtin.notes = { type: 'stdio', command: process.execPath, args: [MCP_NOTES] };
     if (browserAvailable()) builtin.browser = { type: 'stdio', command: process.execPath, args: [MCP_BROWSER] };
     if (Object.keys(builtin).length) args.push('--mcp-config', JSON.stringify({ mcpServers: builtin }));
-    if (builtin.sessions) args.push('--append-system-prompt', this.sessionsPrompt());
+    const extra = [builtin.sessions ? this.sessionsPrompt() : '', builtin.notes ? globalNotesPrompt() : ''].filter(Boolean).join('\n\n');
+    if (extra) args.push('--append-system-prompt', extra);
     // Talking to other chats and looking at the browser page never need a prompt; starting
     // sessions, changing their options, and navigating, clicking and typing still ask.
     const allowed = [];

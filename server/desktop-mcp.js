@@ -148,22 +148,25 @@ const TOOLS = [
   {
     name: 'list_notes',
     description:
-      'List the shared notes (newest first). Notes are shared between Claude Desktop and the Claude Code chats on the user\'s machine: handoffs, decisions, preferences, things to remember. Check them when the user refers to earlier work.',
-    inputSchema: { type: 'object', properties: { query: { type: 'string', description: 'Words to search for.' }, tag: { type: 'string' }, limit: { type: 'number' } } },
+      "List notes. With project: that project's notes, which live in Claude Code's memory for the project (every Claude Code session there loads them, and they include what Claude remembered on its own), plus global notes. Without project: only global notes (preferences and things that span projects). Check them when the user refers to earlier work.",
+    inputSchema: { type: 'object', properties: { project: { type: 'string', description: 'Project folder name (from list_projects) or path.' }, query: { type: 'string', description: 'Words to search for.' }, tag: { type: 'string' }, limit: { type: 'number' } } },
   },
   {
     name: 'read_note',
-    description: 'Read one shared note in full, by id or exact title.',
-    inputSchema: { type: 'object', properties: { id: { type: 'string', description: 'Note id or exact title.' } }, required: ['id'] },
+    description: 'Read one note in full, by id or title. With project, looks in that project first, then global notes.',
+    inputSchema: { type: 'object', properties: { id: { type: 'string', description: 'Note id or title.' }, project: { type: 'string' } }, required: ['id'] },
   },
   {
     name: 'write_note',
-    description: 'Create or update a shared note. A note with the same title (or the given id) is replaced, or added to with append=true.',
+    description:
+      "Create or update a note. With project, it goes into that project's Claude Code memory, so every future session in that project sees it. Without project it is a global note (use for preferences and things that span projects). A note with the same title (or id) is replaced, or added to with append=true.",
     inputSchema: {
       type: 'object',
       properties: {
+        project: { type: 'string', description: 'Project folder name (from list_projects) or path. Leave out for a global note.' },
         title: { type: 'string' },
         content: { type: 'string', description: 'Markdown.' },
+        description: { type: 'string', description: 'One line for the memory index (defaults to the first line of content).' },
         tags: { type: 'array', items: { type: 'string' } },
         append: { type: 'boolean', description: 'Add to the end of the existing note instead of replacing it.' },
         id: { type: 'string', description: 'Update this note (by id) instead of matching by title.' },
@@ -173,8 +176,8 @@ const TOOLS = [
   },
   {
     name: 'delete_note',
-    description: 'Delete a shared note by id or exact title.',
-    inputSchema: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
+    description: 'Delete a note by id or title. With project, from that project (then global).',
+    inputSchema: { type: 'object', properties: { id: { type: 'string' }, project: { type: 'string' } }, required: ['id'] },
   },
 ];
 
@@ -337,13 +340,14 @@ export function createDesktopMcp({ store, resolveDir, createWorktree, getChanges
         if (a.permission_mode && !MODES.includes(a.permission_mode)) throw new Error(`permission_mode must be one of ${MODES.join(', ')}`);
         return { ...(await controlSession(store, chat(a.id), 'options', a, 'Claude Desktop')), session: summary(chat(a.id)) };
       case 'list_notes':
-        return { notes: notes.listNotes(a) };
       case 'read_note':
-        return notes.getNote(a.id ?? a.title);
       case 'write_note':
-        return notes.writeNote({ ...a, source: 'Claude Desktop' });
-      case 'delete_note':
-        return notes.deleteNote(a.id ?? a.title);
+      case 'delete_note': {
+        const projectDir = a.project ? resolveDir(String(a.project)) : null;
+        const res = notes.notesOp(name.split('_')[0], a, { projectDir, source: 'Claude Desktop' });
+        if (name === 'list_notes' && !projectDir) res.note = 'Global notes only. Pass project to include that project\'s notes (its Claude Code memory).';
+        return res;
+      }
       default:
         throw new Error(`Unknown tool ${name}`);
     }

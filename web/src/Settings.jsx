@@ -290,7 +290,7 @@ export default function Settings({ projects, activeCwd, onClose, onError, onKeys
             {tab === 'mcp' && <McpTab projects={projects} activeCwd={activeCwd} onError={onError} />}
             {tab === 'plugins' && <PluginsTab onError={onError} />}
             {tab === 'skills' && <SkillsTab projects={projects} activeCwd={activeCwd} onError={onError} />}
-            {tab === 'desktop' && <DesktopTab onError={onError} />}
+            {tab === 'desktop' && <DesktopTab onError={onError} projects={projects} activeCwd={activeCwd} />}
             {tab === 'account' && <Account />}
             {tab === 'about' && <About />}
           </div>
