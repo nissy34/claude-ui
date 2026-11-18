@@ -7,6 +7,7 @@ import { ChatSession, claudeProjectDir, transcriptPath } from './chat.js';
 
 export { claudeProjectDir, transcriptPath };
 
+import { withOpener } from './opener.js';
 import { resolveCommand, defaultShell } from './launch.js';
 
 const require = createRequire(import.meta.url);
@@ -30,10 +31,10 @@ function transcriptExists(cwd, id) {
   return !!id && fs.existsSync(transcriptPath(cwd, id));
 }
 
-function childEnv() {
+function childEnv(sid) {
   const env = { ...process.env, TERM: 'xterm-256color', COLORTERM: 'truecolor' };
   for (const k of PRIVATE_ENV) delete env[k];
-  return env;
+  return withOpener(env, sid);
 }
 
 class Session {
@@ -104,7 +105,7 @@ class Session {
         cols: this.cols,
         rows: this.rows,
         cwd: m.cwd,
-        env: childEnv(),
+        env: childEnv(this.meta.id),
       });
     } catch (err) {
       const msg = `\r\n\x1b[31mFailed to start ${file}: ${err.message}\x1b[0m\r\n`;
