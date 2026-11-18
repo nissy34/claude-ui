@@ -1,14 +1,13 @@
 // MCP logins: OAuth sign-in/sign-out and MCP elicitation (forms an MCP server asks the user to fill in).
 //
 // Claude's MCP OAuth flow redirects to http://localhost:<port>/callback on the machine running Claude.
-// Opened from another device that page can't load, so the user pastes its address back and we hand
-// it to Claude with the control request mcp_oauth_callback_url, which finishes the token exchange.
+// The sign-in page opens in the server's own browser, so that redirect reaches Claude by itself
+// (watchSignIn notices). Without a server browser the user pastes the failed address back and we
+// hand it to Claude with the control request mcp_oauth_callback_url.
 // Tokens live in Claude's own credential store, so a sign-in from any process applies to every chat.
 //
 // The same methods run on a chat's process (ChatSession) and on McpAdmin, a background
 // `claude` process per folder that the Settings page uses when no chat is involved.
-import fs from 'node:fs';
-import path from 'node:path';
 import crypto from 'node:crypto';
 import readline from 'node:readline';
 import { spawn } from 'node:child_process';
@@ -308,7 +307,3 @@ Object.assign(McpAdmin.prototype, mcpAuthMethods);
 export function stopAllAdmins() {
   for (const a of admins.values()) a.stop();
 }
-
-// Unused imports guard (fs/path kept for future config reads).
-void fs;
-void path;

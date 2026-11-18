@@ -197,7 +197,7 @@ export function McpTab({ projects, activeCwd, onError }) {
         ))}
       </div>
       {!cwd && data?.servers.length > 0 && <p className="muted set-note">Pick a project to turn servers on or off for it.</p>}
-      <McpLogins cwd={cwd} onError={onError} />
+      <McpLogins cwd={cwd} onError={onError} onChange={load} />
       <PasteCallback onError={onError} />
     </>
   );

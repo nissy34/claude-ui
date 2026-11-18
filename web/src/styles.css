@@ -758,7 +758,7 @@ kbd { display: inline-block; font: 11.5px var(--mono); background: var(--panel-2
 .note-item .set-pre { margin-top: 6px; max-height: 320px; overflow: auto; }
 @media (max-width: 640px) { .desk-fields { grid-template-columns: 1fr; } }
 
-/* MCP sign-in from another device */
+/* MCP sign-in */
 .mcp-auth-bar { display: flex; flex-direction: column; gap: 6px; color: var(--text); }
 .mcp-auth-bar .dot-pulse { vertical-align: 1px; margin-right: 4px; }
 .mcp-auth-row { display: flex; gap: 6px; }
@@ -768,6 +768,8 @@ kbd { display: inline-block; font: 11.5px var(--mono); background: var(--panel-2
 .mcp-auth-links a { color: var(--accent); }
 .mcp-signin { margin-left: 6px; }
 .paste-callback { margin-top: 18px; }
+.paste-callback summary { cursor: pointer; font-size: 13px; }
+.paste-callback form { margin-top: 8px; }
 .elicit { max-width: 760px; margin: 8px auto; width: 100%; box-sizing: border-box; border: 1px solid var(--line); background: var(--panel); border-radius: 12px; padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; font-size: 13.5px; }
 .elicit.done { padding: 6px 12px; font-size: 12.5px; background: transparent; }
 .elicit-msg { white-space: pre-wrap; }
@@ -785,6 +787,7 @@ kbd { display: inline-block; font: 11.5px var(--mono); background: var(--panel-2
 .mcp-logins .login-paste { flex-basis: 100%; margin-top: 4px; }
 
 /* Sign-in window (server-side browser) */
+.signin-modal { z-index: 70; } /* above Settings and other dialogs */
 .signin-card { width: min(1100px, calc(100vw - 24px)); max-width: none; height: min(860px, calc(100vh - 24px)); display: flex; flex-direction: column; }
 .signin-card .modal-head { gap: 8px; }
 .signin-card .spacer { flex: 1; }

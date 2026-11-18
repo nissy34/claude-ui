@@ -105,6 +105,7 @@ async function launchSignin() {
 }
 
 const LOOPBACK_PAGE = /^http:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d+)?\//i;
+const isCallback = (u) => LOOPBACK_PAGE.test(u) && /[?&](code|error)=/i.test(u) && /[?&]state=/i.test(u);
 
 /** Open a sign-in page in a new tab of the sign-in browser. Returns its tab id. */
 export async function openSignin(url) {
@@ -112,7 +113,7 @@ export async function openSignin(url) {
   const context = await signinPromise;
   const page = await context.newPage();
   const id = `signin-${++signinSeq}`;
-  const t = { context, page, console: [], listeners: new Set(), version: 0, signin: true, opened: Date.now(), done: false };
+  const t = { context, page, console: [], listeners: new Set(), version: 0, signin: true, opened: Date.now(), done: false, start: normalizeUrl(url) };
   tabs.set(id, t);
   page.on('framenavigated', (f) => {
     if (f !== page.mainFrame()) return;
@@ -129,7 +130,7 @@ export async function openSignin(url) {
     if (!local) t.leftLocal = true;
     // Back on a local page after the identity provider: that's the callback, and the waiting
     // process has its answer. (A CLI may also start on its own local page, so only after leaving.)
-    else if (!t.done && t.leftLocal) {
+    else if (!t.done && (t.leftLocal || (isCallback(page.url()) && page.url() !== t.start))) {
       t.done = true;
       signinChanged();
       setTimeout(() => closeSignin(id), 4000);

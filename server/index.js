@@ -645,8 +645,9 @@ app.post(
 );
 
 // ---------- MCP sign-in (OAuth) ----------
-// See ChatSession.mcpAuthenticate: the provider redirects to localhost on this machine, which a
-// browser on another device can't reach, so the UI posts that address back here.
+// The provider redirects to localhost on this machine. Sign-in pages open in the server's own browser
+// (the sign-in window), so that redirect lands by itself. Without a server browser the page opens on
+// the user's device and the UI posts the failed localhost address back to /api/oauth/callback.
 function chatOf(req) {
   const s = getSession(req);
   if (s.meta.kind !== 'chat') throw new Error('MCP sign-in from here works in chats; in a terminal session run /mcp');
@@ -672,7 +673,7 @@ app.post(
 function signinInBrowser(r, server, sid) {
   if (!r?.authUrl || !browserAvailable()) return r;
   openSigninPage(r.authUrl, { sid, server });
-  return { ...r, inBrowser: true };
+  return { ...r, inBrowser: true, server };
 }
 app.post(
   '/api/oauth/callback',
