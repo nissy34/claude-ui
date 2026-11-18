@@ -6,6 +6,8 @@ import ToolCard, { Todos, ToolGroup } from './ToolCard.jsx';
 import Permission from './Permission.jsx';
 import { Elicitation, McpSignInBar, startSignIn, needsSignIn, deliverCallback, LOCAL_CALLBACK } from './McpAuth.jsx';
 import Composer from './Composer.jsx';
+import QuoteReply from './QuoteReply.jsx';
+import { splitQuote } from './quote.js';
 import { getPrefs } from '../prefs.js';
 import SidePanel from './SidePanel.jsx';
 import { ChatCtx } from './ctx.js';
@@ -61,7 +63,8 @@ const ROLE_NAME = { child: 'child chat', parent: 'parent chat' };
 const KIND_NAME = { question: 'Question from', reply: 'Reply from' };
 
 function UserMessage({ item, canEdit, onEdit, onOpen, onFork }) {
-  const [body, attached] = splitAttachments(item.text);
+  const [full, attached] = splitAttachments(item.text);
+  const [quoted, body] = splitQuote(full);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(item.text);
   if (editing) {
@@ -109,6 +112,7 @@ function UserMessage({ item, canEdit, onEdit, onOpen, onFork }) {
         </div>
       )}
       <div className="bubble">
+        {quoted && <div className="bubble-quote">{quoted}</div>}
         {item.images > 0 && <div className="img-note">🖼 {item.images} image{item.images > 1 ? 's' : ''}</div>}
         {body}
         {item.refs?.length > 0 && (
@@ -268,6 +272,7 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
   const [inboxOpen, setInboxOpen] = useState(false);
   const [side, setSide] = useState(null); // { q } while the side chat is open
   const [verbose, setVerbose] = useState(() => localStorage.getItem('cw.verbose') === '1');
+  const [quote, setQuote] = useState(null); // passage quoted into the main message box
   const wsRef = useRef(null);
   const listRef = useRef(null);
   const deltaOrder = useRef(0);
@@ -797,10 +802,22 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
               )}
             </div>
           )}
+          <QuoteReply
+            listRef={listRef}
+            disabled={conn !== 'open'}
+            onSend={(text) => submit(text, [])}
+            onQuote={(q) => {
+              setQuote(q);
+              // Focus inside the tap itself so phones open the keyboard.
+              listRef.current?.closest('.chat-view')?.querySelector('.composer textarea')?.focus();
+            }}
+          />
           <McpSignInBar sessionId={session.id} flows={oauth} onError={onError} />
           <Composer
             sessionId={session.id}
             initialDraft={meta.draft}
+            quote={quote}
+            onClearQuote={() => setQuote(null)}
             disabled={conn !== 'open'}
             busy={busy}
             onSend={submit}
