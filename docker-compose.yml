@@ -53,6 +53,11 @@ services:
         read_only: true
         bind: { create_host_path: false }
 
+      # uv's cache, the Pythons it downloads and `uv tool` installs, so uvx
+      # MCP servers start fast and survive rebuilds of the container.
+      - uv-cache:${HOME}/.cache/uv
+      - uv-data:${HOME}/.local/share/uv
+
       # Optional extras (uncomment what you use):
       # GitHub CLI login, for the pull request card:
       # - ${HOME}/.config/gh:${HOME}/.config/gh
@@ -62,3 +67,7 @@ services:
       # - ${HOME}/.ssh:${HOME}/.ssh:ro
       # Another folder you work in (also set CW_ALLOW_ANY_DIR=1 in .env):
       # - /srv/work:/srv/work
+
+volumes:
+  uv-cache:
+  uv-data:

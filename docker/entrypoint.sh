@@ -31,7 +31,7 @@ fi
 
 # Docker creates the parent folders of bind mounts (and missing mount sources)
 # as root. Hand those to you; anything already yours is left alone.
-find "$HOME" -maxdepth 2 -xdev -type d -user 0 -exec chown "$uid:$gid" {} + 2>/dev/null || true
+find "$HOME" -maxdepth 3 -xdev -type d -user 0 -exec chown "$uid:$gid" {} + 2>/dev/null || true
 
 # Run as you. Keep the env (HOME, CW_*), drop root's groups.
 exec setpriv --reuid="$uid" --regid="$gid" --clear-groups -- "$@"

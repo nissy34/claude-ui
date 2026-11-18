@@ -30,13 +30,13 @@ RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends \
       ca-certificates curl git openssh-client gh ripgrep less procps jq \
-      python3 python3-venv tini util-linux locales $EXTRA_APT_PACKAGES; \
+      python3 python3-venv python3-pip python-is-python3 tini util-linux locales $EXTRA_APT_PACKAGES; \
     rm -rf /var/lib/apt/lists/*; \
     # The image's "ubuntu" user (uid 1000) would shadow your own user inside
     # the container (ssh and git look up the home folder by uid).
     userdel -r ubuntu 2>/dev/null || true
 
-# uv / uvx, for Python-based MCP servers.
+# uv / uvx, for Python-based MCP servers (e.g. "command": "uvx" in your MCP config).
 RUN python3 -m venv /opt/uv && /opt/uv/bin/pip install --no-cache-dir uv \
  && ln -s /opt/uv/bin/uv /opt/uv/bin/uvx /usr/local/bin/
 
