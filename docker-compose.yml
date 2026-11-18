@@ -1,0 +1,73 @@
+# Runs Claude UI and the Claude Code CLI in a container while sharing your
+# host's Claude data. Paths inside the container match the host (Claude keys
+# sessions by folder path), and the server runs as your own user.
+#
+#   cp .env.example .env    # set CW_PASSWORD_HASH and CW_PROJECTS_ROOT (absolute path)
+#   docker compose up -d --build
+#
+# See "Run it in Docker" in README.md.
+
+services:
+  claude-ui:
+    build:
+      context: .
+      args:
+        CLAUDE_CODE_VERSION: ${CLAUDE_CODE_VERSION:-latest}
+        WITH_BROWSER: ${WITH_BROWSER:-1}
+        EXTRA_APT_PACKAGES: ${EXTRA_APT_PACKAGES:-}
+    image: claude-ui
+    restart: unless-stopped
+    ports:
+      # Use "127.0.0.1:8787:8787" to reach it only from this machine.
+      - "${CW_PORT:-8787}:8787"
+    env_file: .env
+    environment:
+      HOME: ${HOME}
+      USER: ${USER:-claude}
+      CW_HOST: 0.0.0.0
+      CW_PORT: "8787"
+      CW_PROJECTS_ROOT: ${CW_PROJECTS_ROOT:-${HOME}/projects}
+      # Your uid/gid are read from the owner of ~/.claude; set these to override.
+      # PUID: "1000"
+      # PGID: "1000"
+      # SSH agent forwarding (see the ssh-agent volume below):
+      # SSH_AUTH_SOCK: /ssh-agent
+    volumes:
+      # Claude's sessions, login, settings, skills, CLAUDE.md, MCP config.
+      - type: bind
+        source: ${HOME}/.claude
+        target: ${HOME}/.claude
+        bind: { create_host_path: false }
+      - type: bind
+        source: ${HOME}/.claude.json
+        target: ${HOME}/.claude.json
+        bind: { create_host_path: false }
+      # The UI's own data (session list, chat logs, password cookie secret).
+      - ${HOME}/.claude-web:${HOME}/.claude-web
+      # Your projects, at the same path as on the host.
+      - ${CW_PROJECTS_ROOT:-${HOME}/projects}:${CW_PROJECTS_ROOT:-${HOME}/projects}
+      # Git name and email for commits Claude makes.
+      - type: bind
+        source: ${HOME}/.gitconfig
+        target: ${HOME}/.gitconfig
+        read_only: true
+        bind: { create_host_path: false }
+
+      # uv's cache, the Pythons it downloads and `uv tool` installs, so uvx
+      # MCP servers start fast and survive rebuilds of the container.
+      - uv-cache:${HOME}/.cache/uv
+      - uv-data:${HOME}/.local/share/uv
+
+      # Optional extras (uncomment what you use):
+      # GitHub CLI login, for the pull request card:
+      # - ${HOME}/.config/gh:${HOME}/.config/gh
+      # SSH for git push/pull. Agent forwarding keeps your keys out of the container:
+      # - ${SSH_AUTH_SOCK}:/ssh-agent
+      # ...or mount your keys read-only instead:
+      # - ${HOME}/.ssh:${HOME}/.ssh:ro
+      # Another folder you work in (also set CW_ALLOW_ANY_DIR=1 in .env):
+      # - /srv/work:/srv/work
+
+volumes:
+  uv-cache:
+  uv-data:
