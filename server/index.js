@@ -7,7 +7,7 @@ import readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { WebSocketServer } from 'ws';
-import { config } from './config.js';
+import { config, rootCaseWarning } from './config.js';
 import {
   isAuthed,
   checkPassword,
@@ -372,13 +372,23 @@ function resolveDir(input) {
     throw new Error(`Directory does not exist: ${abs}`);
   }
   if (!fs.statSync(real).isDirectory()) throw new Error(`Not a directory: ${real}`);
-  if (!config.allowAnyDir) {
+  if (!config.allowAnyDir && !isScratch(real)) {
     const root = fs.realpathSync(config.projectsRoot);
     if (real !== root && !real.startsWith(root + path.sep)) {
       throw new Error(`Directory must be inside ${root} (set CW_ALLOW_ANY_DIR=1 to lift this)`);
     }
   }
   return real;
+}
+
+function isScratch(dir) {
+  let root;
+  try {
+    root = fs.realpathSync(config.scratchDir);
+  } catch {
+    return false;
+  }
+  return dir === root || dir.startsWith(root + path.sep);
 }
 
 function parseCallbackUrl(raw) {
@@ -431,7 +441,7 @@ function wrap(fn) {
 
 // ---------- info ----------
 app.get('/api/config', (req, res) => {
-  res.json({ projectsRoot: config.projectsRoot, allowAnyDir: config.allowAnyDir, hostname: process.env.HOSTNAME || '', browser: browserAvailable() });
+  res.json({ projectsRoot: config.projectsRoot, scratchDir: config.scratchDir, allowAnyDir: config.allowAnyDir, hostname: process.env.HOSTNAME || '', browser: browserAvailable() });
 });
 
 // ---------- Claude Desktop handoff MCP + shared notes ----------
@@ -461,8 +471,15 @@ app.delete(
 async function listProjects() {
   const root = config.projectsRoot;
   const entries = await fs.promises.readdir(root, { withFileTypes: true });
+  // Sessions and last use per folder. Worktree chats count for the folder they came from.
   const counts = {};
-  for (const s of store.list()) counts[s.cwd] = (counts[s.cwd] || 0) + 1;
+  const lastUsed = {};
+  for (const s of store.list()) {
+    const p = s.project || s.cwd;
+    if (!p || isScratch(p)) continue;
+    counts[p] = (counts[p] || 0) + 1;
+    lastUsed[p] = Math.max(lastUsed[p] || 0, s.lastActivity || s.createdAt || 0);
+  }
   const projects = [];
   const seen = new Set();
   const rootReal = fs.realpathSync(root);
@@ -479,16 +496,17 @@ async function listProjects() {
     }
     if (!isDir) continue;
     seen.add(p);
-    projects.push({ name: e.name, path: p, git: fs.existsSync(path.join(p, '.git')), sessions: counts[p] || 0 });
+    projects.push({ name: e.name, path: p, git: fs.existsSync(path.join(p, '.git')), sessions: counts[p] || 0, lastUsed: lastUsed[p] || 0 });
   }
   // Directories used by sessions that aren't direct children of the root.
   for (const cwd of Object.keys(counts)) {
-    if (!seen.has(cwd)) {
-      projects.push({ name: path.relative(rootReal, cwd) || path.basename(cwd), path: cwd, git: fs.existsSync(path.join(cwd, '.git')), sessions: counts[cwd] });
+    if (!seen.has(cwd) && fs.existsSync(cwd)) {
+      projects.push({ name: path.relative(rootReal, cwd) || path.basename(cwd), path: cwd, git: fs.existsSync(path.join(cwd, '.git')), sessions: counts[cwd], lastUsed: lastUsed[cwd] || 0 });
     }
   }
-  projects.sort((a, b) => b.sessions - a.sessions || a.name.localeCompare(b.name));
-  return { root: rootReal, projects };
+  // Most recently used first, then the rest by name.
+  projects.sort((a, b) => b.lastUsed - a.lastUsed || a.name.localeCompare(b.name));
+  return { root: rootReal, scratch: config.scratchDir, rootCaseHint: rootCaseWarning(), projects };
 }
 
 app.get(
@@ -575,14 +593,15 @@ app.get('/api/sessions', (req, res) => res.json({ sessions: store.list() }));
 app.post(
   '/api/sessions',
   wrap(async (req, res) => {
-    const { cwd, kind, name, resume, model, permissionMode, effort, worktree, parentId } = req.body || {};
-    const project = resolveDir(cwd);
-    const wt = worktree ? await createWorktree(project, name || 'chat') : null;
+    const { cwd, kind, name, resume, model, permissionMode, effort, worktree, parentId, noFolder } = req.body || {};
+    const project = noFolder ? fs.realpathSync(config.scratchDir) : resolveDir(cwd);
+    const wt = worktree && !noFolder ? await createWorktree(project, name || 'chat') : null;
     const dir = wt ? wt.path : project;
     if (resume && resume !== 'continue' && !/^[0-9a-f-]{36}$/i.test(resume)) throw new Error('Bad resume id');
-    const s = store.create({ cwd: dir, kind, name: name ? String(name).slice(0, 80) : undefined, resume, model, permissionMode, effort, initialInput: req.body?.login && kind === 'claude' ? '/login\r' : undefined });
+    const s = store.create({ cwd: dir, kind, name: name ? String(name).slice(0, 80) : isScratch(project) ? 'New chat' : undefined, resume, model, permissionMode, effort, initialInput: req.body?.login && kind === 'claude' ? '/login\r' : undefined });
     if (name) s.meta.customName = true;
     s.meta.project = project;
+    if (isScratch(project)) s.meta.noFolder = true;
     if (wt) s.meta.worktree = wt;
     if (parentId && store.get(parentId)) s.meta.parentId = parentId;
     store.save();
@@ -1106,6 +1125,7 @@ server.listen(config.port, config.host, () => {
   config.internalUrl = `http://${h}:${config.port}`;
   console.log(`claude-web listening on http://${config.host}:${config.port}`);
   console.log(`projects root: ${config.projectsRoot}`);
+  if (rootCaseWarning()) console.warn(`warning: CW_PROJECTS_ROOT differs in letter case from your home folder. Use ${rootCaseWarning()} so Claude here and Claude on the host file sessions under the same folder.`);
   console.log(`data dir:      ${config.dataDir}`);
 });
 

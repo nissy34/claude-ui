@@ -33,6 +33,22 @@ if (!secret) {
 
 const defaultRoot = fs.existsSync(path.join(home, 'projects')) ? path.join(home, 'projects') : home;
 
+// On macOS the disk ignores letter case, so a root typed as /users/me/projects works but gives
+// Claude a different folder key (-users-me-...) than Claude on the same Mac (-Users-me-...).
+// The native realpath returns the case as it is on disk.
+function trueCase(p) {
+  if (process.platform !== 'darwin') return p;
+  try {
+    return fs.realpathSync.native(p);
+  } catch {
+    return p;
+  }
+}
+
+// Where chats started with "No folder" run. One shared folder, so Past conversations works there.
+const scratchDir = expand(env.CW_SCRATCH_DIR || path.join(dataDir, 'scratch'));
+fs.mkdirSync(scratchDir, { recursive: true });
+
 export const config = {
   host: env.CW_HOST || '127.0.0.1',
   port: int(env.CW_PORT, 8787),
@@ -40,7 +56,8 @@ export const config = {
   passwordHash: env.CW_PASSWORD_HASH || '',
   secret,
   dataDir,
-  projectsRoot: expand(env.CW_PROJECTS_ROOT || defaultRoot),
+  projectsRoot: trueCase(expand(env.CW_PROJECTS_ROOT || defaultRoot)),
+  scratchDir: trueCase(scratchDir),
   allowAnyDir: env.CW_ALLOW_ANY_DIR === '1',
   claudeBin: env.CW_CLAUDE_BIN || 'claude',
   claudeArgs: (env.CW_CLAUDE_ARGS || '').split(/\s+/).filter(Boolean),
@@ -58,6 +75,18 @@ export const config = {
   internalUrl: '',
   trustProxy: env.CW_TRUST_PROXY === '1',
 };
+
+// A projects root whose letter case differs from the home folder's (e.g. /users/me/projects
+// with HOME=/Users/me). Inside Docker the disk is case-sensitive, so the folder only exists
+// as typed, and Claude in the container files its sessions under a different key than Claude
+// on the host. Returns the corrected path to suggest, or ''.
+export function rootCaseWarning(root = config.projectsRoot) {
+  const h = home.replace(/[\\/]+$/, '');
+  if (!h || root === h || root.startsWith(h + path.sep)) return '';
+  const lower = root.toLowerCase();
+  if (lower === h.toLowerCase() || lower.startsWith(h.toLowerCase() + path.sep)) return h + root.slice(h.length);
+  return '';
+}
 
 // Env vars that must never leak into the spawned claude / shell processes.
 export const PRIVATE_ENV = ['CW_PASSWORD', 'CW_PASSWORD_HASH', 'CW_SECRET', 'CW_MCP_TOKEN'];
