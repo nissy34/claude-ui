@@ -136,6 +136,33 @@ Set `CW_TRUST_PROXY=1`. WebSockets pass through Caddy without extra config; on n
 
 Then use "Add to Home Screen" for a full-screen app.
 
+## Claude Desktop handoff
+
+The server is also an MCP server that the Claude Desktop app can use, so the two can hand work to each other. From Desktop you can say "continue this tonight on my machine" (starts a chat here, or leaves the brief in a new chat's message box for you to send later), ask "what did that chat do?", send a chat new instructions, and keep **shared notes** that every chat here can read and write too (the built-in `notes` tools).
+
+Tools Desktop gets: `list_projects`, `list_sessions`, `get_session` (transcript, files edited, commands run, uncommitted changes), `handoff`, `send_message`, `list_notes`, `read_note`, `write_note`, `delete_note`.
+
+**Set it up** in Settings > Claude Desktop, which shows your token and a ready-to-copy config:
+
+1. Download the bridge (`/mcp/bridge.mjs`, a dependency-free script; needs Node 18+ on the Desktop computer). Claude Desktop only starts local servers from its config file, so the bridge forwards to this server over HTTP.
+2. In Claude Desktop: Settings > Developer > Edit Config, add the server to `claude_desktop_config.json`, then quit and reopen Desktop:
+
+```json
+{
+  "mcpServers": {
+    "claude-ui": {
+      "command": "node",
+      "args": ["C:\\Users\\you\\claude-ui-bridge.mjs", "http://192.168.1.20:8787/mcp"],
+      "env": { "CLAUDE_UI_TOKEN": "<token from Settings > Claude Desktop>" }
+    }
+  }
+}
+```
+
+Instead of the bridge you can use `mcp-remote`: `"command": "npx", "args": ["-y", "mcp-remote", "http://192.168.1.20:8787/mcp", "--allow-http", "--header", "Authorization:${AUTH}"], "env": { "AUTH": "Bearer <token>" }`. Claude Code itself can add it with `claude mcp add --transport http claude-ui http://host:8787/mcp --header "Authorization: Bearer <token>"`.
+
+Desktop on another computer needs the server to listen on your network (`CW_HOST=0.0.0.0`, or your LAN/Tailscale address). The endpoint is MCP Streamable HTTP at `POST /mcp`, authenticated with a bearer token (stored in `~/.claude-web/mcp-token`; make a new one in Settings, or pin it with `CW_MCP_TOKEN`). It refuses browser requests (any `Origin` header) and rate-limits wrong tokens like the login. Chats started from Desktop use "Ask before edits" unless Desktop asks for another mode, so an unattended chat stops at its first permission prompt and waits for you in the UI.
+
 ## Configuration
 
 All settings are environment variables; see [`.env.example`](.env.example).
@@ -151,6 +178,8 @@ All settings are environment variables; see [`.env.example`](.env.example).
 | `CW_CHAT_IDLE_MINUTES` | `30` | Stop idle chat processes (they resume on the next message); `0` keeps them |
 | `CW_ALLOW_ANY_DIR` | `0` | `1` allows sessions outside the projects root |
 | `CW_CHILD_SESSIONS` | `1` | `0` turns off the built-in sessions tools (child sessions) |
+| `CW_DESKTOP_MCP` | `1` | `0` turns off the Claude Desktop handoff server (`/mcp`) and the shared notes tools |
+| `CW_MCP_TOKEN` | generated | Fixed bearer token for `/mcp` instead of the generated one |
 | `CW_BROWSER` | `1` | `0` turns off the built-in browser |
 | `CW_BROWSER_PATH` | | A Chrome/Chromium/Edge binary for the built-in browser. Without it, the Playwright Chromium is used, then an installed Chrome or Edge |
 | `CW_TRUST_PROXY` | `0` | `1` behind a reverse proxy / Tailscale Serve |
@@ -163,6 +192,7 @@ All settings are environment variables; see [`.env.example`](.env.example).
 - Auth is an HMAC-signed, `HttpOnly`, `SameSite=Strict` cookie. WebSocket upgrades check the cookie and the `Origin` header. Change `CW_SECRET` (or delete `~/.claude-web/secret`) to log out every device.
 - Sessions can only start inside `CW_PROJECTS_ROOT` unless you set `CW_ALLOW_ANY_DIR=1`.
 - The password, hash and secret are stripped from the environment of every process the server starts.
+- The Claude Desktop handoff endpoint (`/mcp`) uses its own bearer token, refuses browser origins, and rate-limits wrong tokens. Anyone with the token can start chats, so treat it like the password.
 - Whoever can log in can do anything Claude or a shell can do as your user. Treat the password like an SSH key.
 
 ## Development

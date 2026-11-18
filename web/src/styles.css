@@ -745,6 +745,19 @@ kbd { display: inline-block; font: 11.5px var(--mono); background: var(--panel-2
 .shell-hint { font-size: 12px; color: var(--muted); padding: 6px 12px 0; }
 .pop button kbd { margin-left: auto; }
 
+/* Settings > Claude Desktop */
+.set-h { margin: 16px 0 4px; font-size: 13.5px; font-weight: 600; }
+.copy-block { position: relative; }
+.copy-block > .btn { position: absolute; top: 8px; right: 8px; }
+.copy-block .set-pre { padding-right: 70px; }
+.desk-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 6px 0 2px; }
+.desk-fields label { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; color: var(--muted); }
+.token-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 6px; }
+.token-row .token { font: 12.5px var(--mono); background: var(--panel-2); border: 1px solid var(--line); border-radius: 7px; padding: 4px 8px; user-select: all; word-break: break-all; }
+.warn-note { color: var(--warn); }
+.note-item .set-pre { margin-top: 6px; max-height: 320px; overflow: auto; }
+@media (max-width: 640px) { .desk-fields { grid-template-columns: 1fr; } }
+
 /* MCP sign-in from another device */
 .mcp-auth-bar { display: flex; flex-direction: column; gap: 6px; color: var(--text); }
 .mcp-auth-bar .dot-pulse { vertical-align: 1px; margin-right: 4px; }

@@ -27,6 +27,8 @@ import { getModels } from './models.js';
 import { sideChat } from './side-chat.js';
 import { prStatus, mergeWhenReady } from './pr-status.js';
 import * as schedules from './schedules.js';
+import * as notes from './notes.js';
+import { createDesktopMcp, getToken as getMcpToken, rotateToken as rotateMcpToken } from './desktop-mcp.js';
 import { authStatus, mcpList, pluginList, cliVersion, permissionRules, removePermissionRule } from './claude-admin.js';
 
 if (!config.password && !config.passwordHash) {
@@ -263,6 +265,23 @@ function scheduleSummary(t) {
   return { id: t.id, name: t.name, preset: t.preset, cron: t.cronExpr, enabled: t.enabled, cwd: t.cwd, nextRun: t.nextRun ? new Date(t.nextRun).toString() : null, lastRun: t.lastRun ? new Date(t.lastRun).toString() : null };
 }
 
+// Shared notes, used by chats through mcp-notes.js (and by Claude Desktop through /mcp).
+app.post(
+  '/internal/notes/:op',
+  wrap(async (req, res) => {
+    const b = req.body || {};
+    const op = req.params.op;
+    if (op === 'list') return res.json({ notes: notes.listNotes(b) });
+    if (op === 'read') return res.json(notes.getNote(b.id));
+    if (op === 'delete') return res.json(notes.deleteNote(b.id));
+    if (op === 'write') {
+      const from = store.get(req.headers['x-cw-session']);
+      return res.json(notes.writeNote({ ...b, source: from ? `chat "${from.meta.name}"` : 'chat' }));
+    }
+    throw new Error('Unknown op');
+  })
+);
+
 app.get('/internal/sessions', (req, res) => {
   let list = [...store.sessions.values()];
   if (req.query.parentId) list = list.filter((s) => s.meta.parentId === req.query.parentId);
@@ -292,6 +311,11 @@ app.post(
 );
 
 app.get('/api/me', (req, res) => res.json({ authed: isAuthed(req) }));
+
+// Handoff MCP for Claude Desktop (bearer token, not the login cookie).
+if (config.desktopMcp) {
+  createDesktopMcp({ store, resolveDir, createWorktree, getChanges, listProjects }).mount(app);
+}
 
 // Artifact files, authorised by a per-session signature in the path (no cookie: sandboxed
 // HTML artifacts load their own CSS/JS from here with an opaque origin).
@@ -381,41 +405,66 @@ app.get('/api/config', (req, res) => {
   res.json({ projectsRoot: config.projectsRoot, allowAnyDir: config.allowAnyDir, hostname: process.env.HOSTNAME || '' });
 });
 
+// ---------- Claude Desktop handoff MCP + shared notes ----------
+app.get('/api/desktop-mcp', (req, res) => {
+  if (!config.desktopMcp) return res.json({ enabled: false });
+  res.json({ enabled: true, token: getMcpToken(), fromEnv: !!process.env.CW_MCP_TOKEN, host: config.host, port: config.port, hostname: os.hostname() });
+});
+app.post(
+  '/api/desktop-mcp/token',
+  wrap(async (req, res) => res.json({ token: rotateMcpToken() }))
+);
+app.get('/api/notes', (req, res) => res.json({ notes: notes.listNotes({ query: req.query.q, limit: 200 }) }));
+app.get(
+  '/api/notes/:id',
+  wrap(async (req, res) => res.json(notes.getNote(req.params.id)))
+);
+app.post(
+  '/api/notes',
+  wrap(async (req, res) => res.json(notes.writeNote({ ...req.body, append: false, source: 'you (Settings)' })))
+);
+app.delete(
+  '/api/notes/:id',
+  wrap(async (req, res) => res.json(notes.deleteNote(req.params.id)))
+);
+
 // ---------- projects ----------
+async function listProjects() {
+  const root = config.projectsRoot;
+  const entries = await fs.promises.readdir(root, { withFileTypes: true });
+  const counts = {};
+  for (const s of store.list()) counts[s.cwd] = (counts[s.cwd] || 0) + 1;
+  const projects = [];
+  const seen = new Set();
+  const rootReal = fs.realpathSync(root);
+  for (const e of entries) {
+    if (e.name.startsWith('.')) continue;
+    const p = path.join(rootReal, e.name);
+    let isDir = e.isDirectory();
+    if (e.isSymbolicLink()) {
+      try {
+        isDir = fs.statSync(p).isDirectory();
+      } catch {
+        isDir = false;
+      }
+    }
+    if (!isDir) continue;
+    seen.add(p);
+    projects.push({ name: e.name, path: p, git: fs.existsSync(path.join(p, '.git')), sessions: counts[p] || 0 });
+  }
+  // Directories used by sessions that aren't direct children of the root.
+  for (const cwd of Object.keys(counts)) {
+    if (!seen.has(cwd)) {
+      projects.push({ name: path.relative(rootReal, cwd) || path.basename(cwd), path: cwd, git: fs.existsSync(path.join(cwd, '.git')), sessions: counts[cwd] });
+    }
+  }
+  projects.sort((a, b) => b.sessions - a.sessions || a.name.localeCompare(b.name));
+  return { root: rootReal, projects };
+}
+
 app.get(
   '/api/projects',
-  wrap(async (req, res) => {
-    const root = config.projectsRoot;
-    const entries = await fs.promises.readdir(root, { withFileTypes: true });
-    const counts = {};
-    for (const s of store.list()) counts[s.cwd] = (counts[s.cwd] || 0) + 1;
-    const projects = [];
-    const seen = new Set();
-    const rootReal = fs.realpathSync(root);
-    for (const e of entries) {
-      if (e.name.startsWith('.')) continue;
-      const p = path.join(rootReal, e.name);
-      let isDir = e.isDirectory();
-      if (e.isSymbolicLink()) {
-        try {
-          isDir = fs.statSync(p).isDirectory();
-        } catch {
-          isDir = false;
-        }
-      }
-      if (!isDir) continue;
-      seen.add(p);
-      projects.push({ name: e.name, path: p, git: fs.existsSync(path.join(p, '.git')), sessions: counts[p] || 0 });
-    }
-    // Directories used by sessions that aren't direct children of the root.
-    for (const cwd of Object.keys(counts)) {
-      if (!seen.has(cwd)) {
-        projects.push({ name: path.relative(rootReal, cwd) || path.basename(cwd), path: cwd, git: fs.existsSync(path.join(cwd, '.git')), sessions: counts[cwd] });
-      }
-    }
-    projects.sort((a, b) => b.sessions - a.sessions || a.name.localeCompare(b.name));
-    res.json({ root: rootReal, projects });
-  })
+  wrap(async (req, res) => res.json(await listProjects()))
 );
 
 app.post(

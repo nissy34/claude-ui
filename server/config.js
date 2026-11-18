@@ -53,10 +53,11 @@ export const config = {
   browserPath: env.CW_BROWSER_PATH || '',
   childSessions: env.CW_CHILD_SESSIONS !== '0',
   schedules: env.CW_SCHEDULES !== '0',
+  desktopMcp: env.CW_DESKTOP_MCP !== '0',
   internalToken: crypto.randomBytes(24).toString('hex'),
   internalUrl: '',
   trustProxy: env.CW_TRUST_PROXY === '1',
 };
 
 // Env vars that must never leak into the spawned claude / shell processes.
-export const PRIVATE_ENV = ['CW_PASSWORD', 'CW_PASSWORD_HASH', 'CW_SECRET'];
+export const PRIVATE_ENV = ['CW_PASSWORD', 'CW_PASSWORD_HASH', 'CW_SECRET', 'CW_MCP_TOKEN'];
