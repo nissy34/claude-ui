@@ -20,6 +20,7 @@ import {
 import { store, claudeProjectDir } from './sessions.js';
 import { getChanges, searchFiles, readFileSafe, createWorktree } from './git.js';
 import * as browser from './browser.js';
+import { browserAvailable } from './browser.js';
 import { listArtifacts, rawHandler, rawUrl } from './artifacts.js';
 import * as admin from './claude-admin.js';
 import { McpAdmin, onSignedIn, stopAllAdmins } from './mcp-admin.js';
@@ -222,6 +223,34 @@ app.get(
   })
 );
 
+// Sign-in pages: the URL opener (opener.js) and Sign in buttons open them in the sign-in browser on
+// this machine, so their redirect to http://127.0.0.1:<port> reaches the waiting process. Every
+// open UI pops up the sign-in window and notifies.
+function openSigninPage(url, { sid, server } = {}) {
+  if (!/^https?:\/\//i.test(String(url || ''))) throw new Error('Only http(s) pages can be opened');
+  if (!browserAvailable()) throw new Error('The built-in browser is not available on this server');
+  const from = sid ? store.get(sid) : null;
+  let host = '';
+  try {
+    host = new URL(url).host;
+  } catch {}
+  from?.meta.kind === 'chat' && from.record({ k: 'notice', text: `Sign-in page opened in the sign-in window: ${host}` });
+  browser
+    .openSignin(url)
+    .then((id) => emitUi({ t: 'signin-page', id, url, host, server: server || null, from: from ? { id: from.id, name: from.meta.name } : null }))
+    .catch((e) => emitUi({ t: 'error', error: `Could not open the sign-in page: ${e.message}` }));
+}
+browser.onSigninChange((pages) => emitUi({ t: 'signin-pages', pages }));
+
+app.post('/internal/open-url', (req, res) => {
+  try {
+    openSigninPage(req.body?.url, { sid: req.body?.sid });
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
 // Built-in browser, driven by Claude through mcp-browser.js.
 app.get(
   '/internal/browser/:sid/screenshot',
@@ -402,7 +431,7 @@ function wrap(fn) {
 
 // ---------- info ----------
 app.get('/api/config', (req, res) => {
-  res.json({ projectsRoot: config.projectsRoot, allowAnyDir: config.allowAnyDir, hostname: process.env.HOSTNAME || '' });
+  res.json({ projectsRoot: config.projectsRoot, allowAnyDir: config.allowAnyDir, hostname: process.env.HOSTNAME || '', browser: browserAvailable() });
 });
 
 // ---------- Claude Desktop handoff MCP + shared notes ----------
@@ -624,7 +653,27 @@ function chatOf(req) {
   return s;
 }
 app.post('/api/sessions/:id/mcp/status', wrap(async (req, res) => res.json({ servers: await chatOf(req).mcpStatus({ start: !!req.body?.start }) })));
-app.post('/api/sessions/:id/mcp/auth', wrap(async (req, res) => res.json(await chatOf(req).mcpAuthenticate(req.body?.name))));
+app.post(
+  '/api/signin-page',
+  wrap(async (req, res) => {
+    openSigninPage(req.body?.url, { server: req.body?.server ? String(req.body.server).slice(0, 80) : null });
+    res.json({ ok: true });
+  })
+);
+app.post(
+  '/api/sessions/:id/mcp/auth',
+  wrap(async (req, res) => {
+    const s = chatOf(req);
+    res.json(signinInBrowser(await s.mcpAuthenticate(req.body?.name), req.body?.name, s.id));
+  })
+);
+// Open a Sign in in the built-in browser when there is one: its redirect to localhost then lands
+// on this machine and the sign-in finishes by itself. Without it, the UI opens it on the device.
+function signinInBrowser(r, server, sid) {
+  if (!r?.authUrl || !browserAvailable()) return r;
+  openSigninPage(r.authUrl, { sid, server });
+  return { ...r, inBrowser: true };
+}
 app.post(
   '/api/oauth/callback',
   wrap(async (req, res) => {
@@ -659,7 +708,7 @@ app.post(
     const name = String(req.body?.name || '');
     const act = req.params.action;
     let out = {};
-    if (act === 'signin') out = await a.mcpAuthenticate(name);
+    if (act === 'signin') out = signinInBrowser(await a.mcpAuthenticate(name), name);
     else if (act === 'signout') out = await a.mcpSignOut(name);
     else if (act === 'reconnect') {
       a.ensureProcess();
@@ -738,17 +787,20 @@ app.get(
 );
 
 // ---------- built-in browser (the user's view of Claude's tab) ----------
+const browserTabOf = (req) => (browser.isSigninId(req.params.id) ? req.params.id : getSession(req).id);
+app.get('/api/signin-pages', (req, res) => res.json({ pages: browser.signinList() }));
+app.post('/api/signin-pages/:id/close', wrap(async (req, res) => res.json({ ok: !!(await browser.closeSignin(req.params.id), true) })));
 app.get(
   '/api/sessions/:id/browser',
   wrap(async (req, res) => {
-    getSession(req);
+    browserTabOf(req);
     res.json(await browser.state(req.params.id));
   })
 );
 app.get(
   '/api/sessions/:id/browser/frame',
   wrap(async (req, res) => {
-    getSession(req);
+    browserTabOf(req);
     const buf = await browser.screenshot(req.params.id, { type: 'jpeg', quality: 70 });
     res.setHeader('Cache-Control', 'no-store');
     res.type('image/jpeg').send(buf);
@@ -757,7 +809,7 @@ app.get(
 app.post(
   '/api/sessions/:id/browser/:op',
   wrap(async (req, res) => {
-    getSession(req);
+    browserTabOf(req);
     const out = await browser.run(req.params.id, req.params.op, { ...(req.body || {}), quiet: true });
     res.json({ ...(out.url ? { url: out.url, title: out.title } : out), state: await browser.state(req.params.id) });
   })
@@ -931,7 +983,16 @@ server.on('upgrade', (req, socket, head) => {
 });
 
 // Pushes the session list whenever it changes, so every open UI stays in sync.
+// One-off notices for every open UI (e.g. "a sign-in page opened"), next to the session list.
+const uiEvents = new Set();
+function emitUi(msg) {
+  const data = JSON.stringify(msg);
+  for (const ws of uiEvents) if (ws.readyState === 1) ws.send(data);
+}
+
 function handleEvents(ws) {
+  uiEvents.add(ws);
+  ws.on('close', () => uiEvents.delete(ws));
   let timer = null;
   const push = () => {
     if (timer) return;
@@ -1054,6 +1115,7 @@ function shutdown(sig) {
   console.log(`${sig}: saving sessions and shutting down`);
   store.shutdown();
   stopAllAdmins();
+  browser.shutdown();
   server.close();
   setTimeout(() => process.exit(0), 1500).unref();
 }

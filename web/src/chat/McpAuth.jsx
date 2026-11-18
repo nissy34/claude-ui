@@ -2,8 +2,15 @@ import { useEffect, useState } from 'react';
 import { api } from '../api.js';
 
 // MCP sign-in (OAuth) from any device. Claude's flow redirects to http://localhost:<port>/callback
-// on the machine running Claude. From a phone or another computer that page fails to load, so the
-// user pastes its address here and the server hands it to the waiting sign-in.
+// on the machine running Claude. Main path: the page opens in the sign-in window (the server's
+// built-in browser, on that machine), so the redirect lands by itself. Fallback, for providers
+// that refuse that browser: open it on this device and paste the failed localhost address back.
+
+let browserOn = false;
+export function setBrowserAvailable(v) {
+  browserOn = v;
+}
+export const showSigninWindow = (detail) => window.dispatchEvent(new CustomEvent('cw-show-signin', { detail }));
 
 export const LOCAL_CALLBACK = /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?\/\S*[?&](code|error)=\S*$/i;
 
@@ -16,6 +23,17 @@ export async function startSignIn(sessionId, name, onError) {
 
 /** Opens a tab right away (inside the click), then points it at the provider page. */
 export async function openSignIn(begin, onError) {
+  if (browserOn) {
+    // The server opens it in the sign-in window, which then pops up here.
+    try {
+      const r = await begin();
+      if (r?.authUrl && !r.inBrowser) window.open(r.authUrl, '_blank');
+      return r;
+    } catch (e) {
+      onError?.(e);
+      return null;
+    }
+  }
   const w = window.open('', '_blank');
   try {
     if (w) w.document.write('<p style="font:15px system-ui;padding:24px">Starting sign-in…</p>');
@@ -45,6 +63,7 @@ export function McpSignInBar({ sessionId, flows, onError, onDone }) {
   const [url, setUrl] = useState('');
   const [busy, setBusy] = useState(false);
   const [hidden, setHidden] = useState({});
+  const [here, setHere] = useState(!browserOn);
   const shown = (flows || []).filter((f) => !hidden[f.name + f.at]);
   if (!shown.length) return null;
   const names = shown.map((f) => f.name).join(', ');
@@ -64,9 +83,23 @@ export function McpSignInBar({ sessionId, flows, onError, onDone }) {
   };
   return (
     <form className="inbox-bar mcp-auth-bar" onSubmit={submit}>
-      <div className="mcp-auth-text">
-        <span className="dot-pulse" /> Signing in to <b>{names}</b>. Approve access in the tab that opened. If it ends on a page that can’t load (<code>localhost</code>), copy that page’s address and paste it here.
-      </div>
+      {!here ? (
+        <div className="mcp-auth-text">
+          <span className="dot-pulse" /> Signing in to <b>{names}</b> in the sign-in window.{' '}
+          <button type="button" className="linklike" onClick={() => showSigninWindow({ server: names })}>
+            Show it
+          </button>
+          {' · '}
+          <button type="button" className="linklike" onClick={() => setHere(true)}>
+            Doesn’t work there? Use this device
+          </button>
+        </div>
+      ) : (
+        <div className="mcp-auth-text">
+          <span className="dot-pulse" /> Signing in to <b>{names}</b>. Approve access in the tab that opened. If it ends on a page that can’t load (<code>localhost</code>), copy that page’s address and paste it here.
+        </div>
+      )}
+      {here && (
       <div className="mcp-auth-row">
         <input
           value={url}
@@ -83,11 +116,12 @@ export function McpSignInBar({ sessionId, flows, onError, onDone }) {
           {busy ? 'Connecting…' : 'Connect'}
         </button>
       </div>
+      )}
       <div className="mcp-auth-links">
         {shown.map((f) => (
           <span key={f.name}>
             <a href={f.authUrl} target="_blank" rel="noreferrer">
-              Open {f.name} sign-in again
+              Open {f.name} sign-in {here ? 'again' : 'on this device'}
             </a>
             {' · '}
             <button type="button" className="linklike" onClick={() => setHidden((h) => ({ ...h, [f.name + f.at]: true }))}>
@@ -228,14 +262,25 @@ export function Elicitation({ req, done, onAnswer }) {
       {req.message && <div className="elicit-msg">{req.message}</div>}
       {req.mode === 'url' ? (
         <div className="elicit-url">
-          <a className="btn small primary" href={req.url} target="_blank" rel="noreferrer" onClick={() => setOpened(true)}>
-            Open {(() => {
-              try {
-                return new URL(req.url).host;
-              } catch {
-                return 'link';
-              }
-            })()}
+          {browserOn && (
+            <button
+              type="button"
+              className="btn small primary"
+              onClick={() => (setOpened(true), api('/api/signin-page', { method: 'POST', body: { url: req.url, server: req.server } }).catch(() => {}))}
+            >
+              Open in the sign-in window
+            </button>
+          )}
+          <a className={`btn small ${browserOn ? '' : 'primary'}`} href={req.url} target="_blank" rel="noreferrer" onClick={() => setOpened(true)}>
+            {browserOn
+              ? 'On this device'
+              : `Open ${(() => {
+                  try {
+                    return new URL(req.url).host;
+                  } catch {
+                    return 'link';
+                  }
+                })()}`}
           </a>
           {opened && <span className="muted">Finish there, then press Done.</span>}
         </div>
@@ -335,8 +380,13 @@ export function McpLogins({ cwd, onError }) {
               <div className="login-actions">
                 {flow ? (
                   <>
+                    {browserOn && (
+                      <button className="btn small" onClick={() => showSigninWindow({ server: s.name })}>
+                        Show sign-in
+                      </button>
+                    )}
                     <a className="btn small" href={flow.authUrl} target="_blank" rel="noreferrer">
-                      Open again
+                      {browserOn ? 'On this device' : 'Open again'}
                     </a>
                     <button className="btn small ghost" onClick={() => act('cancel', { name: s.name })}>
                       Cancel

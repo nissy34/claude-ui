@@ -13,6 +13,19 @@ function Connect({ onError }) {
   const [info, setInfo] = useState(null);
   const [show, setShow] = useState(false);
   const [host, setHost] = useState(() => (/^(localhost|127\.|\[::1\])/.test(location.hostname) ? '' : location.host));
+  const [via, setVia] = useState(() => {
+    try {
+      return localStorage.getItem('cw.desktopVia') || 'code';
+    } catch {
+      return 'code';
+    }
+  });
+  const pickVia = (v) => {
+    setVia(v);
+    try {
+      localStorage.setItem('cw.desktopVia', v);
+    } catch {}
+  };
   const [where, setWhere] = useState(isWin ? 'C:\\Users\\<you>\\claude-ui-bridge.mjs' : '/Users/<you>/claude-ui-bridge.mjs');
   useEffect(() => {
     api('/api/desktop-mcp')
@@ -26,8 +39,15 @@ function Connect({ onError }) {
   if (!info.enabled) return <p className="muted set-note">The handoff server is turned off (CW_DESKTOP_MCP=0).</p>;
   const url = `${location.protocol}//${host || location.host}/mcp`;
   const token = info.token;
-  const cfg = JSON.stringify({ mcpServers: { 'claude-ui': { command: 'node', args: [where, url], env: { CLAUDE_UI_TOKEN: show ? token : '<token>' } } } }, null, 2);
-  const cfgCopy = JSON.stringify({ mcpServers: { 'claude-ui': { command: 'node', args: [where, url], env: { CLAUDE_UI_TOKEN: token } } } }, null, 2);
+  const server = (t) =>
+    via === 'code'
+      ? { type: 'http', url, headers: { Authorization: `Bearer ${t}` } }
+      : via === 'uvx'
+      ? { command: 'uvx', args: ['mcp-proxy', '--transport', 'streamablehttp', '-H', 'Authorization', `Bearer ${t}`, url] }
+      : { command: 'node', args: [where, url], env: { CLAUDE_UI_TOKEN: t } };
+  const cfg = JSON.stringify({ mcpServers: { 'claude-ui': server(show ? token : '<token>') } }, null, 2);
+  const cfgCopy = JSON.stringify({ mcpServers: { 'claude-ui': server(token) } }, null, 2);
+  const addCmd = (t) => `claude mcp add --scope user --transport http claude-ui ${url} --header "Authorization: Bearer ${t}"`;
   const rotate = async () => {
     if (!window.confirm('Make a new token? Claude Desktop stops connecting until you put the new one in its config.')) return;
     try {
@@ -48,27 +68,69 @@ function Connect({ onError }) {
           This server listens on {info.host} only, so only Claude Desktop on this same computer can reach it. To use Desktop on another computer, set CW_HOST=0.0.0.0 (or your LAN or Tailscale address).
         </p>
       )}
-      <h4 className="set-h">1. Download the bridge</h4>
+      <h4 className="set-h">1. Pick where you use Claude</h4>
+      <div className="seg" style={{ margin: '4px 0 6px' }}>
+        <button className={via === 'code' ? 'on' : ''} onClick={() => pickVia('code')}>
+          Claude Code (HTTP)
+        </button>
+        <button className={via === 'uvx' ? 'on' : ''} onClick={() => pickVia('uvx')}>
+          Desktop chat, uvx
+        </button>
+        <button className={via === 'node' ? 'on' : ''} onClick={() => pickVia('node')}>
+          Desktop chat, Node
+        </button>
+      </div>
+      {via === 'code' ? (
+        <p className="muted set-note">
+          Claude Code (in the Desktop app's Code tab, the terminal or an IDE) connects to HTTP MCP servers directly, so nothing else is needed.
+        </p>
+      ) : (
+        <p className="muted set-note">
+          The Desktop chat's config file only starts local servers, and its custom connectors connect from Anthropic's cloud, which can't reach your network. So the chat reaches this server through a small local proxy.{' '}
+          {via === 'uvx' ? (
+            <>
+              With uvx it runs the open-source mcp-proxy package, downloaded on first start. Needs{' '}
+              <a href="https://docs.astral.sh/uv/getting-started/installation/" target="_blank" rel="noreferrer">
+                uv
+              </a>{' '}
+              on that computer.
+            </>
+          ) : (
+            <>
+              The Node bridge is one script with no dependencies (needs Node 18 or newer).{' '}
+              <a href="/mcp/bridge.mjs" download="claude-ui-bridge.mjs">
+                Download claude-ui-bridge.mjs
+              </a>
+            </>
+          )}
+        </p>
+      )}
+      <h4 className="set-h">2. Add it</h4>
       <p className="muted set-note">
-        Claude Desktop starts local servers from its config file, so it connects through a small script with no dependencies (needs Node 18 or newer on the Desktop computer).{' '}
-        <a href="/mcp/bridge.mjs" download="claude-ui-bridge.mjs">
-          Download claude-ui-bridge.mjs
-        </a>
-      </p>
-      <h4 className="set-h">2. Add it to Claude Desktop</h4>
-      <p className="muted set-note">
-        In Claude Desktop open Settings, Developer, Edit Config, and add this to claude_desktop_config.json (merge it into "mcpServers" if you already have one). Then quit and reopen Claude Desktop.
+        {via === 'code'
+          ? 'Run this once on the computer where you use Claude Code (--scope user makes it available in every project), or put the JSON below in a project\'s .mcp.json. Then start a new session.'
+          : 'In Claude Desktop open Settings, Developer, Edit Config, and add this to claude_desktop_config.json (merge it into "mcpServers" if you already have one). Then quit and reopen Claude Desktop.'}
       </p>
       <div className="desk-fields">
         <label>
-          Address Desktop uses to reach this server
+          Address Claude uses to reach this server
           <input className="search-in" value={host} onChange={(e) => setHost(e.target.value.replace(/^https?:\/\//, '').replace(/\/.*$/, ''))} placeholder="192.168.1.20:8787" />
         </label>
-        <label>
-          Where you saved the bridge
-          <input className="search-in" value={where} onChange={(e) => setWhere(e.target.value)} />
-        </label>
+        {via === 'node' && (
+          <label>
+            Where you saved the bridge
+            <input className="search-in" value={where} onChange={(e) => setWhere(e.target.value)} />
+          </label>
+        )}
       </div>
+      {via === 'code' && (
+        <div className="copy-block">
+          <pre className="set-pre">{addCmd(show ? token : '<token>')}</pre>
+          <button className="btn small" onClick={() => copy(addCmd(token))}>
+            Copy
+          </button>
+        </div>
+      )}
       <div className="copy-block">
         <pre className="set-pre">{cfg}</pre>
         <button className="btn small" onClick={() => copy(cfgCopy)}>

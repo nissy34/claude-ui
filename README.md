@@ -173,10 +173,35 @@ The server is also an MCP server that the Claude Desktop app can use, so the two
 
 Tools Desktop gets: `list_projects`, `list_sessions`, `get_session` (transcript, files edited, commands run, uncommitted changes), `handoff`, `send_message`, `list_notes`, `read_note`, `write_note`, `delete_note`.
 
-**Set it up** in Settings > Claude Desktop, which shows your token and a ready-to-copy config:
+**Set it up** in Settings > Claude Desktop, which shows your token and ready-to-copy snippets.
 
-1. Download the bridge (`/mcp/bridge.mjs`, a dependency-free script; needs Node 18+ on the Desktop computer). Claude Desktop only starts local servers from its config file, so the bridge forwards to this server over HTTP.
-2. In Claude Desktop: Settings > Developer > Edit Config, add the server to `claude_desktop_config.json`, then quit and reopen Desktop:
+**Claude Code** (the Desktop app's Code tab, the terminal, IDEs) takes HTTP MCP servers directly:
+
+```bash
+claude mcp add --scope user --transport http claude-ui http://192.168.1.20:8787/mcp --header "Authorization: Bearer <token>"
+```
+
+or in a project's `.mcp.json`: `{"mcpServers": {"claude-ui": {"type": "http", "url": "http://192.168.1.20:8787/mcp", "headers": {"Authorization": "Bearer <token>"}}}}`.
+
+**The Desktop chat** needs a small local proxy: its config file only starts local (stdio) servers, and custom connectors connect from Anthropic's cloud, which can't reach a LAN address. Pick one:
+
+- **uvx:** runs the open-source [`mcp-proxy`](https://pypi.org/project/mcp-proxy/) package; needs [uv](https://docs.astral.sh/uv/) on the Desktop computer.
+- **Node bridge:** download `/mcp/bridge.mjs` (a single dependency-free script; needs Node 18+).
+
+In Claude Desktop: Settings > Developer > Edit Config, add the server to `claude_desktop_config.json`, then quit and reopen Desktop:
+
+```json
+{
+  "mcpServers": {
+    "claude-ui": {
+      "command": "uvx",
+      "args": ["mcp-proxy", "--transport", "streamablehttp", "-H", "Authorization", "Bearer <token>", "http://192.168.1.20:8787/mcp"]
+    }
+  }
+}
+```
+
+or, with the Node bridge:
 
 ```json
 {
@@ -190,7 +215,7 @@ Tools Desktop gets: `list_projects`, `list_sessions`, `get_session` (transcript,
 }
 ```
 
-Instead of the bridge you can use `mcp-remote`: `"command": "npx", "args": ["-y", "mcp-remote", "http://192.168.1.20:8787/mcp", "--allow-http", "--header", "Authorization:${AUTH}"], "env": { "AUTH": "Bearer <token>" }`. Claude Code itself can add it with `claude mcp add --transport http claude-ui http://host:8787/mcp --header "Authorization: Bearer <token>"`.
+`npx mcp-remote http://host:8787/mcp --allow-http --header "Authorization:${AUTH}"` (with `AUTH=Bearer <token>` in `env`) should work too (untested).
 
 Desktop on another computer needs the server to listen on your network (`CW_HOST=0.0.0.0`, or your LAN/Tailscale address). The endpoint is MCP Streamable HTTP at `POST /mcp`, authenticated with a bearer token (stored in `~/.claude-web/mcp-token`; make a new one in Settings, or pin it with `CW_MCP_TOKEN`). It refuses browser requests (any `Origin` header) and rate-limits wrong tokens like the login. Chats started from Desktop use "Ask before edits" unless Desktop asks for another mode, so an unattended chat stops at its first permission prompt and waits for you in the UI.
 

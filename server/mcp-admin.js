@@ -14,6 +14,7 @@ import readline from 'node:readline';
 import { spawn } from 'node:child_process';
 import { config, PRIVATE_ENV } from './config.js';
 import { resolveCommand } from './launch.js';
+import { withOpener } from './opener.js';
 
 const FLOW_TTL = 15 * 60_000;
 
@@ -96,6 +97,7 @@ export const mcpAuthMethods = {
     }
     if (r.callbackExpected) this.oauth.set(name, { state: r.state, port: r.callbackPort, authUrl: r.authUrl, at: Date.now() });
     this.setMcpServers(null, { keep: true });
+    this.watchSignIn(name, r.state);
     return { authUrl: r.authUrl, callbackExpected: !!r.callbackExpected, port: r.callbackPort };
   },
 
@@ -116,6 +118,27 @@ export const mcpAuthMethods = {
     this.refreshMcpSoon(name, true);
     signedInListener?.(name, this);
     return { ok: true };
+  },
+
+  // When the redirect reaches Claude by itself (sign-in done in the built-in browser), notice it.
+  watchSignIn(name, state) {
+    const started = Date.now();
+    const tick = async () => {
+      const f = this.oauth.get(name);
+      if (!f || f.state !== state || !this.proc || Date.now() - started > FLOW_TTL) return;
+      try {
+        const s = (await this.mcpStatus()).find((x) => x.name === name);
+        if (s?.status === 'connected') {
+          this.oauth.delete(name);
+          this.onMcpSignedIn(name);
+          this.setMcpServers(null, { keep: true });
+          signedInListener?.(name, this);
+          return;
+        }
+      } catch {}
+      setTimeout(tick, 3000);
+    };
+    setTimeout(tick, 3000);
   },
 
   cancelSignIn(name) {
@@ -191,7 +214,7 @@ export class McpAdmin {
 
   ensureProcess() {
     if (this.proc) return;
-    const env = { ...process.env };
+    const env = withOpener({ ...process.env });
     for (const k of PRIVATE_ENV) delete env[k];
     const args = ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--permission-prompt-tool', 'stdio', ...config.claudeArgs];
     let proc;

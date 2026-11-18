@@ -2,6 +2,8 @@
 // Claude drives it through the "browser" MCP server (mcp-browser.js -> /internal/browser/*),
 // and the web UI shows the same tab live in the Browser panel and can click and type into it.
 import { createRequire } from 'node:module';
+import fs from 'node:fs';
+import path from 'node:path';
 import { config } from './config.js';
 
 const require = createRequire(import.meta.url);
@@ -54,10 +56,112 @@ function bump(t) {
   for (const fn of t.listeners) fn();
 }
 
+// Sign-in pages (opened by MCP servers and CLIs through the URL opener, or by Sign in) open as
+// tabs of a separate browser whose profile is kept on disk, so SSO cookies survive restarts and
+// later sign-ins finish by themselves. Claude's own tabs stay throwaway. A sign-in tab closes
+// itself once it lands on its http://127.0.0.1:<port> callback.
+export const isSigninId = (id) => /^signin-\d+$/.test(String(id));
+let signinPromise = null;
+let signinSeq = 0;
+const signinListeners = new Set();
+export function onSigninChange(fn) {
+  signinListeners.add(fn);
+  return () => signinListeners.delete(fn);
+}
+const signinChanged = () => signinListeners.forEach((fn) => fn(signinList()));
+
+async function launchSignin() {
+  if (!browserAvailable()) throw new Error('The built-in browser is not available on this server.');
+  const dir = path.join(config.dataDir, 'browser-profile');
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const base = { headless: true, args: ['--no-sandbox', '--disable-dev-shm-usage'], viewport: { width: 1280, height: 800 }, deviceScaleFactor: 1, ignoreHTTPSErrors: true };
+  const attempts = config.browserPath ? [{ ...base, executablePath: config.browserPath }] : [base, { ...base, channel: 'chrome' }, { ...base, channel: 'msedge' }];
+  let last;
+  for (const opts of attempts) {
+    try {
+      const ctx = await pw.chromium.launchPersistentContext(dir, opts);
+      ctx.on('close', () => {
+        signinPromise = null;
+        for (const id of [...tabs.keys()]) if (isSigninId(id)) tabs.delete(id);
+        signinChanged();
+      });
+      // A popup from a sign-in page replaces it in the same tab.
+      ctx.on('page', async (p) => {
+        const opener = await p.opener().catch(() => null);
+        if (!opener) return;
+        const owner = [...tabs.values()].find((t) => t.page === opener);
+        if (!owner) return;
+        const url = p.url();
+        await p.close().catch(() => {});
+        if (url && url !== 'about:blank') owner.page.goto(url).catch(() => {});
+      });
+      for (const p of ctx.pages()) await p.close().catch(() => {});
+      return ctx;
+    } catch (e) {
+      last = e;
+    }
+  }
+  throw new Error(`Could not start the sign-in browser: ${last?.message?.split('\n')[0]}`);
+}
+
+const LOOPBACK_PAGE = /^http:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d+)?\//i;
+
+/** Open a sign-in page in a new tab of the sign-in browser. Returns its tab id. */
+export async function openSignin(url) {
+  if (!signinPromise) signinPromise = launchSignin().catch((e) => ((signinPromise = null), Promise.reject(e)));
+  const context = await signinPromise;
+  const page = await context.newPage();
+  const id = `signin-${++signinSeq}`;
+  const t = { context, page, console: [], listeners: new Set(), version: 0, signin: true, opened: Date.now(), done: false };
+  tabs.set(id, t);
+  page.on('framenavigated', (f) => {
+    if (f !== page.mainFrame()) return;
+    bump(t);
+    signinChanged();
+  });
+  // Any main-frame navigation to a non-local address (even one answered by an instant redirect).
+  page.on('request', (rq) => {
+    if (rq.isNavigationRequest() && rq.frame() === page.mainFrame() && !LOOPBACK_PAGE.test(rq.url())) t.leftLocal = true;
+  });
+  page.on('load', () => {
+    bump(t);
+    const local = LOOPBACK_PAGE.test(page.url());
+    if (!local) t.leftLocal = true;
+    // Back on a local page after the identity provider: that's the callback, and the waiting
+    // process has its answer. (A CLI may also start on its own local page, so only after leaving.)
+    else if (!t.done && t.leftLocal) {
+      t.done = true;
+      signinChanged();
+      setTimeout(() => closeSignin(id), 4000);
+    }
+  });
+  page.on('close', () => {
+    tabs.delete(id);
+    signinChanged();
+  });
+  signinChanged();
+  setTimeout(() => closeSignin(id), 20 * 60_000).unref?.(); // a sign-in nobody finished
+  page.goto(normalizeUrl(url), { waitUntil: 'domcontentloaded', timeout: 30_000 }).catch(() => {});
+  return id;
+}
+
+export function signinList() {
+  return [...tabs.entries()]
+    .filter(([id]) => isSigninId(id))
+    .map(([id, t]) => ({ id, url: t.page.url(), done: t.done, opened: t.opened }));
+}
+
+export async function closeSignin(id) {
+  const t = tabs.get(id);
+  if (!t?.signin) return;
+  await t.page.close().catch(() => {});
+}
+
 async function tab(sessionId, create = true) {
   let t = tabs.get(sessionId);
   if (t && !t.page.isClosed()) return t;
   if (!create) return null;
+  if (isSigninId(sessionId)) throw new Error('This sign-in page was closed');
   const browser = await getBrowser();
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, deviceScaleFactor: 1, ignoreHTTPSErrors: true });
   const page = await context.newPage();
@@ -228,7 +332,13 @@ export function onChange(sessionId, fn) {
 }
 
 export async function closeTab(sessionId) {
+  if (isSigninId(sessionId)) return closeSignin(sessionId);
   const t = tabs.get(sessionId);
   tabs.delete(sessionId);
   await t?.context.close().catch(() => {});
+}
+
+export async function shutdown() {
+  const ctx = await signinPromise?.catch(() => null);
+  await ctx?.close().catch(() => {});
 }
