@@ -16,6 +16,12 @@ function int(v, d) {
   return Number.isFinite(n) ? n : d;
 }
 
+function publicUrl(v) {
+  v = (v || '').trim().replace(/\/+$/, '');
+  if (!v) return '';
+  return /^https?:\/\//i.test(v) ? v : `http://${v}`;
+}
+
 const dataDir = expand(env.CW_DATA_DIR || path.join(home, '.claude-web'));
 fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
 
@@ -57,6 +63,11 @@ export const config = {
   internalToken: crypto.randomBytes(24).toString('hex'),
   internalUrl: '',
   trustProxy: env.CW_TRUST_PROXY === '1',
+  // Address other computers use to reach this server (e.g. http://myserver:8787),
+  // for the setup snippets in Settings. Needed in Docker, where the machine's
+  // hostname is the container id.
+  publicUrl: publicUrl(env.CW_PUBLIC_URL),
+  inDocker: env.CW_IN_DOCKER === '1' || fs.existsSync('/.dockerenv'),
 };
 
 // Env vars that must never leak into the spawned claude / shell processes.

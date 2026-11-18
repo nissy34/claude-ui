@@ -62,6 +62,7 @@ ENV DISABLE_AUTOUPDATER=1 \
     LANG=C.UTF-8 \
     SHELL=/bin/bash \
     CW_HOST=0.0.0.0 \
+    CW_IN_DOCKER=1 \
     CW_PORT=8787
 
 EXPOSE 8787

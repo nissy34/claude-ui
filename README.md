@@ -114,6 +114,8 @@ docker compose up -d
 docker compose logs -f
 ```
 
+In `.env`, also set `CW_PUBLIC_URL=http://<machine>:8787` (the address other computers use), so Settings > Claude Desktop shows that instead of the container id.
+
 Open `http://<machine>:8787`. It listens on all interfaces; change the port mapping in `docker-compose.yml` to `127.0.0.1:8787:8787` to keep it local, or set `CW_PORT` in `.env` for another host port.
 
 - **Before the first start**, `~/.claude`, `~/.claude.json` and `~/.gitconfig` must exist on the host (they do once you've used `claude` and set `git config --global user.name`). Compose stops with an error instead of creating them as empty folders.
@@ -235,6 +237,7 @@ All settings are environment variables; see [`.env.example`](.env.example).
 | `CW_ALLOW_ANY_DIR` | `0` | `1` allows sessions outside the projects root |
 | `CW_CHILD_SESSIONS` | `1` | `0` turns off the built-in sessions tools (child sessions) |
 | `CW_DESKTOP_MCP` | `1` | `0` turns off the Claude Desktop handoff server (`/mcp`) and the shared notes tools |
+| `CW_PUBLIC_URL` | | Address other computers use to reach the server (e.g. `http://myserver:8787` or your Tailscale URL), used in the Claude Desktop setup snippets. Set it when running in Docker, where the hostname is the container id |
 | `CW_MCP_TOKEN` | generated | Fixed bearer token for `/mcp` instead of the generated one |
 | `CW_BROWSER` | `1` | `0` turns off the built-in browser |
 | `CW_BROWSER_PATH` | | A Chrome/Chromium/Edge binary for the built-in browser. Without it, the Playwright Chromium is used, then an installed Chrome or Edge |
