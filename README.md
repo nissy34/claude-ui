@@ -173,7 +173,9 @@ Then use "Add to Home Screen" for a full-screen app.
 
 The server is also an MCP server that the Claude Desktop app can use, so the two can hand work to each other. From Desktop you can say "continue this tonight on my machine" (starts a chat here, or leaves the brief in a new chat's message box for you to send later), ask "what did that chat do?", send a chat new instructions, and keep **shared notes** that every chat here can read and write too (the built-in `notes` tools).
 
-Tools Desktop gets: `list_projects`, `list_sessions`, `get_session` (transcript, files edited, commands run, uncommitted changes), `handoff`, `send_message`, `list_notes`, `read_note`, `write_note`, `delete_note`.
+Tools Desktop gets: `list_projects`, `list_sessions`, `get_session` (transcript, files edited, commands run, uncommitted changes), `handoff`, `send_message`, `stop_session`, `rename_session`, `archive_session`, `set_session_options` (model, effort, permission mode), `list_notes`, `read_note`, `write_note`, `delete_note`. `get_session` also returns the chat's current task list.
+
+Chats here get the same session control (`stop_session`, `rename_session`, `archive_session` next to `set_session_options`), and an `update_plan` tool that shows a live task list with a progress bar above the message box.
 
 **Set it up** in Settings > Claude Desktop, which shows your token and ready-to-copy snippets.
 

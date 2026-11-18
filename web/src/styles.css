@@ -808,3 +808,11 @@ kbd { display: inline-block; font: 11.5px var(--mono); background: var(--panel-2
 .signin-tab.on { border-color: var(--accent); color: var(--accent); }
 .signin-foot { display: flex; align-items: center; gap: 8px; justify-content: space-between; padding: 6px 14px 10px; font-size: 12px; }
 .signin-empty { margin: auto; }
+
+/* Live task list (update_plan / TodoWrite) */
+.todo-head { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; cursor: pointer; }
+.todo-title { color: var(--text); font-weight: 600; font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.todo-count { font-variant-numeric: tabular-nums; }
+.todo-bar { flex: 1; max-width: 120px; height: 4px; border-radius: 2px; background: var(--line); overflow: hidden; margin-left: auto; }
+.todo-bar > span { display: block; height: 100%; background: var(--accent); transition: width .3s; }
+.todos li.in_progress .tbox { color: var(--accent); }

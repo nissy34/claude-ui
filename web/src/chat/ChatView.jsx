@@ -752,12 +752,19 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
             </button>
           )}
 
-          {todos && todos.some((t) => t.status !== 'completed') && (
+          {todos && todos.items.length > 0 && todos.items.some((t) => t.status !== 'completed') && (
             <div className="todo-dock">
               <button className="todo-head" onClick={() => setShowTodos((s) => !s)}>
-                ☑ Tasks {todos.filter((t) => t.status === 'completed').length}/{todos.length} <span className="chev">{showTodos ? '▾' : '▸'}</span>
+                <span className="todo-title">{todos.title || 'Tasks'}</span>
+                <span className="todo-count">
+                  {todos.items.filter((t) => t.status === 'completed').length}/{todos.items.length}
+                </span>
+                <span className="todo-bar">
+                  <span style={{ width: `${(100 * todos.items.filter((t) => t.status === 'completed').length) / todos.items.length}%` }} />
+                </span>
+                <span className="chev">{showTodos ? '▾' : '▸'}</span>
               </button>
-              {showTodos && <Todos todos={todos} />}
+              {showTodos && <Todos todos={todos.items} />}
             </div>
           )}
 

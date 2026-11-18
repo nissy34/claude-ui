@@ -111,10 +111,29 @@ export function shortPath(p, cwd) {
   return p;
 }
 
+/** update_plan steps -> the TodoWrite shape the task list renders. */
+export function planTodos(input) {
+  return (input?.steps || []).map((x) => ({ content: String(x.step ?? x.title ?? x.content ?? ''), status: x.status || 'pending' }));
+}
+
+export const isPlanTool = (name) => /^mcp__ui__update_plan$/.test(name || '');
+
+/** The chat's current task list: the latest update_plan or TodoWrite call. */
 export function lastTodos(events) {
   for (let i = events.length - 1; i >= 0; i--) {
     const e = events[i];
-    if (e.k === 'block' && e.block.type === 'tool_use' && e.block.name === 'TodoWrite' && !e.parent) return e.block.input?.todos || null;
+    if (e.k !== 'block' || e.block.type !== 'tool_use' || e.parent) continue;
+    if (isPlanTool(e.block.name)) {
+      // A later update often leaves the title out: keep the one given earlier.
+      let title = e.block.input?.title || '';
+      for (let j = i - 1; j >= 0 && !title; j--) {
+        const f = events[j];
+        if (f.k === 'user') break;
+        if (f.k === 'block' && f.block.type === 'tool_use' && !f.parent && isPlanTool(f.block.name)) title = f.block.input?.title || '';
+      }
+      return { title, items: planTodos(e.block.input) };
+    }
+    if (e.block.name === 'TodoWrite') return { title: '', items: e.block.input?.todos || [] };
   }
   return null;
 }

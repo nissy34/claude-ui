@@ -29,6 +29,7 @@ import { sideChat } from './side-chat.js';
 import { prStatus, mergeWhenReady } from './pr-status.js';
 import * as schedules from './schedules.js';
 import * as notes from './notes.js';
+import { controlSession } from './session-control.js';
 import { createDesktopMcp, getToken as getMcpToken, rotateToken as rotateMcpToken } from './desktop-mcp.js';
 import { authStatus, mcpList, pluginList, cliVersion, permissionRules, removePermissionRule } from './claude-admin.js';
 
@@ -198,6 +199,17 @@ app.post(
     const done = await s.setOptions({ model, effort, permissionMode });
     s.record({ k: 'notice', text: `Set ${done.join(', ')} (by the parent chat)` });
     res.json({ ok: true, changed: done, session: sessionSummary(s) });
+  })
+);
+
+app.post(
+  '/internal/sessions/:id/control/:action',
+  wrap(async (req, res) => {
+    const s = store.get(req.params.id);
+    if (!s) throw new Error('No such session. list_sessions shows the ids.');
+    const caller = store.get(req.headers['x-cw-session']);
+    if (s === caller && req.params.action === 'stop') throw new Error('That is this session.');
+    res.json({ ...(await controlSession(store, s, req.params.action, req.body || {}, caller ? `chat "${caller.meta.name}"` : 'another chat')), session: sessionSummary(s) });
   })
 );
 

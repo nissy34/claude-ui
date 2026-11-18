@@ -3,7 +3,7 @@ import { ChatCtx } from './ctx.js';
 import { artifactKind } from './ArtifactView.jsx';
 import { diffLines } from 'diff';
 import { highlight, renderMarkdown } from './markdown.js';
-import { shortPath } from './model.js';
+import { shortPath, isPlanTool, planTodos } from './model.js';
 
 const ICONS = {
   Bash: '›_',
@@ -181,7 +181,9 @@ function errorLine(text) {
 }
 
 export default function ToolCard({ item, cwd, children }) {
-  const { name, input, result } = item;
+  const plan = isPlanTool(item.name);
+  // update_plan renders like the built-in task list.
+  const { name, input, result } = plan ? { ...item, name: 'TodoWrite', input: { todos: planTodos(item.input) } } : item;
   const ctx = useContext(ChatCtx);
   const filePath = FILE_TOOLS[name] && input?.[FILE_TOOLS[name]];
   const isSessionTool = /^mcp__sessions__(start_session|send_to_session|read_session)$/.test(name);
@@ -194,7 +196,7 @@ export default function ToolCard({ item, cwd, children }) {
       ? `${input?.wait_for_reply ? 'Asked' : 'Messaged'} ${/^parent$/i.test(sendTarget) || (parentId && sendTarget === parentId) ? 'parent' : 'session'}`
       : { start_session: 'Started session', read_session: 'Checked session' }[name.split('__')[2]];
   const isEditLike = ['Edit', 'MultiEdit', 'Write', 'TodoWrite', 'ExitPlanMode'].includes(name);
-  const [open, setOpen] = useState(isEditLike && !(name === 'Write' && filePath && artifactKind(filePath)));
+  const [open, setOpen] = useState(isEditLike && !plan && !(name === 'Write' && filePath && artifactKind(filePath)));
   const [showResult, setShowResult] = useState(false);
   const stats = useMemo(() => diffStats(name, input || {}), [name, input]);
   const status = result ? (result.isError ? 'error' : 'done') : item.perm && !item.perm.done ? 'waiting' : 'running';
@@ -207,7 +209,7 @@ export default function ToolCard({ item, cwd, children }) {
     <div className={`tool ${status} ${open ? 'open' : ''}`}>
       <button className="tool-head" onClick={() => setOpen((o) => !o)}>
         <span className="ticon">{ICONS[name] || '⚙'}</span>
-        <span className="tname">{isSessionTool ? sessionLabel : name.replace(/^mcp__([^_]+)__/, '$1 · ')}</span>
+        <span className="tname">{plan ? item.input?.title || 'Plan' : isSessionTool ? sessionLabel : name.replace(/^mcp__([^_]+)__/, '$1 · ')}</span>
         {filePath ? (
           <span
             className="tsum link"
