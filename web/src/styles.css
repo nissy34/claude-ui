@@ -904,3 +904,8 @@ kbd { display: inline-block; font: 11.5px var(--mono); background: var(--panel-2
 @media (prefers-reduced-motion: reduce) { .chat-loading .sk-bar, .chat-loading .sk-tool { animation: none; } }
 .show-earlier { align-self: center; background: none; border: 1px solid var(--line); border-radius: 999px; padding: 4px 12px; font-size: 12px; color: var(--muted); }
 .show-earlier:hover { color: var(--text); border-color: var(--line-strong); }
+
+/* Bare URLs auto-linked in plain text (user bubbles, tool output, thinking). Long URLs wrap anywhere. */
+a.autolink { color: var(--accent); text-decoration: underline; text-decoration-color: color-mix(in srgb, currentColor 40%, transparent); text-underline-offset: 2px; overflow-wrap: anywhere; word-break: break-all; }
+a.autolink:hover { text-decoration-color: currentColor; }
+.md a { overflow-wrap: anywhere; }

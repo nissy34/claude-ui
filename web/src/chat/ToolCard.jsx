@@ -4,6 +4,7 @@ import { ChatCtx } from './ctx.js';
 import { artifactKind } from './ArtifactView.jsx';
 import { diffLines } from 'diff';
 import { highlight, renderMarkdown } from './markdown.js';
+import Linkify from './Linkify.jsx';
 import { shortPath, isPlanTool, planTodos } from './model.js';
 
 const ICONS = {
@@ -119,7 +120,7 @@ export function ToolBody({ name, input, cwd }) {
   const i = input || {};
   switch (name) {
     case 'Bash':
-      return <pre className="code-sm bash">$ {i.command}</pre>;
+      return <pre className="code-sm bash">$ <Linkify text={i.command} /></pre>;
     case 'Edit':
       return <Diff oldText={i.old_string} newText={i.new_string} path={i.file_path} />;
     case 'MultiEdit':
@@ -302,7 +303,7 @@ export default function ToolCard({ item, cwd, children }) {
               Show output
             </button>
           ) : (
-            <pre className={`code-sm result ${result.isError ? 'err' : ''}`}>{resultText}</pre>
+            <pre className={`code-sm result ${result.isError ? 'err' : ''}`}><Linkify text={resultText} /></pre>
           ))}
         </div>
       )}
