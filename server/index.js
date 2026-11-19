@@ -250,10 +250,13 @@ function openSigninPage(url, { sid, server } = {}) {
     host = new URL(url).host;
   } catch {}
   const notice = (text) => from?.meta.kind === 'chat' && from.record({ k: 'notice', text });
+  // One line per sign-in page in the server log (docker logs), to tell a re-sign-in loop apart.
+  const log = (what) => console.log(`[sign-in] ${new Date().toISOString()} ${what} ${host}${(() => { try { return new URL(url).pathname; } catch { return ''; } })()}${from ? ` from "${from.meta.name}"` : ''}`);
   browser
     .openSignin(url)
     .then(async (id) => {
       const finished = await browser.signinSettled(id, SIGNIN_QUIET_MS);
+      log(finished ? 'finished by itself' : 'waiting for you');
       if (finished) {
         // A server that signs in again on every call isn't keeping its login: say so once in a while.
         const key = `${sid || ''} ${host}`;
