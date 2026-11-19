@@ -985,3 +985,7 @@ a.autolink:hover { text-decoration-color: currentColor; }
 .secret-in { display: flex; align-items: center; gap: 2px; min-width: 0; }
 .secret-in input { flex: 1; min-width: 0; }
 .secret-in .icon-btn { min-width: 28px; height: 28px; padding: 2px; }
+.tag.warn { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); margin-left: 4px; }
+.form-grid .req { color: var(--accent); }
+.plugin-config { margin: 4px 0 10px; }
+.plugin-config .form-grid > div > input:not([type=checkbox]), .plugin-config .form-grid > div > select { width: 100%; box-sizing: border-box; }

@@ -989,6 +989,8 @@ app.post(
   })
 );
 app.get('/api/claude/plugins-full', wrap(async (req, res) => res.json(await admin.plugins())));
+app.post('/api/claude/plugins/config', wrap(async (req, res) => res.json(await admin.pluginConfigGet(req.body || {}))));
+app.post('/api/claude/plugins/config/save', wrap(async (req, res) => res.json(await admin.pluginConfigSet(req.body || {}))));
 app.post('/api/claude/plugins/action', wrap(async (req, res) => res.json(await admin.pluginAction(req.body || {}))));
 app.post('/api/claude/marketplaces/action', wrap(async (req, res) => res.json(await admin.marketplaceAction(req.body || {}))));
 app.get('/api/claude/skills', wrap(async (req, res) => res.json({ skills: admin.skills(optCwd(req.query.cwd)) })));

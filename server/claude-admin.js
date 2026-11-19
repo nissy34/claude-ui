@@ -6,14 +6,15 @@ import { execFile } from 'node:child_process';
 import { config, PRIVATE_ENV } from './config.js';
 import { resolveCommand } from './launch.js';
 
-function runClaude(args, cwd, timeout = 30_000) {
+function runClaude(args, cwd, timeout = 30_000, input) {
   const env = { ...process.env };
   for (const k of PRIVATE_ENV) delete env[k];
   const cmd = resolveCommand(config.claudeBin, args);
   return new Promise((resolve) => {
-    execFile(cmd.file, cmd.args, { cwd: cwd || process.cwd(), env, timeout, windowsHide: true, maxBuffer: 4 << 20 }, (err, stdout, stderr) => {
+    const child = execFile(cmd.file, cmd.args, { cwd: cwd || process.cwd(), env, timeout, windowsHide: true, maxBuffer: 4 << 20 }, (err, stdout, stderr) => {
       resolve({ ok: !err, out: String(stdout || '').trim(), err: String(stderr || (err && err.message) || '').trim() });
     });
+    if (input != null) child.stdin?.end(input);
   });
 }
 
@@ -118,8 +119,8 @@ function checkName(name) {
 const SCOPES = ['user', 'local', 'project'];
 const scopeOf = (s) => (SCOPES.includes(s) ? s : 'user');
 
-async function mustRun(args, cwd, timeout) {
-  const r = await runClaude(args, cwd, timeout);
+async function mustRun(args, cwd, timeout, input) {
+  const r = await runClaude(args, cwd, timeout, input);
   if (!r.ok) throw new Error(r.err || r.out || 'Command failed');
   return r.out;
 }
@@ -179,8 +180,18 @@ function parseJson(text, fallback) {
 export async function plugins() {
   const [a, m] = await Promise.all([runClaude(['plugin', 'list', '--available', '--json'], null, 60_000), runClaude(['plugin', 'marketplace', 'list', '--json'], null, 30_000)]);
   const data = parseJson(a.out, null);
+  const installed = data?.installed || (Array.isArray(data) ? data : []);
+  // Flag plugins whose options (usernames, passwords, …) are not all set yet.
+  await Promise.all(
+    installed
+      .filter((p) => p.hasUserConfig && PLUGIN_ID.test(p.id || p.pluginId || ''))
+      .map(async (p) => {
+        const c = await pluginConfigGet({ id: p.id || p.pluginId }).catch(() => null);
+        if (c) p.unconfigured = (c.unconfigured || []).filter((k) => c.schema?.[k]?.default == null); // unset and no default
+      })
+  );
   return {
-    installed: data?.installed || (Array.isArray(data) ? data : []),
+    installed,
     available: data?.available || [],
     marketplaces: parseJson(m.out, []),
     error: data ? undefined : a.err || a.out,
@@ -200,6 +211,30 @@ export async function pluginAction({ action, id, scope }) {
   }[action];
   if (!args) throw new Error('Unknown action');
   return { out: await mustRun(args, null, 180_000) };
+}
+
+// Plugin options declared in the plugin's manifest (userConfig), used as ${user_config.KEY} in its MCP servers.
+// Sensitive values live in Claude Code's secure storage and are never read back: inputs come back empty for them.
+export async function pluginConfigGet({ id }) {
+  if (!PLUGIN_ID.test(id || '')) throw new Error('Bad plugin id');
+  const r = await runClaude(['plugin', 'configure', id, '--json'], null, 60_000);
+  const j = parseJson(r.out, null);
+  if (!j) throw new Error(r.err || r.out || 'Could not read the plugin options');
+  return j;
+}
+
+export async function pluginConfigSet({ id, values }) {
+  if (!PLUGIN_ID.test(id || '')) throw new Error('Bad plugin id');
+  if (!values || typeof values !== 'object' || Array.isArray(values)) throw new Error('Values are required');
+  const clean = {};
+  for (const [k, v] of Object.entries(values)) {
+    if (!/^[A-Za-z_]\w*$/.test(k)) throw new Error(`Bad option name: ${k}`);
+    const str = String(v ?? '');
+    if (/[\r\n]/.test(str)) throw new Error(`${k} must be a single line`);
+    clean[k] = str;
+  }
+  if (!Object.keys(clean).length) return { out: 'No changes' };
+  return { out: await mustRun(['plugin', 'configure', id, '--values-stdin'], null, 60_000, JSON.stringify(clean)) };
 }
 
 export async function marketplaceAction({ action, source, name }) {

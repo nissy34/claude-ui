@@ -70,11 +70,22 @@ function splitAuth(headers) {
   const dec = basic && unb64(basic[1]);
   if (dec != null && dec.includes(':')) {
     rows.splice(i, 1);
-    return { rows, auth: { kind: 'basic', user: dec.slice(0, dec.indexOf(':')), pass: dec.slice(dec.indexOf(':') + 1), token: '' } };
+    return {
+      rows,
+      auth: {
+        kind: 'basic',
+        user: dec.slice(0, dec.indexOf(':')),
+        pass: dec.slice(dec.indexOf(':') + 1),
+        token: '',
+      },
+    };
   }
   if (bearer) {
     rows.splice(i, 1);
-    return { rows, auth: { kind: 'bearer', user: '', pass: '', token: bearer[1] } };
+    return {
+      rows,
+      auth: { kind: 'bearer', user: '', pass: '', token: bearer[1] },
+    };
   }
   return { rows, auth: { kind: 'none', user: '', pass: '', token: '' } };
 }
@@ -141,7 +152,12 @@ function ServerForm({ cwd, edit, onDone, onError }) {
     if (f.transport === 'stdio') {
       const parts = f.command.match(/"[^"]*"|'[^']*'|\S+/g) || [];
       if (!parts.length) return onError(new Error('Enter the command to run'));
-      server = { ...rest, type: 'stdio', command: parts[0].replace(/^["']|["']$/g, ''), args: parts.slice(1).map((a) => a.replace(/^["']|["']$/g, '')) };
+      server = {
+        ...rest,
+        type: 'stdio',
+        command: parts[0].replace(/^["']|["']$/g, ''),
+        args: parts.slice(1).map((a) => a.replace(/^["']|["']$/g, '')),
+      };
       const envObj = fromRows(f.env);
       if (Object.keys(envObj).length) server.env = envObj;
     } else {
@@ -159,7 +175,10 @@ function ServerForm({ cwd, edit, onDone, onError }) {
     }
     setBusy(true);
     try {
-      await api(`/api/claude/mcp-servers/${edit ? 'update' : 'add'}`, { method: 'POST', body: { cwd, name: f.name.trim(), scope: f.scope, server } });
+      await api(`/api/claude/mcp-servers/${edit ? 'update' : 'add'}`, {
+        method: 'POST',
+        body: { cwd, name: f.name.trim(), scope: f.scope, server },
+      });
       onDone();
     } catch (err) {
       onError(err);
@@ -237,7 +256,8 @@ function ServerForm({ cwd, edit, onDone, onError }) {
         </button>
       </div>
       <p className="muted set-note">
-        Saved in Claude Code’s own config ({f.scope === 'project' ? '.mcp.json in the project, which may be committed' : '~/.claude.json'}), the same place `claude mcp add` writes. Servers that need a browser sign-in (OAuth) can be signed in under Logins below, or from a chat’s + menu under Connectors.
+        Saved in Claude Code’s own config ({f.scope === 'project' ? '.mcp.json in the project, which may be committed' : '~/.claude.json'}
+        ), the same place `claude mcp add` writes. Servers that need a browser sign-in (OAuth) can be signed in under Logins below, or from a chat’s + menu under Connectors.
       </p>
     </form>
   );
@@ -257,7 +277,11 @@ export function McpTab({ projects, activeCwd, onError }) {
     load();
   }, [cwd]); // eslint-disable-line react-hooks/exhaustive-deps
   const [busy, run] = useAction(onError, load);
-  const post = (action, body) => api(`/api/claude/mcp-servers/${action}`, { method: 'POST', body: { cwd, ...body } });
+  const post = (action, body) =>
+    api(`/api/claude/mcp-servers/${action}`, {
+      method: 'POST',
+      body: { cwd, ...body },
+    });
   return (
     <>
       <div className="tab-top">
@@ -310,12 +334,7 @@ export function McpTab({ projects, activeCwd, onError }) {
             >
               ✎
             </button>
-            <button
-              className="icon-btn"
-              title="Remove"
-              disabled={busy === s.name}
-              onClick={() => window.confirm(`Remove the MCP server "${s.name}" (${s.scope})?`) && run(s.name, () => post('remove', { name: s.name, scope: s.scope }))}
-            >
+            <button className="icon-btn" title="Remove" disabled={busy === s.name} onClick={() => window.confirm(`Remove the MCP server "${s.name}" (${s.scope})?`) && run(s.name, () => post('remove', { name: s.name, scope: s.scope }))}>
               🗑
             </button>
           </div>
@@ -328,12 +347,108 @@ export function McpTab({ projects, activeCwd, onError }) {
   );
 }
 
+// ---------- plugin options (userConfig: usernames, passwords, … a plugin's MCP servers use) ----------
+function PluginConfig({ id, onDone, onError }) {
+  const [cfg, setCfg] = useState(null);
+  const [vals, setVals] = useState({});
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    api('/api/claude/plugins/config', { method: 'POST', body: { id } })
+      .then((c) => (setCfg(c), setVals({ ...(c.inputs || {}) })))
+      .catch((e) => (onError(e), onDone()));
+  }, [id]); // eslint-disable-line react-hooks/exhaustive-deps
+  if (!cfg) return <div className="muted set-note">Loading options…</div>;
+  const configured = new Set(cfg.configured || []);
+  const save = async (e) => {
+    e.preventDefault();
+    const changed = {};
+    for (const [k, def] of Object.entries(cfg.schema || {})) {
+      const v = vals[k] ?? '';
+      // Saved secrets are never shown, so an empty secret box means "keep it".
+      if (def.sensitive ? v !== '' : v !== (cfg.inputs?.[k] ?? '')) changed[k] = v;
+    }
+    setBusy(true);
+    try {
+      await api('/api/claude/plugins/config/save', {
+        method: 'POST',
+        body: { id, values: changed },
+      });
+      onDone(true);
+    } catch (err) {
+      onError(err);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <form className="add-form plugin-config" onSubmit={save} autoComplete="off">
+      <div className="item-title">Options for {cfg.displayName || id}</div>
+      <div className="form-grid">
+        {Object.entries(cfg.schema || {}).map(([k, def]) => {
+          const v = vals[k] ?? '';
+          const set = (x) => setVals({ ...vals, [k]: x });
+          const choices = cfg.choices?.[k];
+          let input;
+          if (def.type === 'boolean') input = <input type="checkbox" checked={v === 'true' || v === true} onChange={(e) => set(String(e.target.checked))} style={{ justifySelf: 'start' }} />;
+          else if (Array.isArray(choices) && choices.length)
+            input = (
+              <select value={v} onChange={(e) => set(e.target.value)}>
+                <option value="">{def.default != null ? `Default (${def.default})` : 'Not set'}</option>
+                {choices.map((c) => {
+                  const val = typeof c === 'object' ? c.value : c;
+                  return (
+                    <option key={val} value={val}>
+                      {typeof c === 'object' ? c.label || val : c}
+                    </option>
+                  );
+                })}
+              </select>
+            );
+          else if (def.sensitive) input = <SecretInput value={v} onChange={set} autoComplete="new-password" placeholder={configured.has(k) ? 'Saved. Type to replace' : 'Not set'} />;
+          else
+            input = (
+              <input
+                type={def.type === 'number' ? 'number' : 'text'}
+                value={v}
+                onChange={(e) => set(e.target.value)}
+                placeholder={def.default != null ? `Default: ${def.default}` : def.type === 'directory' ? 'Folder path' : def.type === 'file' ? 'File path' : ''}
+                spellCheck={false}
+              />
+            );
+          return (
+            <React.Fragment key={k}>
+              <label className="top" title={k}>
+                {def.title || k}
+                {def.required && !configured.has(k) && <span className="req"> *</span>}
+              </label>
+              <div>
+                {input}
+                {def.description && <div className="muted form-hint">{def.description}</div>}
+              </div>
+            </React.Fragment>
+          );
+        })}
+      </div>
+      <div className="row end">
+        <button type="button" className="btn small" onClick={() => onDone()}>
+          Cancel
+        </button>
+        <button className="btn small primary" disabled={busy}>
+          {busy ? 'Saving…' : 'Save'}
+        </button>
+      </div>
+      <p className="muted set-note">Saved by Claude Code itself: passwords and other secret options go to its secure storage, the rest to your user settings. The plugin’s MCP servers pick them up in new chats, or after a chat restarts.</p>
+    </form>
+  );
+}
+
 // ---------- plugins ----------
 export function PluginsTab({ onError }) {
   const [data, setData] = useState(null);
   const [q, setQ] = useState('');
   const [view, setView] = useState('installed');
   const [mkt, setMkt] = useState('');
+  const [configuring, setConfiguring] = useState('');
   const load = () =>
     api('/api/claude/plugins-full')
       .then(setData)
@@ -342,7 +457,13 @@ export function PluginsTab({ onError }) {
     load();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const [busy, run] = useAction(onError, load);
-  const act = (action, id, scope) => run(id, () => api('/api/claude/plugins/action', { method: 'POST', body: { action, id, scope } }));
+  const act = (action, id, scope) =>
+    run(id, () =>
+      api('/api/claude/plugins/action', {
+        method: 'POST',
+        body: { action, id, scope },
+      })
+    );
   const installedIds = new Set((data?.installed || []).map((p) => p.pluginId || p.id || p.name));
   const shown = useMemo(() => {
     const list = view === 'installed' ? data?.installed || [] : (data?.available || []).filter((p) => !installedIds.has(p.pluginId));
@@ -375,7 +496,12 @@ export function PluginsTab({ onError }) {
             className="row"
             onSubmit={(e) => {
               e.preventDefault();
-              run('mkt', () => api('/api/claude/marketplaces/action', { method: 'POST', body: { action: 'add', source: mkt } })).then((ok) => ok && setMkt(''));
+              run('mkt', () =>
+                api('/api/claude/marketplaces/action', {
+                  method: 'POST',
+                  body: { action: 'add', source: mkt },
+                })
+              ).then((ok) => ok && setMkt(''));
             }}
           >
             <input className="search-in" style={{ flex: 1 }} value={mkt} onChange={(e) => setMkt(e.target.value)} placeholder="owner/repo, git URL or local path" />
@@ -392,10 +518,33 @@ export function PluginsTab({ onError }) {
                     <div className="item-title">{name}</div>
                     <div className="item-sub">{m.source ? JSON.stringify(m.source) : m.url || m.path || ''}</div>
                   </div>
-                  <button className="btn small" disabled={!!busy} onClick={() => run(name, () => api('/api/claude/marketplaces/action', { method: 'POST', body: { action: 'update', name } }))}>
+                  <button
+                    className="btn small"
+                    disabled={!!busy}
+                    onClick={() =>
+                      run(name, () =>
+                        api('/api/claude/marketplaces/action', {
+                          method: 'POST',
+                          body: { action: 'update', name },
+                        })
+                      )
+                    }
+                  >
                     Update
                   </button>
-                  <button className="icon-btn" title="Remove" onClick={() => window.confirm(`Remove marketplace ${name}?`) && run(name, () => api('/api/claude/marketplaces/action', { method: 'POST', body: { action: 'remove', name } }))}>
+                  <button
+                    className="icon-btn"
+                    title="Remove"
+                    onClick={() =>
+                      window.confirm(`Remove marketplace ${name}?`) &&
+                      run(name, () =>
+                        api('/api/claude/marketplaces/action', {
+                          method: 'POST',
+                          body: { action: 'remove', name },
+                        })
+                      )
+                    }
+                  >
                     🗑
                   </button>
                 </div>
@@ -410,30 +559,49 @@ export function PluginsTab({ onError }) {
           {shown.map((p) => {
             const id = p.pluginId || p.id || p.name;
             const enabled = p.enabled !== false;
+            const unset = p.unconfigured?.length || 0;
             return (
-              <div key={id + (p.scope || '')} className="item">
-                <div className="item-main">
-                  <div className="item-title">
-                    {p.name || id} {p.version && <span className="tag">v{p.version}</span>} {p.scope && <span className="tag">{p.scope}</span>}
+              <React.Fragment key={id + (p.scope || '')}>
+                <div className="item">
+                  <div className="item-main">
+                    <div className="item-title">
+                      {p.name || id} {p.version && <span className="tag">v{p.version}</span>} {p.scope && <span className="tag">{p.scope}</span>}
+                      {view === 'installed' && unset > 0 && <span className="tag warn">{unset === 1 ? '1 option not set' : `${unset} options not set`}</span>}
+                    </div>
+                    <div className="item-sub wrap">{p.description || id}</div>
                   </div>
-                  <div className="item-sub wrap">{p.description || id}</div>
+                  {view === 'installed' ? (
+                    <>
+                      {p.hasUserConfig && (
+                        <button className={`btn small ${unset ? 'primary' : ''}`} disabled={busy === id} onClick={() => setConfiguring(configuring === id ? '' : id)}>
+                          Configure
+                        </button>
+                      )}
+                      <Toggle value={enabled} disabled={busy === id} onChange={(v) => act(v ? 'enable' : 'disable', id, p.scope)} />
+                      <button className="btn small" disabled={busy === id} onClick={() => act('update', id)}>
+                        Update
+                      </button>
+                      <button className="icon-btn" title="Uninstall" disabled={busy === id} onClick={() => window.confirm(`Uninstall ${p.name || id}?`) && act('uninstall', id, p.scope)}>
+                        🗑
+                      </button>
+                    </>
+                  ) : (
+                    <button className="btn small primary" disabled={busy === id} onClick={() => act('install', id, 'user')}>
+                      {busy === id ? 'Installing…' : 'Install'}
+                    </button>
+                  )}
                 </div>
-                {view === 'installed' ? (
-                  <>
-                    <Toggle value={enabled} disabled={busy === id} onChange={(v) => act(v ? 'enable' : 'disable', id, p.scope)} />
-                    <button className="btn small" disabled={busy === id} onClick={() => act('update', id)}>
-                      Update
-                    </button>
-                    <button className="icon-btn" title="Uninstall" disabled={busy === id} onClick={() => window.confirm(`Uninstall ${p.name || id}?`) && act('uninstall', id, p.scope)}>
-                      🗑
-                    </button>
-                  </>
-                ) : (
-                  <button className="btn small primary" disabled={busy === id} onClick={() => act('install', id, 'user')}>
-                    {busy === id ? 'Installing…' : 'Install'}
-                  </button>
+                {view === 'installed' && configuring === id && (
+                  <PluginConfig
+                    id={id}
+                    onError={onError}
+                    onDone={(saved) => {
+                      setConfiguring('');
+                      if (saved) load();
+                    }}
+                  />
                 )}
-              </div>
+              </React.Fragment>
             );
           })}
         </div>
@@ -465,7 +633,11 @@ export function SkillsTab({ projects, activeCwd, onError }) {
     load();
   }, [cwd]); // eslint-disable-line react-hooks/exhaustive-deps
   const [busy, run] = useAction(onError, load);
-  const post = (action, body) => api(`/api/claude/skills/${action}`, { method: 'POST', body: { cwd, ...body } });
+  const post = (action, body) =>
+    api(`/api/claude/skills/${action}`, {
+      method: 'POST',
+      body: { cwd, ...body },
+    });
 
   if (edit)
     return (
@@ -473,7 +645,17 @@ export function SkillsTab({ projects, activeCwd, onError }) {
         <div className="tab-top">
           {edit.create ? (
             <>
-              <input className="search-in" value={edit.id} placeholder="skill-name" onChange={(e) => setEdit({ ...edit, id: e.target.value.replace(/[^\w.-]/g, '-') })} />
+              <input
+                className="search-in"
+                value={edit.id}
+                placeholder="skill-name"
+                onChange={(e) =>
+                  setEdit({
+                    ...edit,
+                    id: e.target.value.replace(/[^\w.-]/g, '-'),
+                  })
+                }
+              />
               <select className="proj-pick" value={edit.scope} onChange={(e) => setEdit({ ...edit, scope: e.target.value })}>
                 <option value="user">All projects</option>
                 <option value="project" disabled={!cwd}>
@@ -492,11 +674,7 @@ export function SkillsTab({ projects, activeCwd, onError }) {
           <button className="btn small" onClick={() => setEdit(null)}>
             Cancel
           </button>
-          <button
-            className="btn small primary"
-            disabled={!edit.id || busy === 'save'}
-            onClick={() => run('save', () => post('save', edit)).then((ok) => ok && setEdit(null))}
-          >
+          <button className="btn small primary" disabled={!edit.id || busy === 'save'} onClick={() => run('save', () => post('save', edit)).then((ok) => ok && setEdit(null))}>
             Save skill
           </button>
         </div>
@@ -507,7 +685,17 @@ export function SkillsTab({ projects, activeCwd, onError }) {
     <>
       <div className="tab-top">
         <ProjectPicker projects={projects} value={cwd} onChange={setCwd} />
-        <button className="btn small primary" onClick={() => setEdit({ scope: 'user', id: '', content: TEMPLATE('my-skill'), create: true })}>
+        <button
+          className="btn small primary"
+          onClick={() =>
+            setEdit({
+              scope: 'user',
+              id: '',
+              content: TEMPLATE('my-skill'),
+              create: true,
+            })
+          }
+        >
           + New skill
         </button>
       </div>
@@ -524,7 +712,14 @@ export function SkillsTab({ projects, activeCwd, onError }) {
               <div className="item-sub wrap">{s.description}</div>
             </div>
             <Toggle value={s.enabled} disabled={busy === s.id} onChange={(v) => run(s.id, () => post('toggle', { scope: s.scope, id: s.id, enabled: v }))} />
-            <button className="btn small" onClick={() => post('get', { scope: s.scope, id: s.id }).then((r) => setEdit({ scope: s.scope, id: s.id, content: r.content })).catch(onError)}>
+            <button
+              className="btn small"
+              onClick={() =>
+                post('get', { scope: s.scope, id: s.id })
+                  .then((r) => setEdit({ scope: s.scope, id: s.id, content: r.content }))
+                  .catch(onError)
+              }
+            >
               Edit
             </button>
             <button className="icon-btn" title="Delete" onClick={() => window.confirm(`Delete the skill "${s.name}"? It's moved to a .trash folder next to it.`) && run(s.id, () => post('delete', { scope: s.scope, id: s.id }))}>
