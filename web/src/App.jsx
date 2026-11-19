@@ -11,7 +11,7 @@ import ArtifactsGallery from './ArtifactsGallery.jsx';
 import SigninWindow from './SigninWindow.jsx';
 import { setBrowserAvailable } from './chat/McpAuth.jsx';
 import Scheduled from './Scheduled.jsx';
-import ProjectView, { ThreadBar } from './project/ProjectView.jsx';
+import ProjectView, { ThreadBar, ThreadConversation } from './project/ProjectView.jsx';
 import { NewProjectDialog } from './project/ProjectSettings.jsx';
 
 function readHash() {
@@ -257,7 +257,8 @@ export default function App() {
             onSelect={select}
             onCreate={createSession}
             onSettings={(tab) => setDialog({ type: 'settings', tab })}
-            projectBar={active.cproject ? <ThreadBar session={active} onSelect={select} onError={showError} /> : null}
+            projectBar={active.cproject ? ({ view, setView }) => <ThreadBar session={active} onSelect={select} onError={showError} view={view} setView={active.role === 'thread' ? setView : null} /> : null}
+            projectConversation={active.cproject && active.role === 'thread' ? <ThreadConversation session={active} onSelect={select} onError={showError} /> : null}
             {...common}
           />
         ) : active ? (

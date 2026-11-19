@@ -238,6 +238,22 @@ function FeedItem({ e, project, threads, decisions, onSelect, onError }) {
       );
     case 'coordinator.rotated':
       return <div className="pj-notice">Coordinator context reset to a digest</div>;
+    case 'notice':
+      return <div className="pj-notice">{b.text}</div>;
+    case 'pr.updated':
+      return (
+        <div className={`pj-notice ${b.wake ? 'warn' : ''}`}>
+          <button className="linklike" onClick={() => onSelect(e.thread)}>
+            {threads[e.thread]?.title || 'Thread'}
+          </button>
+          : {b.summary}{' '}
+          {b.pr?.url && (
+            <a href={b.pr.url} target="_blank" rel="noreferrer">
+              open
+            </a>
+          )}
+        </div>
+      );
     default:
       return null;
   }
@@ -362,7 +378,7 @@ function NewThreadDialog({ project, onClose, onError, onDone }) {
 }
 
 // ---------------------------------------------------------------- thread bar (above a thread's chat)
-export function ThreadBar({ session, onSelect, onError }) {
+export function ThreadBar({ session, onSelect, onError, view = 'log', setView }) {
   const [project] = useProject(session.cproject, onError);
   const [open, setOpen] = useState(false);
   if (!project) return null;
@@ -393,6 +409,16 @@ export function ThreadBar({ session, onSelect, onError }) {
           </button>
         )}
         <span className="spacer" />
+        {setView && (
+          <Segmented
+            value={view}
+            onChange={setView}
+            options={[
+              ['conversation', 'Conversation'],
+              ['log', 'Work log'],
+            ]}
+          />
+        )}
         {t.status !== 'resolved' ? (
           <Button size="sm" variant="ghost" onClick={() => api(`/api/cprojects/${project.id}/threads/${t.id}/resolve`, { method: 'POST' }).catch(onError)}>
             Resolve
@@ -450,3 +476,82 @@ export function ProjectList({ projects, activeId, onOpen, onNew }) {
 
 export { STATUS_LABEL };
 export { Pill };
+
+// ---------------------------------------------------------------- a thread's Conversation (posts, not tool calls)
+export function ThreadConversation({ session, onSelect, onError }) {
+  const [project] = useProject(session.cproject, onError);
+  const [feed, setFeed] = useState(null);
+  const ref = useRef(null);
+  useEffect(() => {
+    if (!project) return;
+    api(`/api/cprojects/${project.id}/threads/${session.id}/feed`)
+      .then((r) => setFeed(r.feed))
+      .catch(onError);
+  }, [project?.lastActivity, session.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  useLayoutEffect(() => {
+    if (ref.current) ref.current.scrollTop = ref.current.scrollHeight;
+  }, [feed?.length]);
+  if (!project || !feed)
+    return (
+      <div className="messages">
+        <div className="messages-inner">
+          <Spinner />
+        </div>
+      </div>
+    );
+  const decisions = Object.fromEntries(project.decisions.map((d) => [d.id, d]));
+  const t = project.threads.find((x) => x.id === session.id);
+  return (
+    <div className="messages" ref={ref}>
+      <div className="messages-inner">
+        <div className="muted small">Your messages, the thread's posts and its cards. Tool calls and edits are in the Work log.</div>
+        {feed.map((e) => {
+          const b = e.body || {};
+          if (e.type === 'thread.started')
+            return (
+              <div key={e.id} className="msg user from-session">
+                <div className="from-label">Brief from {e.from?.kind === 'user' ? 'you' : e.from?.kind === 'desktop' ? 'Claude Desktop' : 'the coordinator'}</div>
+                <div className="bubble">{b.brief}</div>
+              </div>
+            );
+          if (e.type === 'user.message')
+            return (
+              <div key={e.id} className="msg user">
+                <div className="bubble">{b.text}</div>
+              </div>
+            );
+          if (e.type === 'session.message')
+            return e.from?.id === session.id ? (
+              <div key={e.id} className="msg assistant">
+                <div className="pj-who">To the coordinator · {timeAgo(e.ts)}</div>
+                <Md text={b.text} />
+              </div>
+            ) : (
+              <div key={e.id} className="msg user from-session">
+                <div className="from-label">From {e.from?.kind === 'desktop' ? 'Claude Desktop' : e.from?.kind === 'thread' ? project.threads.find((x) => x.id === e.from.id)?.title || 'a thread' : 'the coordinator'}</div>
+                <div className="bubble">{b.text}</div>
+              </div>
+            );
+          if (e.type === 'thread.post')
+            return (
+              <div key={e.id} className="msg assistant pj-post">
+                <div className="pj-who">
+                  <span className={`pk pk-${b.kind}`}>{b.kind}</span> {timeAgo(e.ts)}
+                  {b.auto ? ' · from its final reply' : ''}
+                </div>
+                <Md text={b.text} />
+              </div>
+            );
+          if (e.type === 'decision.requested') return <DecisionCard key={e.id} projectId={project.id} decision={decisions[b.id]} threadTitle={t?.title} onError={onError} />;
+          if (e.type === 'pr.updated') return <div key={e.id} className="pj-notice">{b.summary}</div>;
+          if (e.type === 'reminder.set') return <div key={e.id} className="pj-notice">⏰ Snoozed until {new Date(b.at).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' })}{b.note ? `: ${b.note}` : ''}</div>;
+          if (e.type === 'reminder.due') return <div key={e.id} className="pj-notice">⏰ Reminder due</div>;
+          if (e.type === 'thread.resolved') return <div key={e.id} className="pj-notice">✓ Resolved{b.auto ? ` (${b.auto})` : ''}</div>;
+          if (e.type === 'thread.reopened') return <div key={e.id} className="pj-notice">Reopened</div>;
+          if (e.type === 'notice') return <div key={e.id} className="pj-notice">{b.text}</div>;
+          return null;
+        })}
+      </div>
+    </div>
+  );
+}

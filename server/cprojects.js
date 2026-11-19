@@ -19,7 +19,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { config } from './config.js';
-import { createWorktree, isGitRepo } from './git.js';
+import { createWorktree, isGitRepo, removeWorktree } from './git.js';
+import { prStatus } from './pr-status.js';
 import { coordinatorPrompt, threadPrompt, instructionsBlock, memoryBlock } from './cproject-prompts.js';
 import { ProjectMemory } from './cproject-memory.js';
 
@@ -484,6 +485,7 @@ export class Project {
   }
 
   afterEvent(ev) {
+    if (ev.type === 'thread.resolved') setTimeout(() => this.engine.cleanupWorktree(this, ev.thread).catch(() => {}), 2000).unref?.();
     // Follow-ups: the coordinator asked to hear when these threads change state.
     if (['turn.ended', 'thread.post', 'thread.resolved', 'decision.requested', 'session.error'].includes(ev.type)) this.checkFollowUps();
   }
@@ -857,6 +859,7 @@ export class Project {
       this.maybeRotate(s);
       return;
     }
+    this.engine.checkPr(this, sid, 5000);
     if (info.engine && !info.posted && !info.resolved) {
       const text = s.lastReply().trim();
       if (text) this.append({ type: 'thread.post', from: { kind: 'thread', id: sid }, trust: 'relay', thread: sid, body: { kind: 'result', text: clipText(text, 8000), auto: true } });
@@ -961,7 +964,7 @@ export class Project {
   }
 
   detail({ limit = 300 } = {}) {
-    const chatTypes = new Set(['user.message', 'chat.post', 'thread.started', 'decision.requested', 'decision.answered', 'decision.withdrawn', 'thread.resolved', 'project.paused', 'project.resumed', 'limit.hit', 'limit.reset', 'policy.changed', 'notice', 'coordinator.rotated', 'thread.post']);
+    const chatTypes = new Set(['user.message', 'chat.post', 'thread.started', 'decision.requested', 'decision.answered', 'decision.withdrawn', 'thread.resolved', 'project.paused', 'project.resumed', 'limit.hit', 'limit.reset', 'policy.changed', 'notice', 'coordinator.rotated', 'thread.post', 'pr.updated', 'notice']);
     const feed = this.events.filter((e) => chatTypes.has(e.type) && (e.type !== 'user.message' || e.body.where === 'chat') && (e.type !== 'thread.post' || e.body.kind !== 'progress')).slice(-limit);
     const coord = this.session(this.state.coordinator);
     return {
@@ -1223,9 +1226,82 @@ export class ProjectEngine {
     return s;
   }
 
+  // ------------------------------------------------------------------ pull requests
+  /**
+   * The pull request for a thread's branch (gh). Changes become pr.updated events: a new CI
+   * failure or a "changes requested" review wakes the thread (batched); a merge resolves it when
+   * nothing else is open. Polled every few minutes per open thread, and soon after each turn.
+   */
+  checkPr(p, sid, delay = 0) {
+    const t = p.state.threads[sid];
+    if (!t || !t.branch || this.ghMissingUntil > Date.now()) return;
+    clearTimeout((this.prTimers ||= new Map()).get(sid));
+    const timer = setTimeout(() => this.pollPr(p, sid).catch(() => {}), delay);
+    timer.unref?.();
+    this.prTimers.set(sid, timer);
+  }
+
+  async pollPr(p, sid) {
+    const t = p.state.threads[sid];
+    const s = this.store.get(sid);
+    if (!t || !s || !fs.existsSync(s.meta.cwd)) return;
+    (this.prPolled ||= new Map()).set(sid, Date.now());
+    const r = await prStatus(s.meta.cwd);
+    if (!r.available) {
+      this.ghMissingUntil = Date.now() + 3600_000; // no gh, or not signed in: try again in an hour
+      return;
+    }
+    const pr = r.pr;
+    if (!pr && !t.pr) return;
+    if (pr && pr.head && t.branch && pr.head !== t.branch) return; // a PR for some other branch
+    const before = t.pr;
+    const slim = pr && { number: pr.number, url: pr.url, title: pr.title, state: pr.state, review: pr.review, autoMerge: pr.autoMerge, summary: pr.summary, failing: pr.checks.filter((c) => c.state === 'fail').map((c) => c.name).slice(0, 10) };
+    if (JSON.stringify(slim) === JSON.stringify(before)) return;
+    const newFail = slim && slim.summary.fail > 0 && (!before || slim.failing.some((n) => !(before.failing || []).includes(n)));
+    const changesRequested = slim && slim.review === 'CHANGES_REQUESTED' && before?.review !== 'CHANGES_REQUESTED';
+    const merged = slim?.state === 'MERGED' && before?.state !== 'MERGED';
+    const summary = !slim
+      ? 'The pull request is gone.'
+      : merged
+        ? `PR #${slim.number} was merged.`
+        : newFail
+          ? `CI is failing on PR #${slim.number}: ${slim.failing.join(', ')}. Look at the failures and fix them.`
+          : changesRequested
+            ? `A reviewer requested changes on PR #${slim.number}. Read the review comments (gh pr view ${slim.number} --comments) and address them.`
+            : !before
+              ? `PR #${slim.number} is open.`
+              : `PR #${slim.number}: ${slim.state.toLowerCase()}, checks ${slim.summary.pass} passing, ${slim.summary.fail} failing, ${slim.summary.pending} pending${slim.review ? `, review ${slim.review.toLowerCase()}` : ''}.`;
+    p.append({ type: 'pr.updated', thread: sid, body: { pr: slim, summary, wake: !!(newFail || changesRequested) && !t.resolved } });
+    if (merged && !t.resolved && !Object.values(p.state.decisions).some((d) => d.thread === sid && !d.answer) && !s.isBusy()) {
+      p.append({ type: 'thread.resolved', thread: sid, body: { auto: 'PR merged' } });
+    }
+  }
+
+  /** A resolved thread whose branch is merged gives back its worktree (only when clean). */
+  async cleanupWorktree(p, sid) {
+    const t = p.state.threads[sid];
+    const s = this.store.get(sid);
+    if (!t?.resolved || t.pr?.state !== 'MERGED' || !s?.meta.worktree || s.isBusy()) return;
+    await s.stopAndWait?.();
+    const r = await removeWorktree(s.meta.worktree).catch((e) => ({ removed: false, kept: e.message }));
+    if (r.removed) {
+      s.meta.worktreeRemoved = true;
+      s.meta.cwd = s.meta.project && fs.existsSync(s.meta.project) ? s.meta.project : p.libraryDir;
+      this.store.save();
+      p.append({ type: 'notice', thread: sid, body: { text: `Removed the worktree of "${t.title}" (its branch is merged).` } });
+    }
+  }
+
   // ------------------------------------------------------------------ timers
   onTick() {
     const now = Date.now();
+    // Pull requests of open threads with a branch, every 3 minutes each.
+    for (const p of this.projects.values()) {
+      for (const t of Object.values(p.state.threads)) {
+        if (t.resolved && t.pr?.state !== 'OPEN') continue;
+        if (now - ((this.prPolled || new Map()).get(t.id) || 0) >= 3 * 60_000) this.checkPr(p, t.id, Math.random() * 5000);
+      }
+    }
     for (const p of this.projects.values()) {
       // Reminders.
       for (const t of Object.values(p.state.threads)) {

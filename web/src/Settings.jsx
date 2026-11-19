@@ -139,7 +139,7 @@ function Permissions({ projects, activeCwd, onError }) {
   return (
     <>
       <p className="muted set-note">Rules saved with "Always allow" and rules from your Claude Code settings files. Removing one takes effect in new chats.</p>
-      <Row label="Project">
+      <Row label="Folder">
         <select value={cwd} onChange={(e) => setCwd(e.target.value)}>
           <option value="">User settings only</option>
           {options.map((p) => (
@@ -238,7 +238,7 @@ function About() {
       <span className="v">
         {s ? `Node ${s.node} on ${s.platform}` : '…'}
       </span>
-      <span className="k">Projects folder</span>
+      <span className="k">Folders root</span>
       <span className="v">{s?.projectsRoot || '…'}</span>
       <span className="k">Data folder</span>
       <span className="v">{s?.dataDir || '…'}</span>

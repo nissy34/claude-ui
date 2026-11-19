@@ -55,7 +55,7 @@ function FolderPicker({ folders, onChange, projects }) {
     <div className="pj-folders">
       {folders.map((f, i) => (
         <div key={i} className="pj-folder-row">
-          <Input mono list="pj-folder-list" value={f.path} placeholder="Folder (name in your projects root, or a full path)" onChange={(e) => onChange(folders.map((x, j) => (j === i ? { path: e.target.value } : x)))} />
+          <Input mono list="pj-folder-list" value={f.path} placeholder="Folder (name in your folders root, or a full path)" onChange={(e) => onChange(folders.map((x, j) => (j === i ? { path: e.target.value } : x)))} />
           <Button type="button" variant="ghost" size="sm" onClick={() => onChange(folders.filter((_, j) => j !== i))}>
             ✕
           </Button>

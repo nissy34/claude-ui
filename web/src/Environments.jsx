@@ -217,7 +217,7 @@ function FolderRow({ f, main, canMakeMain, onChange, onMakeMain, onRemove }) {
 }
 
 function defaultName(all) {
-  return all.length ? 'Projects' : 'My environment';
+  return all.length ? 'Folders' : 'My environment';
 }
 
 function FolderPicker({ projects, taken, onPick, onCancel }) {
