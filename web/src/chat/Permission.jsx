@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { ToolBody, toolSummary } from './ToolCard.jsx';
+import { Button } from '../ui/index.jsx';
 
 function alwaysLabel(suggestions) {
   if (!Array.isArray(suggestions) || !suggestions.length) return null;
@@ -61,9 +62,9 @@ function Questions({ input, onAnswer }) {
         </div>
       ))}
       <div className="perm-actions">
-        <button className="btn primary" disabled={!ready} onClick={submit}>
+        <Button variant="primary" disabled={!ready} onClick={submit}>
           Submit answers
-        </button>
+        </Button>
       </div>
     </div>
   );
@@ -96,29 +97,29 @@ export default function Permission({ perm, cwd, onAnswer, onMode, showBody = tru
         <div className="perm-title">Ready to code?</div>
         {showBody && <ToolBody name={perm.tool} input={perm.input} cwd={cwd} />}
         <div className="perm-actions">
-          <button
-            className="btn primary"
+          <Button
+            variant="primary"
             onClick={() => {
               onMode('acceptEdits');
               answer('allow');
             }}
           >
             Yes, auto-accept edits
-          </button>
-          <button className="btn" onClick={() => {
+          </Button>
+          <Button onClick={() => {
             onMode('default');
             answer('allow');
           }}>
             Yes, ask before edits
-          </button>
-          <button className="btn" onClick={() => setDenying(true)}>
+          </Button>
+          <Button onClick={() => setDenying(true)}>
             Keep planning
-          </button>
+          </Button>
         </div>
         {denying && (
           <form className="deny-form" onSubmit={(e) => (e.preventDefault(), answer('deny', { message: denyMsg || 'Keep planning.' }))}>
             <input autoFocus placeholder="What should change in the plan?" value={denyMsg} onChange={(e) => setDenyMsg(e.target.value)} />
-            <button className="btn small">Send</button>
+            <Button size="sm">Send</Button>
           </form>
         )}
       </div>
@@ -135,22 +136,22 @@ export default function Permission({ perm, cwd, onAnswer, onMode, showBody = tru
       {perm.reason && typeof perm.reason === 'string' && <div className="perm-reason muted">{perm.reason}</div>}
       {showBody && <ToolBody name={perm.tool} input={perm.input} cwd={cwd} />}
       <div className="perm-actions">
-        <button className="btn primary" onClick={() => answer('allow')}>
+        <Button variant="primary" onClick={() => answer('allow')}>
           Allow
-        </button>
+        </Button>
         {always && (
-          <button className="btn" onClick={() => answer('allow', { always: true })}>
+          <Button onClick={() => answer('allow', { always: true })}>
             {always}
-          </button>
+          </Button>
         )}
-        <button className="btn" onClick={() => setDenying((d) => !d)}>
+        <Button onClick={() => setDenying((d) => !d)}>
           Deny
-        </button>
+        </Button>
       </div>
       {denying && (
         <form className="deny-form" onSubmit={(e) => (e.preventDefault(), answer('deny', { message: denyMsg || undefined }))}>
           <input autoFocus placeholder="Tell Claude what to do instead (optional)" value={denyMsg} onChange={(e) => setDenyMsg(e.target.value)} />
-          <button className="btn small">Deny</button>
+          <Button size="sm">Deny</Button>
         </form>
       )}
     </div>

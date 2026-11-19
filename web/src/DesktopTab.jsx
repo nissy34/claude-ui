@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { api, timeAgo } from './api.js';
+import { Button, IconButton } from './ui/index.jsx';
 
 function copy(text) {
   try {
@@ -132,30 +133,30 @@ function Connect({ onError }) {
       {via === 'code' && (
         <div className="copy-block">
           <pre className="set-pre">{addCmd(show ? token : '<token>')}</pre>
-          <button className="btn small" onClick={() => copy(addCmd(token))}>
+          <Button size="sm" onClick={() => copy(addCmd(token))}>
             Copy
-          </button>
+          </Button>
         </div>
       )}
       <div className="copy-block">
         <pre className="set-pre">{cfg}</pre>
-        <button className="btn small" onClick={() => copy(cfgCopy)}>
+        <Button size="sm" onClick={() => copy(cfgCopy)}>
           Copy
-        </button>
+        </Button>
       </div>
       <h4 className="set-h">Token</h4>
       <div className="token-row">
         <code className="token">{show ? token : '•'.repeat(24)}</code>
-        <button className="btn small" onClick={() => setShow(!show)}>
+        <Button size="sm" onClick={() => setShow(!show)}>
           {show ? 'Hide' : 'Show'}
-        </button>
-        <button className="btn small" onClick={() => copy(token)}>
+        </Button>
+        <Button size="sm" onClick={() => copy(token)}>
           Copy
-        </button>
+        </Button>
         {!info.fromEnv && (
-          <button className="btn small danger" onClick={rotate}>
+          <Button variant="danger" size="sm" onClick={rotate}>
             New token
-          </button>
+          </Button>
         )}
       </div>
       <p className="muted set-note">Anyone with the token can start chats on this computer, like the password. Making a new one disconnects the old.</p>
@@ -237,9 +238,9 @@ function Notes({ onError, projects, activeCwd }) {
         <NoteScope projects={projects} value={project} onChange={setProject} />
         <input className="search-in" placeholder="Search notes" value={q} onChange={(e) => setQ(e.target.value)} />
         {!edit && (
-          <button className="btn small primary" onClick={() => setEdit({ title: '', content: '', scope: project ? 'project' : 'global' })}>
+          <Button variant="primary" size="sm" onClick={() => setEdit({ title: '', content: '', scope: project ? 'project' : 'global' })}>
             + New note
-          </button>
+          </Button>
         )}
       </div>
       <p className="muted set-note">
@@ -252,10 +253,10 @@ function Notes({ onError, projects, activeCwd }) {
           <input value={edit.title} onChange={(e) => setEdit({ ...edit, title: e.target.value })} placeholder="Title" required disabled={!!edit.id} />
           <textarea rows={6} value={edit.content} onChange={(e) => setEdit({ ...edit, content: e.target.value })} placeholder="Markdown" />
           <div className="row end">
-            <button type="button" className="btn small" onClick={() => setEdit(null)}>
+            <Button type="button" size="sm" onClick={() => setEdit(null)}>
               Cancel
-            </button>
-            <button className="btn small primary">Save {edit.scope === 'global' ? 'global note' : 'to project memory'}</button>
+            </Button>
+            <Button variant="primary" size="sm">Save {edit.scope === 'global' ? 'global note' : 'to project memory'}</Button>
           </div>
         </form>
       )}
@@ -277,8 +278,8 @@ function Notes({ onError, projects, activeCwd }) {
               </div>
               {open?.key === key(n) ? <pre className="set-pre">{open.content}</pre> : <div className="item-sub">{(n.description || n.preview).slice(0, 140)}</div>}
             </div>
-            <button
-              className="icon-btn"
+            <IconButton
+              
               title="Edit"
               onClick={() =>
                 api(`/api/notes/${encodeURIComponent(n.id)}${scopeQs(n)}`)
@@ -287,10 +288,10 @@ function Notes({ onError, projects, activeCwd }) {
               }
             >
               ✎
-            </button>
-            <button className="icon-btn" title="Delete" onClick={() => del(n)}>
+            </IconButton>
+            <IconButton title="Delete" onClick={() => del(n)}>
               🗑
-            </button>
+            </IconButton>
           </div>
         ))}
       </div>

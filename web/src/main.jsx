@@ -1,6 +1,8 @@
 import React from 'react';
 import { createRoot } from 'react-dom/client';
 import '@xterm/xterm/css/xterm.css';
+import './design/tokens.css';
+import './design/components.css';
 import './styles.css';
 import './theme.js';
 import './prefs.js';

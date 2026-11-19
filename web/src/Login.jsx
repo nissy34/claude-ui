@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { api } from './api.js';
+import { Button } from './ui/index.jsx';
 
 export default function Login({ onLogin }) {
   const [password, setPassword] = useState('');
@@ -34,9 +35,9 @@ export default function Login({ onLogin }) {
           onChange={(e) => setPassword(e.target.value)}
         />
         {error && <div className="error">{error}</div>}
-        <button className="btn primary" disabled={busy || !password}>
+        <Button variant="primary" disabled={busy || !password}>
           {busy ? 'Signing in…' : 'Sign in'}
-        </button>
+        </Button>
       </form>
     </div>
   );

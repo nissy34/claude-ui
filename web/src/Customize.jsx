@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { api } from './api.js';
 import { McpLogins, PasteCallback } from './chat/McpAuth.jsx';
+import { Button, IconButton } from './ui/index.jsx';
 
 const RESTART_NOTE = 'Changes apply to new chats, and to open chats after their next restart.';
 
@@ -95,9 +96,9 @@ function SecretInput({ value, onChange, placeholder, secret = true, autoComplete
   return (
     <span className="secret-in">
       <input type={secret && !show ? 'password' : 'text'} value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} autoComplete={autoComplete || 'off'} spellCheck={false} />
-      <button type="button" className="icon-btn" title={show ? 'Hide' : 'Show'} onClick={() => setShow(!show)} style={secret ? undefined : { visibility: 'hidden' }} tabIndex={secret ? 0 : -1}>
+      <IconButton type="button"  title={show ? 'Hide' : 'Show'} onClick={() => setShow(!show)} style={secret ? undefined : { visibility: 'hidden' }} tabIndex={secret ? 0 : -1}>
         {show ? '🙈' : '👁'}
-      </button>
+      </IconButton>
     </span>
   );
 }
@@ -110,14 +111,14 @@ function KeyValueRows({ rows, onChange, keyPlaceholder, addLabel }) {
         <div className="kv-row" key={i}>
           <input value={r.k} onChange={(e) => upd(i, { k: e.target.value })} placeholder={keyPlaceholder} spellCheck={false} />
           <SecretInput value={r.v} onChange={(v) => upd(i, { v })} placeholder="value" secret={SECRET_KEY.test(r.k)} />
-          <button type="button" className="icon-btn danger" title="Remove" onClick={() => onChange(rows.filter((_, j) => j !== i))}>
+          <IconButton type="button" danger title="Remove" onClick={() => onChange(rows.filter((_, j) => j !== i))}>
             ✕
-          </button>
+          </IconButton>
         </div>
       ))}
-      <button type="button" className="btn small kv-add" onClick={() => onChange([...rows, { k: '', v: '' }])}>
+      <Button type="button" size="sm" className="kv-add" onClick={() => onChange([...rows, { k: '', v: '' }])}>
         + {addLabel}
-      </button>
+      </Button>
     </div>
   );
 }
@@ -248,12 +249,12 @@ function ServerForm({ cwd, edit, onDone, onError }) {
         </select>
       </div>
       <div className="row end">
-        <button type="button" className="btn small" onClick={onDone}>
+        <Button type="button" size="sm" onClick={onDone}>
           Cancel
-        </button>
-        <button className="btn small primary" disabled={busy}>
+        </Button>
+        <Button variant="primary" size="sm" disabled={busy}>
           {busy ? 'Saving…' : edit ? 'Save' : 'Add server'}
-        </button>
+        </Button>
       </div>
       <p className="muted set-note">
         Saved in Claude Code’s own config ({f.scope === 'project' ? '.mcp.json in the project, which may be committed' : '~/.claude.json'}
@@ -287,9 +288,9 @@ export function McpTab({ projects, activeCwd, onError }) {
       <div className="tab-top">
         <ProjectPicker projects={projects} value={cwd} onChange={setCwd} />
         {!adding && !editing && (
-          <button className="btn small primary" onClick={() => setAdding(true)}>
+          <Button variant="primary" size="sm" onClick={() => setAdding(true)}>
             + Add server
-          </button>
+          </Button>
         )}
       </div>
       {(adding || editing) && (
@@ -322,8 +323,8 @@ export function McpTab({ projects, activeCwd, onError }) {
               <div className="item-sub">{s.status}</div>
             </div>
             <Toggle value={s.enabled} disabled={!cwd || busy === s.name} onChange={(v) => run(s.name, () => post('toggle', { name: s.name, enabled: v }))} />
-            <button
-              className="icon-btn"
+            <IconButton
+              
               title="Edit: command, URL, username and password, environment, headers"
               disabled={busy === s.name || (s.scope !== 'user' && !cwd)}
               onClick={() => {
@@ -333,10 +334,10 @@ export function McpTab({ projects, activeCwd, onError }) {
               }}
             >
               ✎
-            </button>
-            <button className="icon-btn" title="Remove" disabled={busy === s.name} onClick={() => window.confirm(`Remove the MCP server "${s.name}" (${s.scope})?`) && run(s.name, () => post('remove', { name: s.name, scope: s.scope }))}>
+            </IconButton>
+            <IconButton title="Remove" disabled={busy === s.name} onClick={() => window.confirm(`Remove the MCP server "${s.name}" (${s.scope})?`) && run(s.name, () => post('remove', { name: s.name, scope: s.scope }))}>
               🗑
-            </button>
+            </IconButton>
           </div>
         ))}
       </div>
@@ -430,12 +431,12 @@ function PluginConfig({ id, onDone, onError }) {
         })}
       </div>
       <div className="row end">
-        <button type="button" className="btn small" onClick={() => onDone()}>
+        <Button type="button" size="sm" onClick={() => onDone()}>
           Cancel
-        </button>
-        <button className="btn small primary" disabled={busy}>
+        </Button>
+        <Button variant="primary" size="sm" disabled={busy}>
           {busy ? 'Saving…' : 'Save'}
-        </button>
+        </Button>
       </div>
       <p className="muted set-note">Saved by Claude Code itself: passwords and other secret options go to its secure storage, the rest to your user settings. The plugin’s MCP servers pick them up in new chats, or after a chat restarts.</p>
     </form>
@@ -505,9 +506,9 @@ export function PluginsTab({ onError }) {
             }}
           >
             <input className="search-in" style={{ flex: 1 }} value={mkt} onChange={(e) => setMkt(e.target.value)} placeholder="owner/repo, git URL or local path" />
-            <button className="btn small primary" disabled={!mkt.trim() || busy === 'mkt'}>
+            <Button variant="primary" size="sm" disabled={!mkt.trim() || busy === 'mkt'}>
               {busy === 'mkt' ? 'Adding…' : 'Add marketplace'}
-            </button>
+            </Button>
           </form>
           <div className="item-list">
             {(data?.marketplaces || []).map((m) => {
@@ -518,8 +519,8 @@ export function PluginsTab({ onError }) {
                     <div className="item-title">{name}</div>
                     <div className="item-sub">{m.source ? JSON.stringify(m.source) : m.url || m.path || ''}</div>
                   </div>
-                  <button
-                    className="btn small"
+                  <Button
+                    size="sm"
                     disabled={!!busy}
                     onClick={() =>
                       run(name, () =>
@@ -531,9 +532,9 @@ export function PluginsTab({ onError }) {
                     }
                   >
                     Update
-                  </button>
-                  <button
-                    className="icon-btn"
+                  </Button>
+                  <IconButton
+                    
                     title="Remove"
                     onClick={() =>
                       window.confirm(`Remove marketplace ${name}?`) &&
@@ -546,7 +547,7 @@ export function PluginsTab({ onError }) {
                     }
                   >
                     🗑
-                  </button>
+                  </IconButton>
                 </div>
               );
             })}
@@ -573,22 +574,22 @@ export function PluginsTab({ onError }) {
                   {view === 'installed' ? (
                     <>
                       {p.hasUserConfig && (
-                        <button className={`btn small ${unset ? 'primary' : ''}`} disabled={busy === id} onClick={() => setConfiguring(configuring === id ? '' : id)}>
+                        <Button size="sm" className={`${unset ? 'primary' : ''}`} disabled={busy === id} onClick={() => setConfiguring(configuring === id ? '' : id)}>
                           Configure
-                        </button>
+                        </Button>
                       )}
                       <Toggle value={enabled} disabled={busy === id} onChange={(v) => act(v ? 'enable' : 'disable', id, p.scope)} />
-                      <button className="btn small" disabled={busy === id} onClick={() => act('update', id)}>
+                      <Button size="sm" disabled={busy === id} onClick={() => act('update', id)}>
                         Update
-                      </button>
-                      <button className="icon-btn" title="Uninstall" disabled={busy === id} onClick={() => window.confirm(`Uninstall ${p.name || id}?`) && act('uninstall', id, p.scope)}>
+                      </Button>
+                      <IconButton title="Uninstall" disabled={busy === id} onClick={() => window.confirm(`Uninstall ${p.name || id}?`) && act('uninstall', id, p.scope)}>
                         🗑
-                      </button>
+                      </IconButton>
                     </>
                   ) : (
-                    <button className="btn small primary" disabled={busy === id} onClick={() => act('install', id, 'user')}>
+                    <Button variant="primary" size="sm" disabled={busy === id} onClick={() => act('install', id, 'user')}>
                       {busy === id ? 'Installing…' : 'Install'}
-                    </button>
+                    </Button>
                   )}
                 </div>
                 {view === 'installed' && configuring === id && (
@@ -671,12 +672,12 @@ export function SkillsTab({ projects, activeCwd, onError }) {
         </div>
         <textarea className="skill-text" value={edit.content} onChange={(e) => setEdit({ ...edit, content: e.target.value })} spellCheck={false} />
         <div className="row end">
-          <button className="btn small" onClick={() => setEdit(null)}>
+          <Button size="sm" onClick={() => setEdit(null)}>
             Cancel
-          </button>
-          <button className="btn small primary" disabled={!edit.id || busy === 'save'} onClick={() => run('save', () => post('save', edit)).then((ok) => ok && setEdit(null))}>
+          </Button>
+          <Button variant="primary" size="sm" disabled={!edit.id || busy === 'save'} onClick={() => run('save', () => post('save', edit)).then((ok) => ok && setEdit(null))}>
             Save skill
-          </button>
+          </Button>
         </div>
       </div>
     );
@@ -685,8 +686,8 @@ export function SkillsTab({ projects, activeCwd, onError }) {
     <>
       <div className="tab-top">
         <ProjectPicker projects={projects} value={cwd} onChange={setCwd} />
-        <button
-          className="btn small primary"
+        <Button
+          variant="primary" size="sm"
           onClick={() =>
             setEdit({
               scope: 'user',
@@ -697,7 +698,7 @@ export function SkillsTab({ projects, activeCwd, onError }) {
           }
         >
           + New skill
-        </button>
+        </Button>
       </div>
       <p className="muted set-note">Skills are folders with a SKILL.md in ~/.claude/skills (all projects) or .claude/skills (one project). Plugin skills are managed under Plugins. {RESTART_NOTE}</p>
       {!list && <div className="muted">Loading…</div>}
@@ -712,8 +713,8 @@ export function SkillsTab({ projects, activeCwd, onError }) {
               <div className="item-sub wrap">{s.description}</div>
             </div>
             <Toggle value={s.enabled} disabled={busy === s.id} onChange={(v) => run(s.id, () => post('toggle', { scope: s.scope, id: s.id, enabled: v }))} />
-            <button
-              className="btn small"
+            <Button
+              size="sm"
               onClick={() =>
                 post('get', { scope: s.scope, id: s.id })
                   .then((r) => setEdit({ scope: s.scope, id: s.id, content: r.content }))
@@ -721,10 +722,10 @@ export function SkillsTab({ projects, activeCwd, onError }) {
               }
             >
               Edit
-            </button>
-            <button className="icon-btn" title="Delete" onClick={() => window.confirm(`Delete the skill "${s.name}"? It's moved to a .trash folder next to it.`) && run(s.id, () => post('delete', { scope: s.scope, id: s.id }))}>
+            </Button>
+            <IconButton title="Delete" onClick={() => window.confirm(`Delete the skill "${s.name}"? It's moved to a .trash folder next to it.`) && run(s.id, () => post('delete', { scope: s.scope, id: s.id }))}>
               🗑
-            </button>
+            </IconButton>
           </div>
         ))}
       </div>

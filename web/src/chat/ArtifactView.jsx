@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { api } from '../api.js';
 import { renderMarkdown } from './markdown.js';
+import { Button, IconButton } from '../ui/index.jsx';
 
 const Markdown = ({ text }) => <div className="md" dangerouslySetInnerHTML={{ __html: renderMarkdown(text) }} />;
 
@@ -119,9 +120,9 @@ export default function ArtifactView({ sessionId, path, refreshKey }) {
           {name} <span className="muted">· {(path.split('.').pop() || '').toUpperCase()}</span>
         </span>
         {kind === 'image' && (
-          <button className={`btn small ghost ${fit ? 'on' : ''}`} onClick={() => setFit(!fit)} title="Fit to panel">
+          <Button variant="ghost" size="sm" className={`${fit ? 'on' : ''}`} onClick={() => setFit(!fit)} title="Fit to panel">
             Fit
-          </button>
+          </Button>
         )}
         <select className="art-zoom" value={zoom} onChange={(e) => (setZoom(Number(e.target.value)), setFit(false))} title="Zoom">
           {ZOOMS.map((z) => (
@@ -130,22 +131,22 @@ export default function ArtifactView({ sessionId, path, refreshKey }) {
             </option>
           ))}
         </select>
-        <button className="icon-btn" title="Reload" onClick={() => setReload((r) => r + 1)}>
+        <IconButton title="Reload" onClick={() => setReload((r) => r + 1)}>
           ↻
-        </button>
+        </IconButton>
         {url && (
-          <a className="icon-btn" title="Download" href={`${url}?download=1`} download={name}>
+          <IconButton as="a"  title="Download" href={`${url}?download=1`} download={name}>
             ⤓
-          </a>
+          </IconButton>
         )}
         {url && (
-          <a className="icon-btn" title="Open in a new tab" href={url} target="_blank" rel="noreferrer">
+          <IconButton as="a"  title="Open in a new tab" href={url} target="_blank" rel="noreferrer">
             ↗
-          </a>
+          </IconButton>
         )}
-        <button className="icon-btn" title="Full screen" onClick={fullscreen}>
+        <IconButton title="Full screen" onClick={fullscreen}>
           ⛶
-        </button>
+        </IconButton>
       </div>
       {body}
     </div>

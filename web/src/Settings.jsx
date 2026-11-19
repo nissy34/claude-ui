@@ -6,6 +6,7 @@ import { MODES } from './chat/Composer.jsx';
 import { useModels } from './models.js';
 import { McpTab, PluginsTab, SkillsTab } from './Customize.jsx';
 import DesktopTab from './DesktopTab.jsx';
+import { Button, IconButton, Modal, ModalHead } from './ui/index.jsx';
 
 const TABS = [
   ['general', 'General'],
@@ -80,17 +81,17 @@ function General({ prefs, set, onKeys }) {
       </Row>
       <Row label="Desktop notifications" desc={perm === 'denied' ? 'Blocked in this browser. Allow them in the site settings.' : 'Notify when Claude finishes or needs approval while this tab is in the background.'}>
         {perm === 'default' ? (
-          <button className="btn small" onClick={() => Notification.requestPermission().then(setPerm)}>
+          <Button size="sm" onClick={() => Notification.requestPermission().then(setPerm)}>
             Allow
-          </button>
+          </Button>
         ) : (
           <Toggle value={prefs.notifications && perm === 'granted'} onChange={(v) => set('notifications', v)} />
         )}
       </Row>
       <Row label="Keyboard shortcuts">
-        <button className="btn small" onClick={onKeys}>
+        <Button size="sm" onClick={onKeys}>
           Show
-        </button>
+        </Button>
       </Row>
     </>
   );
@@ -174,9 +175,9 @@ function Permissions({ projects, activeCwd, onError }) {
               <code title={r.file}>{r.rule}</code>
               <span className="muted rscope">{r.scope}</span>
               {r.behavior !== 'defaultMode' && (
-                <button className="icon-btn" title="Remove" onClick={() => remove(r)}>
+                <IconButton title="Remove" onClick={() => remove(r)}>
                   ✕
-                </button>
+                </IconButton>
               )}
             </div>
           ))}
@@ -266,37 +267,30 @@ export default function Settings({ projects, activeCwd, onClose, onError, onKeys
   const [prefs, setPrefs] = useState(getPrefs);
   const set = (k, v) => setPrefs(setPref(k, v));
   return (
-    <div className="modal" onClick={onClose}>
-      <div className="modal-card wide settings" onClick={(e) => e.stopPropagation()}>
-        <nav className="set-nav">
-          <div className="set-title">Settings</div>
-          {TABS.map(([id, label]) => (
-            <button key={id} className={tab === id ? 'on' : ''} onClick={() => setTab(id)}>
-              {label}
-            </button>
-          ))}
-        </nav>
-        <div className="set-main">
-          <div className="modal-head">
-            <span className="mtitle">{TABS.find((t) => t[0] === tab)[1]}</span>
-            <button className="icon-btn" onClick={onClose} aria-label="Close">
-              ✕
-            </button>
-          </div>
-          <div className="modal-body">
-            {tab === 'general' && <General prefs={prefs} set={set} onKeys={onKeys} />}
-            {tab === 'chats' && <Chats prefs={prefs} set={set} />}
-            {tab === 'permissions' && <Permissions projects={projects} activeCwd={activeCwd} onError={onError} />}
-            {tab === 'mcp' && <McpTab projects={projects} activeCwd={activeCwd} onError={onError} />}
-            {tab === 'plugins' && <PluginsTab onError={onError} />}
-            {tab === 'skills' && <SkillsTab projects={projects} activeCwd={activeCwd} onError={onError} />}
-            {tab === 'desktop' && <DesktopTab onError={onError} projects={projects} activeCwd={activeCwd} />}
-            {tab === 'account' && <Account />}
-            {tab === 'about' && <About />}
-          </div>
+    <Modal onClose={onClose} size="wide" className="settings">
+      <nav className="set-nav">
+        <div className="set-title">Settings</div>
+        {TABS.map(([id, label]) => (
+          <button key={id} className={tab === id ? 'on' : ''} onClick={() => setTab(id)}>
+            {label}
+          </button>
+        ))}
+      </nav>
+      <div className="set-main">
+        <ModalHead title={TABS.find((t) => t[0] === tab)[1]} onClose={onClose} />
+        <div className="modal-body">
+          {tab === 'general' && <General prefs={prefs} set={set} onKeys={onKeys} />}
+          {tab === 'chats' && <Chats prefs={prefs} set={set} />}
+          {tab === 'permissions' && <Permissions projects={projects} activeCwd={activeCwd} onError={onError} />}
+          {tab === 'mcp' && <McpTab projects={projects} activeCwd={activeCwd} onError={onError} />}
+          {tab === 'plugins' && <PluginsTab onError={onError} />}
+          {tab === 'skills' && <SkillsTab projects={projects} activeCwd={activeCwd} onError={onError} />}
+          {tab === 'desktop' && <DesktopTab onError={onError} projects={projects} activeCwd={activeCwd} />}
+          {tab === 'account' && <Account />}
+          {tab === 'about' && <About />}
         </div>
       </div>
-    </div>
+    </Modal>
   );
 }
 
@@ -323,29 +317,22 @@ const KEYS = [
 
 export function Shortcuts({ onClose }) {
   return (
-    <div className="modal" onClick={onClose}>
-      <div className="modal-card" onClick={(e) => e.stopPropagation()}>
-        <div className="modal-head">
-          <span className="mtitle">Keyboard shortcuts</span>
-          <button className="icon-btn" onClick={onClose} aria-label="Close">
-            ✕
-          </button>
-        </div>
-        <div className="modal-body">
-          <div className="kv keys">
-            {KEYS.map(([k, d]) => (
-              <React.Fragment key={k}>
-                <span className="k">
-                  {k.split(' ').map((p) => (
-                    <kbd key={p}>{p}</kbd>
-                  ))}
-                </span>
-                <span className="v">{d}</span>
-              </React.Fragment>
-            ))}
-          </div>
+    <Modal onClose={onClose}>
+      <ModalHead title="Keyboard shortcuts" onClose={onClose} />
+      <div className="modal-body">
+        <div className="kv keys">
+          {KEYS.map(([k, d]) => (
+            <React.Fragment key={k}>
+              <span className="k">
+                {k.split(' ').map((p) => (
+                  <kbd key={p}>{p}</kbd>
+                ))}
+              </span>
+              <span className="v">{d}</span>
+            </React.Fragment>
+          ))}
         </div>
       </div>
-    </div>
+    </Modal>
   );
 }

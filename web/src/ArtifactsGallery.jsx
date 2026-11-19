@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { api, timeAgo } from './api.js';
 import { artifactKind } from './chat/ArtifactView.jsx';
+import { IconButton, Modal } from './ui/index.jsx';
 
 const LABEL = { html: 'Web page', image: 'Image', markdown: 'Document', pdf: 'PDF', csv: 'Table' };
 const ICON = { html: '◰', image: '▣', markdown: '¶', pdf: '▤', csv: '▦' };
@@ -20,46 +21,44 @@ export default function ArtifactsGallery({ onClose, onOpen, onError }) {
     [list, q, kind]
   );
   return (
-    <div className="modal" onClick={onClose}>
-      <div className="modal-card wide" onClick={(e) => e.stopPropagation()}>
-        <div className="modal-head">
-          <span className="mtitle">Artifacts</span>
-          <input className="search-in" placeholder="Search" value={q} onChange={(e) => setQ(e.target.value)} autoFocus />
-          <select className="proj-pick" style={{ flex: 'none' }} value={kind} onChange={(e) => setKind(e.target.value)}>
-            <option value="">All types</option>
-            {Object.entries(LABEL).map(([k, l]) => (
-              <option key={k} value={k}>
-                {l}s
-              </option>
-            ))}
-          </select>
-          <button className="icon-btn" onClick={onClose} aria-label="Close">
-            ✕
-          </button>
-        </div>
-        <div className="modal-body">
-          {!list && <div className="muted">Loading…</div>}
-          {list && shown.length === 0 && <div className="empty-box">{list.length ? 'No matches.' : 'Nothing yet. When Claude writes a web page, dashboard, image, Markdown document, PDF or CSV, it shows up here.'}</div>}
-          <div className="art-grid">
-            {shown.map((a) => {
-              const k = artifactKind(a.path);
-              return (
-                <button key={a.sessionId + a.path} className="art-tile" onClick={() => onOpen(a)} title={a.path}>
-                  <div className="art-thumb">
-                    {k === 'image' ? <img src={a.url} alt="" loading="lazy" /> : k === 'html' ? <iframe src={a.url} title={a.name} sandbox="" loading="lazy" tabIndex={-1} /> : <span>{ICON[k]}</span>}
-                  </div>
-                  <div className="art-tile-meta">
-                    <b>{a.name}</b>
-                    <span className="muted">
-                      {LABEL[k]} · {a.sessionName} · {timeAgo(a.mtime)}
-                    </span>
-                  </div>
-                </button>
-              );
-            })}
-          </div>
+    <Modal onClose={onClose} size="wide">
+      <div className="modal-head">
+        <span className="mtitle">Artifacts</span>
+        <input className="search-in" placeholder="Search" value={q} onChange={(e) => setQ(e.target.value)} autoFocus />
+        <select className="proj-pick" style={{ flex: 'none' }} value={kind} onChange={(e) => setKind(e.target.value)}>
+          <option value="">All types</option>
+          {Object.entries(LABEL).map(([k, l]) => (
+            <option key={k} value={k}>
+              {l}s
+            </option>
+          ))}
+        </select>
+        <IconButton onClick={onClose} aria-label="Close">
+          ✕
+        </IconButton>
+      </div>
+      <div className="modal-body">
+        {!list && <div className="muted">Loading…</div>}
+        {list && shown.length === 0 && <div className="empty-box">{list.length ? 'No matches.' : 'Nothing yet. When Claude writes a web page, dashboard, image, Markdown document, PDF or CSV, it shows up here.'}</div>}
+        <div className="art-grid">
+          {shown.map((a) => {
+            const k = artifactKind(a.path);
+            return (
+              <button key={a.sessionId + a.path} className="art-tile" onClick={() => onOpen(a)} title={a.path}>
+                <div className="art-thumb">
+                  {k === 'image' ? <img src={a.url} alt="" loading="lazy" /> : k === 'html' ? <iframe src={a.url} title={a.name} sandbox="" loading="lazy" tabIndex={-1} /> : <span>{ICON[k]}</span>}
+                </div>
+                <div className="art-tile-meta">
+                  <b>{a.name}</b>
+                  <span className="muted">
+                    {LABEL[k]} · {a.sessionName} · {timeAgo(a.mtime)}
+                  </span>
+                </div>
+              </button>
+            );
+          })}
         </div>
       </div>
-    </div>
+    </Modal>
   );
 }

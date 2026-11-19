@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api.js';
+import { Button } from '../ui/index.jsx';
 
 // MCP sign-in (OAuth). Claude's flow redirects to http://localhost:<port>/callback on the machine
 // running Claude. Sign-in pages open in the sign-in window (the server's own browser, on that
@@ -103,9 +104,9 @@ export function McpSignInBar({ sessionId, flows, onError, onDone }) {
           autoComplete="off"
           spellCheck={false}
         />
-        <button className="btn primary" disabled={busy || !url.trim()}>
+        <Button variant="primary" disabled={busy || !url.trim()}>
           {busy ? 'Connecting…' : 'Connect'}
-        </button>
+        </Button>
       </div>
       <div className="mcp-auth-links">
         {shown.map((f) => (
@@ -148,9 +149,9 @@ export function PasteCallback({ onError }) {
         <p className="muted set-note">This server has no built-in browser, so sign-in pages open on your device. Paste the address of the page that failed to load.</p>
         <div className="mcp-auth-row">
           <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="http://localhost:…/callback?code=…" autoComplete="off" spellCheck={false} />
-          <button className="btn primary" disabled={busy || !url.trim()}>
+          <Button variant="primary" disabled={busy || !url.trim()}>
             {busy ? 'Delivering…' : 'Deliver'}
-          </button>
+          </Button>
         </div>
         {msg && <p className="muted set-note">{msg}</p>}
       </form>
@@ -251,15 +252,15 @@ export function Elicitation({ req, done, onAnswer }) {
       {req.mode === 'url' ? (
         <div className="elicit-url">
           {browserOn ? (
-            <button
+            <Button
               type="button"
-              className="btn small primary"
+              variant="primary" size="sm"
               onClick={() => (setOpened(true), api('/api/signin-page', { method: 'POST', body: { url: req.url, server: req.server } }).catch(() => {}))}
             >
               Open in the sign-in window
-            </button>
+            </Button>
           ) : (
-            <a className="btn small primary" href={req.url} target="_blank" rel="noreferrer" onClick={() => setOpened(true)}>
+            <Button as="a" variant="primary" size="sm" href={req.url} target="_blank" rel="noreferrer" onClick={() => setOpened(true)}>
               Open {(() => {
                 try {
                   return new URL(req.url).host;
@@ -267,7 +268,7 @@ export function Elicitation({ req, done, onAnswer }) {
                   return 'link';
                 }
               })()}
-            </a>
+            </Button>
           )}
           {opened && <span className="muted">Finish there, then press Done.</span>}
         </div>
@@ -276,18 +277,18 @@ export function Elicitation({ req, done, onAnswer }) {
       )}
       <div className="elicit-actions">
         {req.mode === 'url' ? (
-          <button type="button" className="btn small primary" onClick={() => answer('accept')}>
+          <Button type="button" variant="primary" size="sm" onClick={() => answer('accept')}>
             Done
-          </button>
+          </Button>
         ) : (
-          <button className="btn small primary">Submit</button>
+          <Button variant="primary" size="sm">Submit</Button>
         )}
-        <button type="button" className="btn small" onClick={() => answer('decline')}>
+        <Button type="button" size="sm" onClick={() => answer('decline')}>
           Decline
-        </button>
-        <button type="button" className="btn small ghost" onClick={() => answer('cancel')}>
+        </Button>
+        <Button type="button" variant="ghost" size="sm" onClick={() => answer('cancel')}>
           Cancel
-        </button>
+        </Button>
       </div>
       {req.mode !== 'url' && fields.some((f) => SECRET.test(`${f.key} ${f.title || ''}`)) && <small className="muted">Goes straight to {req.server}. Not saved in this chat.</small>}
     </form>
@@ -373,34 +374,34 @@ export function McpLogins({ cwd, onError, onChange }) {
                 {flow ? (
                   <>
                     {browserOn ? (
-                      <button className="btn small" onClick={() => showSigninWindow({ server: s.name })}>
+                      <Button size="sm" onClick={() => showSigninWindow({ server: s.name })}>
                         Show sign-in
-                      </button>
+                      </Button>
                     ) : (
-                      <a className="btn small" href={flow.authUrl} target="_blank" rel="noreferrer">
+                      <Button as="a" size="sm" href={flow.authUrl} target="_blank" rel="noreferrer">
                         Open again
-                      </a>
+                      </Button>
                     )}
-                    <button className="btn small ghost" onClick={() => act('cancel', { name: s.name })}>
+                    <Button variant="ghost" size="sm" onClick={() => act('cancel', { name: s.name })}>
                       Cancel
-                    </button>
+                    </Button>
                   </>
                 ) : (
                   <>
                     {needsSignIn(s) && (
-                      <button className="btn small primary" disabled={busy === s.name} onClick={() => signIn(s.name)}>
+                      <Button variant="primary" size="sm" disabled={busy === s.name} onClick={() => signIn(s.name)}>
                         Sign in
-                      </button>
+                      </Button>
                     )}
                     {canSignOut(s) && (
-                      <button className="btn small" disabled={busy === s.name} onClick={() => window.confirm(`Sign out of ${s.name}? Chats lose access until you sign in again.`) && act('signout', { name: s.name })}>
+                      <Button size="sm" disabled={busy === s.name} onClick={() => window.confirm(`Sign out of ${s.name}? Chats lose access until you sign in again.`) && act('signout', { name: s.name })}>
                         Sign out
-                      </button>
+                      </Button>
                     )}
                     {s.status === 'failed' && !needsSignIn(s) && (
-                      <button className="btn small" disabled={busy === s.name} onClick={() => act('reconnect', { name: s.name })}>
+                      <Button size="sm" disabled={busy === s.name} onClick={() => act('reconnect', { name: s.name })}>
                         Retry
-                      </button>
+                      </Button>
                     )}
                   </>
                 )}
@@ -408,9 +409,9 @@ export function McpLogins({ cwd, onError, onChange }) {
               {flow && !browserOn && (
                 <form className="mcp-auth-row login-paste" onSubmit={deliver}>
                   <input value={paste} onChange={(e) => setPaste(e.target.value)} placeholder="Paste the http://localhost:…/callback?code=… address" autoComplete="off" spellCheck={false} />
-                  <button className="btn small primary" disabled={!paste.trim()}>
+                  <Button variant="primary" size="sm" disabled={!paste.trim()}>
                     Connect
-                  </button>
+                  </Button>
                 </form>
               )}
             </div>

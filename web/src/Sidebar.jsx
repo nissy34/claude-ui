@@ -2,6 +2,7 @@ import React, { useMemo, useState } from 'react';
 import { api, timeAgo } from './api.js';
 import { getThemePref, setThemePref } from './theme.js';
 import { EnvironmentDialog, ClonePanel, envSummary, FolderIcon, EnvIcon, GitIcon } from './Environments.jsx';
+import { Button, IconButton, Menu, Modal, ModalHead } from './ui/index.jsx';
 
 function dotState(s) {
   if (s.kind === 'chat') {
@@ -135,11 +136,11 @@ export default function Sidebar({ sessions, activeId, onSelect, onCreate, onNewC
       </span>
       <span className="when">{timeAgo(s.lastActivity)}</span>
       <span className="menu-wrap row-menu" onClick={(e) => e.stopPropagation()}>
-        <button className="icon-btn" title="More" onClick={() => setMenu(menu === 'row:' + keyPrefix + s.id ? null : 'row:' + keyPrefix + s.id)}>
+        <IconButton title="More" onClick={() => setMenu(menu === 'row:' + keyPrefix + s.id ? null : 'row:' + keyPrefix + s.id)}>
           ⋯
-        </button>
+        </IconButton>
         {menu === 'row:' + keyPrefix + s.id && (
-          <div className="pop down">
+          <Menu place="down">
             <button onClick={() => rowAction(s, 'unread')}>
               Mark as unread <kbd>U</kbd>
             </button>
@@ -156,7 +157,7 @@ export default function Sidebar({ sessions, activeId, onSelect, onCreate, onNewC
             <button className="danger" onClick={() => rowAction(s, 'delete')}>
               Delete <kbd>D</kbd>
             </button>
-          </div>
+          </Menu>
         )}
       </span>
     </div>
@@ -190,12 +191,12 @@ export default function Sidebar({ sessions, activeId, onSelect, onCreate, onNewC
         <div className="brand">
           <span className="mark sm">&gt;_</span> Claude Web
         </div>
-        <button className="icon-btn hide-mobile" title="Hide sidebar" onClick={onCollapse}>
+        <IconButton className="hide-mobile" title="Hide sidebar" onClick={onCollapse}>
           ⇤
-        </button>
-        <button className="icon-btn close-btn" onClick={onClose} aria-label="Close">
+        </IconButton>
+        <IconButton className="close-btn" onClick={onClose} aria-label="Close">
           ✕
-        </button>
+        </IconButton>
       </div>
 
       <nav className="side-nav">
@@ -237,13 +238,13 @@ export default function Sidebar({ sessions, activeId, onSelect, onCreate, onNewC
               <span className="gname" title={g.path} onClick={() => toggleGroup(g.path)}>
                 {g.name}
               </span>
-              <button className="icon-btn" title={`New chat in ${g.name}`} onClick={() => onCreate({ cwd: g.path, kind: 'chat' })}>
+              <IconButton title={`New chat in ${g.name}`} onClick={() => onCreate({ cwd: g.path, kind: 'chat' })}>
                 +
-              </button>
+              </IconButton>
               <div className="menu-wrap">
-                <button className={`icon-btn ${menu === g.path ? 'keep' : ''}`} title="More" onClick={() => setMenu(menu === g.path ? null : g.path)}>
+                <IconButton className={`${menu === g.path ? 'keep' : ''}`} title="More" onClick={() => setMenu(menu === g.path ? null : g.path)}>
                   ⋯
-                </button>
+                </IconButton>
                 {menu === g.path && <ProjectMenu path={g.path} onClose={() => setMenu(null)} onCreate={onCreate} onHistory={onHistory} />}
               </div>
             </div>
@@ -262,11 +263,11 @@ export default function Sidebar({ sessions, activeId, onSelect, onCreate, onNewC
 
       <div className="side-foot">
         <div className="menu-wrap">
-          <button className="icon-btn" title="Theme" onClick={() => setMenu(menu === 'theme' ? null : 'theme')}>
+          <IconButton title="Theme" onClick={() => setMenu(menu === 'theme' ? null : 'theme')}>
             ◐ <span className="lbl">{cap(theme)}</span>
-          </button>
+          </IconButton>
           {menu === 'theme' && (
-            <div className="pop up">
+            <Menu place="up">
               {['system', 'light', 'dark'].map((t) => (
                 <button
                   key={t}
@@ -281,16 +282,16 @@ export default function Sidebar({ sessions, activeId, onSelect, onCreate, onNewC
                   {cap(t)}
                 </button>
               ))}
-            </div>
+            </Menu>
           )}
         </div>
-        <button className="icon-btn" title="Settings (Ctrl+,)" onClick={onSettings}>
+        <IconButton title="Settings (Ctrl+,)" onClick={onSettings}>
           ⚙ <span className="lbl">Settings</span>
-        </button>
+        </IconButton>
         <span className="spacer" />
-        <button className="btn small ghost" onClick={onLogout}>
+        <Button variant="ghost" size="sm" onClick={onLogout}>
           Log out
-        </button>
+        </Button>
       </div>
     </aside>
   );
@@ -302,7 +303,7 @@ function ProjectMenu({ path, onClose, onCreate, onHistory }) {
     fn();
   };
   return (
-    <div className="pop down">
+    <Menu place="down">
       <button onClick={go(() => onCreate({ cwd: path, kind: 'chat' }))}>New chat</button>
       <button onClick={go(() => onCreate({ cwd: path, kind: 'chat', worktree: true }))}>
         <span>
@@ -314,7 +315,7 @@ function ProjectMenu({ path, onClose, onCreate, onHistory }) {
       <div className="sep" />
       <button onClick={go(() => onCreate({ cwd: path, kind: 'claude' }))}>Claude in a terminal</button>
       <button onClick={go(() => onCreate({ cwd: path, kind: 'shell' }))}>Shell</button>
-    </div>
+    </Menu>
   );
 }
 
@@ -420,135 +421,118 @@ export function NewChatDialog({ projects, onCreate, onClose, onReloadProjects, o
   const historyDir = noFolder ? projects.scratch : selEnv ? selEnv.folders[0] || projects.scratch : sel;
 
   return (
-    <div className="modal" onClick={onClose}>
-      <div className="modal-card new-chat" onClick={(e) => e.stopPropagation()}>
-        <div className="modal-head">
-          <span className="mtitle">New chat</span>
-          <button className="icon-btn" onClick={onClose}>
-            ✕
-          </button>
-        </div>
-        <div className="modal-body">
-          <span className="label">Where should Claude work?</span>
-          {showSearch && <input className="field" autoFocus placeholder="Search folders and environments" value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={onSearchKey} />}
-          <div className="pick-list" role="listbox" aria-label="Folder">
-            {showNone && (
-              <button role="option" aria-selected={noFolder} className={noFolder ? 'on' : ''} onClick={() => setSel(NO_FOLDER)} onDoubleClick={() => start(NO_FOLDER)} autoFocus={!showSearch}>
-                <ChatIcon />
-                <span className="pl-name">
-                  No folder
-                  <span className="pl-sub">Just chat. Claude works in a scratch folder.</span>
-                </span>
-                <span className="pl-check">{noFolder ? '✓' : ''}</span>
-              </button>
-            )}
-            {envList.length > 0 && (
-              <>
-                {showNone && <div className="pl-sep" />}
-                <div className="pl-group">Environments</div>
-                {envList.map((e) => {
-                  const on = sel === ENV + e.id;
-                  return (
-                    <div key={e.id} className={`pl-env ${on ? 'on' : ''}`}>
-                      <button role="option" aria-selected={on} className={on ? 'on' : ''} onClick={() => setSel(ENV + e.id)} onDoubleClick={() => start(ENV + e.id)}>
-                        <EnvIcon />
-                        <span className="pl-name">
-                          {e.name}
-                          <span className="pl-sub">{envSummary(e)}</span>
-                        </span>
-                        <span className="pl-check">{on ? '✓' : ''}</span>
-                      </button>
-                      <button className="pl-edit" onClick={() => setEditEnv(e)} aria-label={`Edit ${e.name}`} title="Edit environment">
-                        ✎
-                      </button>
-                    </div>
-                  );
-                })}
-                {list.length > 0 && <div className="pl-group">Folders</div>}
-              </>
-            )}
-            {showNone && envList.length === 0 && list.length > 0 && <div className="pl-sep" />}
-            {list.map((p) => (
-              <button key={p.path} role="option" aria-selected={sel === p.path} className={sel === p.path ? 'on' : ''} onClick={() => setSel(p.path)} onDoubleClick={() => start(p.path)}>
-                <FolderIcon />
-                <span className="pl-name">{p.name}</span>
-                {p.git && <span className="tag">git</span>}
-                {p.lastUsed > 0 && <span className="pl-when">{timeAgo(p.lastUsed)}</span>}
-                <span className="pl-check">{sel === p.path ? '✓' : ''}</span>
-              </button>
-            ))}
-            {list.length === 0 && envList.length === 0 && !showNone && <div className="pad muted">Nothing matches</div>}
-          </div>
-          <div className="pl-foot">
-            <span className="muted" title={projects.root}>
-              {all.length === 0 ? 'No folders yet in ' : 'Folders in '}
-              {projects.root}
-            </span>
-          </div>
-          {!cloning && newName === null && (
-            <div className="pl-actions">
-              <button className="btn small" onClick={() => setNewName('')}>
-                <FolderIcon /> New folder
-              </button>
-              <button className="btn small" onClick={() => setCloning(true)}>
-                <GitIcon /> Clone from git
-              </button>
-              <button className="btn small" onClick={() => setEditEnv({})}>
-                <EnvIcon /> New environment
-              </button>
-            </div>
-          )}
-          {newName !== null && (
-            <form className="row" onSubmit={create}>
-              <input className="field" autoFocus placeholder="new-project" value={newName} onChange={(e) => setNewName(e.target.value)} onKeyDown={(e) => e.key === 'Escape' && (e.stopPropagation(), setNewName(null))} />
-              <button type="button" className="btn small" onClick={() => setNewName(null)}>
-                Cancel
-              </button>
-              <button className="btn small">Create</button>
-            </form>
-          )}
-          {cloning && <ClonePanel root={projects.root} onDone={cloned} onCancel={() => setCloning(false)} />}
-          {projects.rootCaseHint && (
-            <div className="pl-warn">
-              The projects folder is set as <code>{projects.root}</code>, but your home folder is spelled with different capitals. Set <code>CW_PROJECTS_ROOT={projects.rootCaseHint}</code> in <code>.env</code> and restart, so these chats line up with Claude on your computer.
-            </div>
-          )}
-          {selProject?.git && !cloning && (
-            <div className="wt-row">
-              <div className="wt-text">
-                <div>Isolated worktree</div>
-                <div className="desc">Claude works on its own branch, so your checkout stays untouched</div>
-              </div>
-              <button type="button" className={`toggle ${worktree ? 'on' : ''}`} role="switch" aria-checked={worktree} aria-label="Isolated worktree" onClick={() => setWorktree((w) => !w)} />
-            </div>
-          )}
-        </div>
-        <div className="modal-foot">
-          {sel && historyDir && (
-            <button className="btn ghost" onClick={() => (onClose(), onHistory(historyDir))}>
-              Resume a past conversation…
+    <Modal onClose={onClose} className="new-chat">
+      <ModalHead title="New chat" onClose={onClose} />
+      <div className="modal-body">
+        <span className="label">Where should Claude work?</span>
+        {showSearch && <input className="field" autoFocus placeholder="Search folders and environments" value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={onSearchKey} />}
+        <div className="pick-list" role="listbox" aria-label="Folder">
+          {showNone && (
+            <button role="option" aria-selected={noFolder} className={noFolder ? 'on' : ''} onClick={() => setSel(NO_FOLDER)} onDoubleClick={() => start(NO_FOLDER)} autoFocus={!showSearch}>
+              <ChatIcon />
+              <span className="pl-name">
+                No folder
+                <span className="pl-sub">Just chat. Claude works in a scratch folder.</span>
+              </span>
+              <span className="pl-check">{noFolder ? '✓' : ''}</span>
             </button>
           )}
-          <span className="spacer" />
-          <button className="btn" onClick={onClose}>
-            Cancel
-          </button>
-          <button className="btn primary" disabled={!sel || cloning} onClick={() => start()}>
-            Start chat
-          </button>
+          {envList.length > 0 && (
+            <>
+              {showNone && <div className="pl-sep" />}
+              <div className="pl-group">Environments</div>
+              {envList.map((e) => {
+                const on = sel === ENV + e.id;
+                return (
+                  <div key={e.id} className={`pl-env ${on ? 'on' : ''}`}>
+                    <button role="option" aria-selected={on} className={on ? 'on' : ''} onClick={() => setSel(ENV + e.id)} onDoubleClick={() => start(ENV + e.id)}>
+                      <EnvIcon />
+                      <span className="pl-name">
+                        {e.name}
+                        <span className="pl-sub">{envSummary(e)}</span>
+                      </span>
+                      <span className="pl-check">{on ? '✓' : ''}</span>
+                    </button>
+                    <button className="pl-edit" onClick={() => setEditEnv(e)} aria-label={`Edit ${e.name}`} title="Edit environment">
+                      ✎
+                    </button>
+                  </div>
+                );
+              })}
+              {list.length > 0 && <div className="pl-group">Folders</div>}
+            </>
+          )}
+          {showNone && envList.length === 0 && list.length > 0 && <div className="pl-sep" />}
+          {list.map((p) => (
+            <button key={p.path} role="option" aria-selected={sel === p.path} className={sel === p.path ? 'on' : ''} onClick={() => setSel(p.path)} onDoubleClick={() => start(p.path)}>
+              <FolderIcon />
+              <span className="pl-name">{p.name}</span>
+              {p.git && <span className="tag">git</span>}
+              {p.lastUsed > 0 && <span className="pl-when">{timeAgo(p.lastUsed)}</span>}
+              <span className="pl-check">{sel === p.path ? '✓' : ''}</span>
+            </button>
+          ))}
+          {list.length === 0 && envList.length === 0 && !showNone && <div className="pad muted">Nothing matches</div>}
         </div>
+        <div className="pl-foot">
+          <span className="muted" title={projects.root}>
+            {all.length === 0 ? 'No folders yet in ' : 'Folders in '}
+            {projects.root}
+          </span>
+        </div>
+        {!cloning && newName === null && (
+          <div className="pl-actions">
+            <Button size="sm" onClick={() => setNewName('')}>
+              <FolderIcon /> New folder
+            </Button>
+            <Button size="sm" onClick={() => setCloning(true)}>
+              <GitIcon /> Clone from git
+            </Button>
+            <Button size="sm" onClick={() => setEditEnv({})}>
+              <EnvIcon /> New environment
+            </Button>
+          </div>
+        )}
+        {newName !== null && (
+          <form className="row" onSubmit={create}>
+            <input className="field" autoFocus placeholder="new-project" value={newName} onChange={(e) => setNewName(e.target.value)} onKeyDown={(e) => e.key === 'Escape' && (e.stopPropagation(), setNewName(null))} />
+            <Button type="button" size="sm" onClick={() => setNewName(null)}>
+              Cancel
+            </Button>
+            <Button size="sm">Create</Button>
+          </form>
+        )}
+        {cloning && <ClonePanel root={projects.root} onDone={cloned} onCancel={() => setCloning(false)} />}
+        {projects.rootCaseHint && (
+          <div className="pl-warn">
+            The projects folder is set as <code>{projects.root}</code>, but your home folder is spelled with different capitals. Set <code>CW_PROJECTS_ROOT={projects.rootCaseHint}</code> in <code>.env</code> and restart, so these chats line up with Claude on your computer.
+          </div>
+        )}
+        {selProject?.git && !cloning && (
+          <div className="wt-row">
+            <div className="wt-text">
+              <div>Isolated worktree</div>
+              <div className="desc">Claude works on its own branch, so your checkout stays untouched</div>
+            </div>
+            <button type="button" className={`toggle ${worktree ? 'on' : ''}`} role="switch" aria-checked={worktree} aria-label="Isolated worktree" onClick={() => setWorktree((w) => !w)} />
+          </div>
+        )}
       </div>
-      {editEnv && (
-        <EnvironmentDialog
-          env={editEnv.id ? editEnv : null}
-          projects={projects}
-          onSaved={envSaved}
-          onDeleted={(id) => (setEnvs((l) => l.filter((e) => e.id !== id)), setEditEnv(null), sel === ENV + id && setSel(NO_FOLDER))}
-          onClose={() => setEditEnv(null)}
-          onError={onError}
-        />
-      )}
-    </div>
+      <div className="modal-foot">
+        {sel && historyDir && (
+          <Button variant="ghost" onClick={() => (onClose(), onHistory(historyDir))}>
+            Resume a past conversation…
+          </Button>
+        )}
+        <span className="spacer" />
+        <Button onClick={onClose}>
+          Cancel
+        </Button>
+        <Button variant="primary" disabled={!sel || cloning} onClick={() => start()}>
+          Start chat
+        </Button>
+      </div>
+    </Modal>
   );
 }
 
@@ -563,32 +547,25 @@ export function HistoryDialog({ path, onCreate, onClose, onError }) {
       });
   }, [path]); // eslint-disable-line react-hooks/exhaustive-deps
   return (
-    <div className="modal" onClick={onClose}>
-      <div className="modal-card" onClick={(e) => e.stopPropagation()}>
-        <div className="modal-head">
-          <span className="mtitle">Past conversations · {baseName(path)}</span>
-          <button className="icon-btn" onClick={onClose}>
-            ✕
+    <Modal onClose={onClose}>
+      <ModalHead title={<>Past conversations · {baseName(path)}</>} onClose={onClose} />
+      <div className="modal-body" style={{ padding: 6, gap: 0 }}>
+        {!items && <div className="pad muted">Loading…</div>}
+        {items?.length === 0 && <div className="pad muted">No past Claude Code conversations in this folder.</div>}
+        {items?.map((c) => (
+          <button
+            key={c.id}
+            className="history-row"
+            onClick={() => {
+              onCreate({ cwd: path, kind: 'chat', resume: c.id, name: c.title.slice(0, 60) });
+              onClose();
+            }}
+          >
+            <span className="sname">{c.title}</span>
+            <span className="when">{timeAgo(c.mtime)}</span>
           </button>
-        </div>
-        <div className="modal-body" style={{ padding: 6, gap: 0 }}>
-          {!items && <div className="pad muted">Loading…</div>}
-          {items?.length === 0 && <div className="pad muted">No past Claude Code conversations in this folder.</div>}
-          {items?.map((c) => (
-            <button
-              key={c.id}
-              className="history-row"
-              onClick={() => {
-                onCreate({ cwd: path, kind: 'chat', resume: c.id, name: c.title.slice(0, 60) });
-                onClose();
-              }}
-            >
-              <span className="sname">{c.title}</span>
-              <span className="when">{timeAgo(c.mtime)}</span>
-            </button>
-          ))}
-        </div>
+        ))}
       </div>
-    </div>
+    </Modal>
   );
 }

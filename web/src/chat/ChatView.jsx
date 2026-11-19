@@ -15,6 +15,7 @@ import { isLive as taskLive, BackgroundPill } from './BackgroundTasks.jsx';
 import { ChatCtx } from './ctx.js';
 import SideChat from './SideChat.jsx';
 import TerminalView from '../TerminalView.jsx';
+import { Button, IconButton, Menu, Modal, ModalHead } from '../ui/index.jsx';
 
 const AUTH_RE = /oauth|authenticat|\/login|not logged in|invalid api key|credentials/i;
 
@@ -134,17 +135,17 @@ function QueuedMessage({ item, busy, onNow, onEdit, onRemove, onOpen }) {
         <span className="queued-tag">{item.now ? 'Sending…' : busy ? 'Queued' : 'Waiting to send'}</span>
         {!item.now && (
           <>
-            <button className="btn small" onClick={onNow} title={busy ? 'Stop what Claude is doing and send this now' : 'Send this now'}>
+            <Button size="sm" onClick={onNow} title={busy ? 'Stop what Claude is doing and send this now' : 'Send this now'}>
               Send now
-            </button>
+            </Button>
             {item.mine && !item.images && (
-              <button className="icon-btn" onClick={onEdit} title="Edit (moves it back to the message box)" aria-label="Edit">
+              <IconButton onClick={onEdit} title="Edit (moves it back to the message box)" aria-label="Edit">
                 ✎
-              </button>
+              </IconButton>
             )}
-            <button className="icon-btn" onClick={onRemove} title="Remove from the queue" aria-label="Remove">
+            <IconButton onClick={onRemove} title="Remove from the queue" aria-label="Remove">
               ✕
-            </button>
+            </IconButton>
           </>
         )}
       </div>
@@ -166,11 +167,11 @@ function UserMessage({ item, canEdit, onEdit, onOpen, onFork }) {
             <span className="muted" style={{ fontSize: 12, marginRight: 'auto' }}>
               Later messages are removed and files are restored to this point.
             </span>
-            <button className="btn small" onClick={() => setEditing(false)}>
+            <Button size="sm" onClick={() => setEditing(false)}>
               Cancel
-            </button>
-            <button
-              className="btn small primary"
+            </Button>
+            <Button
+              variant="primary" size="sm"
               disabled={!draft.trim()}
               onClick={() => {
                 setEditing(false);
@@ -178,7 +179,7 @@ function UserMessage({ item, canEdit, onEdit, onOpen, onFork }) {
               }}
             >
               Send
-            </button>
+            </Button>
           </div>
         </div>
       </div>
@@ -226,17 +227,17 @@ function UserMessage({ item, canEdit, onEdit, onOpen, onFork }) {
       </div>
       <div className="msg-actions">
         {item.ts && <span className="ts" title={new Date(item.ts).toLocaleString()}>{fmtTime(item.ts)}</span>}
-        <button className="icon-btn" title="Copy" onClick={() => copy(item.text)}>
+        <IconButton title="Copy" onClick={() => copy(item.text)}>
           ⧉
-        </button>
+        </IconButton>
         {onFork && (
-          <button className="icon-btn" title="Fork: continue this conversation from here in a new chat" onClick={() => onFork(item.index)}>
+          <IconButton title="Fork: continue this conversation from here in a new chat" onClick={() => onFork(item.index)}>
             ⑂ <span className="lbl">Fork</span>
-          </button>
+          </IconButton>
         )}
         {canEdit && (
-          <button
-            className="icon-btn"
+          <IconButton
+            
             title="Edit and resend"
             onClick={() => {
               setDraft(item.text);
@@ -244,7 +245,7 @@ function UserMessage({ item, canEdit, onEdit, onOpen, onFork }) {
             }}
           >
             ✎ <span className="lbl">Edit</span>
-          </button>
+          </IconButton>
         )}
       </div>
     </div>
@@ -265,76 +266,69 @@ function fmtTokens(n) {
 function InfoDialog({ meta, onClose, onSignIn }) {
   const rl = meta.rateLimit?.unifiedWindows || {};
   return (
-    <div className="modal" onClick={onClose}>
-      <div className="modal-card" onClick={(e) => e.stopPropagation()}>
-        <div className="modal-head">
-          <span className="mtitle">Session info</span>
-          <button className="icon-btn" onClick={onClose}>
-            ✕
-          </button>
-        </div>
-        <div className="modal-body">
-          <div className="info-grid">
-            <span className="k">Folder</span>
-            <span className="v">{meta.cwd}</span>
-            {meta.worktree && (
-              <>
-                <span className="k">Worktree branch</span>
-                <span className="v">{meta.worktree.branch}</span>
-              </>
-            )}
-            <span className="k">Model</span>
-            <span className="v">{meta.activeModel || meta.model || 'default'}</span>
-            <span className="k">Permission mode</span>
-            <span className="v">{meta.permissionMode || 'default'}</span>
-            <span className="k">Effort</span>
-            <span className="v">{meta.effort || 'default'}</span>
-            <span className="k">Context</span>
-            <span className="v">{meta.contextTokens ? `${fmtTokens(meta.contextTokens)} tokens` : '–'}</span>
-            <span className="k">Session cost</span>
-            <span className="v">{meta.totalCost ? `$${meta.totalCost.toFixed(2)} (API-equivalent estimate)` : '–'}</span>
-            <span className="k">Claude Code</span>
-            <span className="v">{meta.cliVersion || '–'}</span>
-            <span className="k">Conversation id</span>
-            <span className="v" style={{ fontFamily: 'var(--mono)', fontSize: 12 }}>
-              {meta.claudeSessionId || '–'}
-            </span>
-          </div>
-          {Object.keys(rl).length > 0 && (
+    <Modal onClose={onClose}>
+      <ModalHead title="Session info" onClose={onClose} />
+      <div className="modal-body">
+        <div className="info-grid">
+          <span className="k">Folder</span>
+          <span className="v">{meta.cwd}</span>
+          {meta.worktree && (
             <>
-              <span className="label">Usage limits</span>
-              {Object.entries(rl).map(([k, w]) => (
-                <div key={k}>
-                  <div className="row" style={{ fontSize: 13 }}>
-                    <span style={{ flex: 1 }}>{k.replace('_', '-').replace('hour', 'hour window').replace('day', 'day window')}</span>
-                    <span className="muted">
-                      {Math.round((w.utilization || 0) * 100)}%{w.resetsAt ? ` · resets ${new Date(w.resetsAt * 1000).toLocaleString()}` : ''}
-                    </span>
-                  </div>
-                  <div className="meter">
-                    <span style={{ width: `${Math.min(100, (w.utilization || 0) * 100)}%` }} />
-                  </div>
-                </div>
-              ))}
+              <span className="k">Worktree branch</span>
+              <span className="v">{meta.worktree.branch}</span>
             </>
           )}
-          <span className="label">MCP servers</span>
-          {(meta.mcpServers || []).length === 0 && <span className="muted" style={{ fontSize: 13 }}>Shown after the first message.</span>}
-          {(meta.mcpServers || []).map((m) => (
-            <div key={m.name} className="mcp-row">
-              <span className={`dot ${m.status === 'connected' ? 'on' : m.status === 'pending' ? 'busy' : 'off'}`} />
-              <span style={{ flex: 1 }}>{m.name}</span>
-              <span className="muted">{m.status}</span>
-              {needsSignIn(m) && (
-                <button className="btn small primary mcp-signin" onClick={() => onSignIn(m.name)}>
-                  Sign in
-                </button>
-              )}
-            </div>
-          ))}
+          <span className="k">Model</span>
+          <span className="v">{meta.activeModel || meta.model || 'default'}</span>
+          <span className="k">Permission mode</span>
+          <span className="v">{meta.permissionMode || 'default'}</span>
+          <span className="k">Effort</span>
+          <span className="v">{meta.effort || 'default'}</span>
+          <span className="k">Context</span>
+          <span className="v">{meta.contextTokens ? `${fmtTokens(meta.contextTokens)} tokens` : '–'}</span>
+          <span className="k">Session cost</span>
+          <span className="v">{meta.totalCost ? `$${meta.totalCost.toFixed(2)} (API-equivalent estimate)` : '–'}</span>
+          <span className="k">Claude Code</span>
+          <span className="v">{meta.cliVersion || '–'}</span>
+          <span className="k">Conversation id</span>
+          <span className="v" style={{ fontFamily: 'var(--mono)', fontSize: 12 }}>
+            {meta.claudeSessionId || '–'}
+          </span>
         </div>
+        {Object.keys(rl).length > 0 && (
+          <>
+            <span className="label">Usage limits</span>
+            {Object.entries(rl).map(([k, w]) => (
+              <div key={k}>
+                <div className="row" style={{ fontSize: 13 }}>
+                  <span style={{ flex: 1 }}>{k.replace('_', '-').replace('hour', 'hour window').replace('day', 'day window')}</span>
+                  <span className="muted">
+                    {Math.round((w.utilization || 0) * 100)}%{w.resetsAt ? ` · resets ${new Date(w.resetsAt * 1000).toLocaleString()}` : ''}
+                  </span>
+                </div>
+                <div className="meter">
+                  <span style={{ width: `${Math.min(100, (w.utilization || 0) * 100)}%` }} />
+                </div>
+              </div>
+            ))}
+          </>
+        )}
+        <span className="label">MCP servers</span>
+        {(meta.mcpServers || []).length === 0 && <span className="muted" style={{ fontSize: 13 }}>Shown after the first message.</span>}
+        {(meta.mcpServers || []).map((m) => (
+          <div key={m.name} className="mcp-row">
+            <span className={`dot ${m.status === 'connected' ? 'on' : m.status === 'pending' ? 'busy' : 'off'}`} />
+            <span style={{ flex: 1 }}>{m.name}</span>
+            <span className="muted">{m.status}</span>
+            {needsSignIn(m) && (
+              <Button variant="primary" size="sm" className="mcp-signin" onClick={() => onSignIn(m.name)}>
+                Sign in
+              </Button>
+            )}
+          </div>
+        ))}
       </div>
-    </div>
+    </Modal>
   );
 }
 
@@ -722,9 +716,9 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
         <div className="chat-view">
           {side && <SideChat key={side.key} sessionId={session.id} initial={side.q} onClose={() => setSide(null)} />}
           <div className="topbar">
-            <button className="icon-btn menu-btn" onClick={onMenu} aria-label="Menu">
+            <IconButton className="menu-btn" onClick={onMenu} aria-label="Menu">
               ☰
-            </button>
+            </IconButton>
             <div className="title" onClick={rename} title="Rename">
               <span className="tname">{meta.name}</span>
               <span className="muted tcwd">{project}</span>
@@ -738,21 +732,21 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
             )}
             {conn === 'reconnecting' && <span className="pill warn">reconnecting…</span>}
             <div className="tools">
-              <button className={`icon-btn ${terminal ? 'on' : ''}`} title="Terminal" onClick={toggleTerminal}>
+              <IconButton className={`${terminal ? 'on' : ''}`} title="Terminal" onClick={toggleTerminal}>
                 ›_
-              </button>
-              <button className={`icon-btn ${panel && panel !== 'browser' && panel !== 'tasks' ? 'on' : ''}`} title="Changes and files" onClick={() => (panel && panel !== 'browser' && panel !== 'tasks' ? setPanel(null) : openPanel('changes'))}>
+              </IconButton>
+              <IconButton className={`${panel && panel !== 'browser' && panel !== 'tasks' ? 'on' : ''}`} title="Changes and files" onClick={() => (panel && panel !== 'browser' && panel !== 'tasks' ? setPanel(null) : openPanel('changes'))}>
                 ± <span className="lbl hide-mobile">Changes</span>
-              </button>
-              <button className={`icon-btn ${panel === 'browser' ? 'on' : ''}`} title="Browser" onClick={() => (panel === 'browser' ? setPanel(null) : openPanel('browser'))}>
+              </IconButton>
+              <IconButton className={`${panel === 'browser' ? 'on' : ''}`} title="Browser" onClick={() => (panel === 'browser' ? setPanel(null) : openPanel('browser'))}>
                 ◎ <span className="lbl hide-mobile">Browser</span>
-              </button>
+              </IconButton>
               <div className="menu-wrap">
-                <button className="icon-btn" title="More" onClick={() => setMenu((m) => !m)}>
+                <IconButton title="More" onClick={() => setMenu((m) => !m)}>
                   ⋯
-                </button>
+                </IconButton>
                 {menu && (
-                  <div className="pop down">
+                  <Menu place="down">
                     <button onClick={() => (setMenu(false), openPanel('tasks'))}>
                       Background tasks{liveTasks.length > 0 && <span className="menu-count">{liveTasks.length}</span>}
                     </button>
@@ -771,7 +765,7 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
                     <button className="danger" onClick={remove} style={{ color: 'var(--red)' }}>
                       Delete chat
                     </button>
-                  </div>
+                  </Menu>
                 )}
               </div>
             </div>
@@ -805,9 +799,9 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
                         <Markdown text={it.text} streaming={it.streaming} />
                         {!it.streaming && (
                           <div className="msg-actions">
-                            <button className="icon-btn" title="Copy" onClick={() => copy(it.text)}>
+                            <IconButton title="Copy" onClick={() => copy(it.text)}>
                               ⧉ <span className="lbl">Copy</span>
-                            </button>
+                            </IconButton>
                           </div>
                         )}
                       </div>
@@ -836,9 +830,9 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
                       <div key={n} className="sys-error-wrap">
                         <pre className="sys-error">{it.text}</pre>
                         {it.resumable && n === lastResumable && (
-                          <button className="btn small primary" disabled={conn !== 'open'} onClick={() => send({ t: 'resume' })}>
+                          <Button variant="primary" size="sm" disabled={conn !== 'open'} onClick={() => send({ t: 'resume' })}>
                             ↻ Resume
-                          </button>
+                          </Button>
                         )}
                       </div>
                     );
@@ -869,9 +863,9 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
                     <b>Claude is logged out on the server.</b> Open a terminal session, type <code>/login</code>, finish the sign-in, then come back and send your message again.
                   </div>
                   <div className="perm-actions">
-                    <button className="btn primary" onClick={relogin}>
+                    <Button variant="primary" onClick={relogin}>
                       Log in again
-                    </button>
+                    </Button>
                   </div>
                 </div>
               )}
@@ -996,9 +990,9 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
               <div className="term-drawer-head">
                 ›_ Terminal · {meta.cwd}
                 <span className="spacer" />
-                <button className="icon-btn" title="Close" onClick={() => setTerminal(false)}>
+                <IconButton title="Close" onClick={() => setTerminal(false)}>
                   ✕
-                </button>
+                </IconButton>
               </div>
               <TerminalView key={drawerSession.id} session={drawerSession} onMenu={() => {}} onError={onError} onDeleted={() => setTerminal(false)} />
             </div>

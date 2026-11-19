@@ -6,6 +6,7 @@ import { diffLines } from 'diff';
 import { highlight, renderMarkdown } from './markdown.js';
 import Linkify from './Linkify.jsx';
 import { shortPath, isPlanTool, planTodos } from './model.js';
+import { Button } from '../ui/index.jsx';
 
 const ICONS = {
   Bash: '›_',
@@ -214,12 +215,12 @@ export function ImageLightbox({ src, alt, onClose }) {
     <div className="lightbox" role="dialog" aria-label="Image" onClick={onClose}>
       <img src={src} alt={alt} onClick={(e) => e.stopPropagation()} />
       <div className="lightbox-bar" onClick={(e) => e.stopPropagation()}>
-        <a className="btn small" href={src} target="_blank" rel="noreferrer">
+        <Button as="a" size="sm" href={src} target="_blank" rel="noreferrer">
           Open original ↗
-        </a>
-        <button className="btn small" onClick={onClose}>
+        </Button>
+        <Button size="sm" onClick={onClose}>
           Close
-        </button>
+        </Button>
       </div>
     </div>,
     document.body,
@@ -333,9 +334,9 @@ export default function ToolCard({ item, cwd, children }) {
       )}
       {linkedSession && (
         <div className="tool-body" style={{ borderTop: '1px solid var(--line)' }}>
-          <button className="btn small open-session" onClick={() => ctx.openSession(linkedSession)}>
+          <Button size="sm" className="open-session" onClick={() => ctx.openSession(linkedSession)}>
             Open session →
-          </button>
+          </Button>
         </div>
       )}
       {children}

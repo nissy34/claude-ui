@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { api } from '../api.js';
+import { Button, IconButton } from '../ui/index.jsx';
 
 // Background tasks of a chat, like Claude Desktop's "Background tasks" pane: shells Claude started
 // with run_in_background, Monitor watches, background agents. Each row shows how long it has run,
@@ -125,13 +126,13 @@ function TaskRow({ sessionId, task, now, open, onToggle, onError }) {
         </span>
         <StatusChip status={task.status} />
         {live ? (
-          <button className="btn small ghost bg-stop" title="Stop this task" disabled={task.status === 'stopping'} onClick={stop}>
+          <Button variant="ghost" size="sm" className="bg-stop" title="Stop this task" disabled={task.status === 'stopping'} onClick={stop}>
             ■<span className="hide-mobile"> Stop</span>
-          </button>
+          </Button>
         ) : (
-          <button className="icon-btn bg-dismiss" title="Remove from the list" onClick={dismiss}>
+          <IconButton className="bg-dismiss" title="Remove from the list" onClick={dismiss}>
             ✕
-          </button>
+          </IconButton>
         )}
       </div>
       {open && (
