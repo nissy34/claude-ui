@@ -1,3 +1,4 @@
+import { mountToolImages } from './tool-images.js';
 import http from 'node:http';
 import os from 'node:os';
 import crypto from 'node:crypto';
@@ -7,6 +8,8 @@ import readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { WebSocketServer } from 'ws';
+import { listEnvironments, createEnvironment, updateEnvironment, deleteEnvironment, getEnvironment } from './environments.js';
+import { checkClone, cloneRepo } from './clone.js';
 import { config, rootCaseWarning } from './config.js';
 import {
   isAuthed,
@@ -30,6 +33,7 @@ import { prStatus, mergeWhenReady } from './pr-status.js';
 import * as schedules from './schedules.js';
 import * as notes from './notes.js';
 import { controlSession } from './session-control.js';
+import { transcriptTitle } from './chat-title.js';
 import { createDesktopMcp, getToken as getMcpToken, rotateToken as rotateMcpToken } from './desktop-mcp.js';
 import { authStatus, mcpList, pluginList, cliVersion, permissionRules, removePermissionRule } from './claude-admin.js';
 
@@ -236,8 +240,11 @@ app.get(
 );
 
 // Sign-in pages: the URL opener (opener.js) and Sign in buttons open them in the sign-in browser on
-// this machine, so their redirect to http://127.0.0.1:<port> reaches the waiting process. Every
-// open UI pops up the sign-in window and notifies.
+// this machine, so their redirect to http://127.0.0.1:<port> reaches the waiting process. When the
+// saved browser sign-in finishes it by itself, nothing pops up; otherwise every open UI pops up the
+// sign-in window and notifies.
+const SIGNIN_QUIET_MS = 3000;
+const signinRepeats = new Map(); // `${sid} ${host}` -> recent sign-in times
 function openSigninPage(url, { sid, server } = {}) {
   if (!/^https?:\/\//i.test(String(url || ''))) throw new Error('Only http(s) pages can be opened');
   if (!browserAvailable()) throw new Error('The built-in browser is not available on this server');
@@ -246,10 +253,27 @@ function openSigninPage(url, { sid, server } = {}) {
   try {
     host = new URL(url).host;
   } catch {}
-  from?.meta.kind === 'chat' && from.record({ k: 'notice', text: `Sign-in page opened in the sign-in window: ${host}` });
+  const notice = (text) => from?.meta.kind === 'chat' && from.record({ k: 'notice', text });
+  // One line per sign-in page in the server log (docker logs), to tell a re-sign-in loop apart.
+  const log = (what) => console.log(`[sign-in] ${new Date().toISOString()} ${what} ${host}${(() => { try { return new URL(url).pathname; } catch { return ''; } })()}${from ? ` from "${from.meta.name}"` : ''}`);
   browser
     .openSignin(url)
-    .then((id) => emitUi({ t: 'signin-page', id, url, host, server: server || null, from: from ? { id: from.id, name: from.meta.name } : null }))
+    .then(async (id) => {
+      const finished = await browser.signinSettled(id, SIGNIN_QUIET_MS);
+      log(finished ? 'finished by itself' : 'waiting for you');
+      if (finished) {
+        // A server that signs in again on every call isn't keeping its login: say so once in a while.
+        const key = `${sid || ''} ${host}`;
+        const now = Date.now();
+        const times = (signinRepeats.get(key) || []).filter((t) => now - t < 5 * 60_000).concat(now);
+        signinRepeats.set(key, times);
+        if (times.length === 3 || times.length % 10 === 0)
+          return notice(`${host} has signed in ${times.length} times in a few minutes. The MCP server that opens it isn't keeping its login, so each call signs in again.`);
+        return times.length < 3 && notice(`Signed in to ${host} with the saved browser sign-in`);
+      }
+      notice(`Sign-in page opened in the sign-in window: ${host}`);
+      emitUi({ t: 'signin-page', id, url, host, server: server || null, from: from ? { id: from.id, name: from.meta.name } : null });
+    })
     .catch((e) => emitUi({ t: 'error', error: `Could not open the sign-in page: ${e.message}` }));
 }
 browser.onSigninChange((pages) => emitUi({ t: 'signin-pages', pages }));
@@ -367,6 +391,9 @@ app.use('/api', (req, res, next) => {
   if (!isAuthed(req)) return res.status(401).json({ error: 'Not logged in' });
   next();
 });
+
+// Pictures from tool results (MCP screenshots and the like), shown inline in chats.
+mountToolImages(app);
 
 // ---------- helpers ----------
 function resolveDir(input) {
@@ -537,6 +564,50 @@ app.post(
   })
 );
 
+// Clone a git repository into the projects root. Streams NDJSON lines: {progress}, then {path} or {error}.
+// Closing the request (Cancel in the dialog) stops git and removes the half-cloned folder.
+app.post('/api/projects/clone', (req, res) => {
+  let job;
+  try {
+    job = checkClone(req.body?.url, req.body?.name);
+  } catch (e) {
+    return res.status(400).json({ error: e.message });
+  }
+  res.setHeader('Content-Type', 'application/x-ndjson');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('X-Accel-Buffering', 'no');
+  const send = (o) => res.writableEnded || res.write(JSON.stringify(o) + '\n');
+  send({ progress: { line: `Cloning into ${job.dest}` } });
+  let last = 0;
+  const { promise, cancel } = cloneRepo(job, (p) => {
+    const now = Date.now();
+    if (p.percent === 100 || now - last > 150) {
+      last = now;
+      send({ progress: p });
+    }
+  });
+  res.on('close', () => !res.writableFinished && cancel());
+  promise.then(
+    (p) => (send({ path: p }), res.end()),
+    (e) => (send({ error: e.message }), res.end())
+  );
+});
+
+// ---------- environments ----------
+app.get('/api/environments', (req, res) => res.json({ environments: listEnvironments() }));
+app.post(
+  '/api/environments',
+  wrap(async (req, res) => res.json({ environment: createEnvironment(req.body, resolveDir) }))
+);
+app.put(
+  '/api/environments/:id',
+  wrap(async (req, res) => res.json({ environment: updateEnvironment(req.params.id, req.body, resolveDir) }))
+);
+app.delete(
+  '/api/environments/:id',
+  wrap(async (req, res) => (deleteEnvironment(req.params.id), res.json({ ok: true })))
+);
+
 // Past Claude Code conversations for a directory (read from Claude's own transcript files).
 async function summarize(file) {
   const stream = fs.createReadStream(file, { encoding: 'utf8' });
@@ -590,7 +661,8 @@ app.get(
     const top = stats.slice(0, 30);
     const conversations = [];
     for (const s of top) {
-      const title = await summarize(s.file).catch(() => '');
+      const stored = await transcriptTitle(s.file).catch(() => null);
+      const title = stored?.title || (await summarize(s.file).catch(() => ''));
       if (!title && s.size < 2000) continue;
       conversations.push({ id: s.id, title: title || '(untitled)', mtime: s.mtime, size: s.size });
     }
@@ -604,16 +676,31 @@ app.get('/api/sessions', (req, res) => res.json({ sessions: store.list() }));
 app.post(
   '/api/sessions',
   wrap(async (req, res) => {
-    const { cwd, kind, name, resume, model, permissionMode, effort, worktree, parentId, noFolder } = req.body || {};
+    const { kind, name, resume, model, permissionMode, effort, worktree, parentId, envId } = req.body || {};
+    let { cwd, noFolder } = req.body || {};
+    // An environment's first folder is the working folder; with no folders it runs like "No folder".
+    const environment = envId ? getEnvironment(envId) : null;
+    if (envId && !environment) throw new Error('That environment no longer exists');
+    if (environment) {
+      cwd = environment.folders[0];
+      noFolder = !cwd;
+    }
     const project = noFolder ? fs.realpathSync(config.scratchDir) : resolveDir(cwd);
     const wt = worktree && !noFolder ? await createWorktree(project, name || 'chat') : null;
     const dir = wt ? wt.path : project;
     if (resume && resume !== 'continue' && !/^[0-9a-f-]{36}$/i.test(resume)) throw new Error('Bad resume id');
     const s = store.create({ cwd: dir, kind, name: name ? String(name).slice(0, 80) : isScratch(project) ? 'New chat' : undefined, resume, model, permissionMode, effort, initialInput: req.body?.login && kind === 'claude' ? '/login\r' : undefined });
-    if (name) s.meta.customName = true;
+    // A resumed conversation starts with its Past conversations title, which may be just its first
+    // message, so it can still get a short title (or the one Claude Code stored) after a reply.
+    if (name && resume) s.meta.namedFromPrompt = true;
+    else if (name) s.meta.customName = true;
     s.meta.project = project;
     if (isScratch(project)) s.meta.noFolder = true;
     if (wt) s.meta.worktree = wt;
+    if (environment) {
+      s.meta.envId = environment.id;
+      s.meta.envName = environment.name;
+    }
     if (parentId && store.get(parentId)) s.meta.parentId = parentId;
     store.save();
     res.json({ session: s.toJSON() });
@@ -658,6 +745,8 @@ app.post(
     const t = store.create({ cwd: m.cwd, kind: 'chat', name: `${m.name} (fork)`.slice(0, 80), model: m.model, permissionMode: m.permissionMode, effort: m.effort });
     t.meta.project = m.project || m.cwd;
     if (m.worktree) t.meta.worktree = m.worktree;
+    if (m.envId) Object.assign(t.meta, { envId: m.envId, envName: m.envName });
+    if (m.noFolder) t.meta.noFolder = true;
     t.meta.customName = true;
     src.forkInto(t, Number.isInteger(req.body?.index) ? req.body.index : undefined);
     store.save();
@@ -832,7 +921,7 @@ app.get(
   '/api/sessions/:id/browser/frame',
   wrap(async (req, res) => {
     browserTabOf(req);
-    const buf = await browser.screenshot(req.params.id, { type: 'jpeg', quality: 70 });
+    const buf = await browser.screenshot(req.params.id, { type: 'jpeg', quality: 60 });
     res.setHeader('Cache-Control', 'no-store');
     res.type('image/jpeg').send(buf);
   })
@@ -987,7 +1076,13 @@ if (fs.existsSync(distDir)) {
 
 // ---------- websocket ----------
 const server = http.createServer(app);
-const wss = new WebSocketServer({ noServer: true, maxPayload: 32 << 20 }); // room for pasted images
+// Compress big messages only (the history sent when a chat opens can be megabytes of JSON, which
+// shrinks ~10x); streaming deltas stay uncompressed. Level 1 keeps CPU low on small hosts.
+const wss = new WebSocketServer({
+  noServer: true,
+  maxPayload: 32 << 20, // room for pasted images
+  perMessageDeflate: { threshold: 16 * 1024, zlibDeflateOptions: { level: 1 }, serverNoContextTakeover: true, clientNoContextTakeover: true },
+});
 
 function originOk(req) {
   const origin = req.headers.origin;
@@ -1138,6 +1233,11 @@ server.listen(config.port, config.host, () => {
   console.log(`projects root: ${config.projectsRoot}`);
   if (rootCaseWarning()) console.warn(`warning: CW_PROJECTS_ROOT differs in letter case from your home folder. Use ${rootCaseWarning()} so Claude here and Claude on the host file sessions under the same folder.`);
   console.log(`data dir:      ${config.dataDir}`);
+  // Give recent chats that only have their first message as a name a short title, one at a time.
+  if (config.autoTitles)
+    setTimeout(() => {
+      for (const j of store.list().filter((x) => !x.archived).slice(0, 40)) store.get(j.id)?.autoTitle?.();
+    }, 5000).unref();
 });
 
 let shuttingDown = false;

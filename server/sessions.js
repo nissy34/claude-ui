@@ -3,6 +3,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { createRequire } from 'node:module';
 import { config, PRIVATE_ENV } from './config.js';
+import { sessionExtras } from './environments.js';
 import { ChatSession, claudeProjectDir, transcriptPath } from './chat.js';
 
 export { claudeProjectDir, transcriptPath };
@@ -31,8 +32,8 @@ function transcriptExists(cwd, id) {
   return !!id && fs.existsSync(transcriptPath(cwd, id));
 }
 
-function childEnv(sid) {
-  const env = { ...process.env, TERM: 'xterm-256color', COLORTERM: 'truecolor' };
+function childEnv(sid, meta) {
+  const env = { ...process.env, ...sessionExtras(meta).env, TERM: 'xterm-256color', COLORTERM: 'truecolor' };
   for (const k of PRIVATE_ENV) delete env[k];
   return withOpener(env, sid);
 }
@@ -105,7 +106,7 @@ class Session {
         cols: this.cols,
         rows: this.rows,
         cwd: m.cwd,
-        env: childEnv(this.meta.id),
+        env: childEnv(this.meta.id, this.meta),
       });
     } catch (err) {
       const msg = `\r\n\x1b[31mFailed to start ${file}: ${err.message}\x1b[0m\r\n`;

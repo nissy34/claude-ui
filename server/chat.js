@@ -6,11 +6,13 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import readline from 'node:readline';
 import { spawn } from 'node:child_process';
+import { sessionExtras } from './environments.js';
 import { fileURLToPath } from 'node:url';
 import { browserAvailable } from './browser.js';
 import { config, PRIVATE_ENV } from './config.js';
 import { resolveCommand } from './launch.js';
 import { withOpener } from './opener.js';
+import { toolResultParts } from './tool-images.js';
 import { elicitationEvent, elicitationResponse, mcpAuthMethods, slimServers } from './mcp-admin.js';
 
 const CHAT_DIR = path.join(config.dataDir, 'chats');
@@ -32,6 +34,7 @@ const MCP_SCRIPT = path.join(path.dirname(fileURLToPath(import.meta.url)), 'mcp-
 const commandCache = new Map(); // cwd -> commands with descriptions
 import { setModels } from './models.js';
 import { globalNotesPrompt } from './notes.js';
+import { firstExchange, generateTitle, queueTitle, transcriptTitle } from './chat-title.js';
 const MCP_BROWSER = path.join(path.dirname(fileURLToPath(import.meta.url)), 'mcp-browser.js');
 const MCP_UI = path.join(path.dirname(fileURLToPath(import.meta.url)), 'mcp-ui.js');
 const MCP_NOTES = path.join(path.dirname(fileURLToPath(import.meta.url)), 'mcp-notes.js');
@@ -53,8 +56,8 @@ function fromLabel(f) {
   return `[${what} from ${f.role} session "${f.name}" (session id ${f.id})${tail}]`;
 }
 
-export function childEnv(sessionId) {
-  const env = { ...process.env };
+export function childEnv(sessionId, extra = {}) {
+  const env = { ...process.env, ...extra };
   for (const k of PRIVATE_ENV) delete env[k];
   // Lets "edit an earlier message" restore files to that point.
   env.CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING = '1';
@@ -70,15 +73,10 @@ function clip(s, n = MAX_TEXT) {
   return s.length > n ? s.slice(0, n) + `\n… [${s.length - n} more characters]` : s;
 }
 
-function resultText(content) {
-  if (typeof content === 'string') return content;
-  if (Array.isArray(content)) {
-    return content
-      .map((c) => (c.type === 'text' ? c.text : c.type === 'image' ? '[image]' : c.type === 'tool_reference' ? `[${c.tool_name}]` : ''))
-      .filter(Boolean)
-      .join('\n');
-  }
-  return content == null ? '' : JSON.stringify(content);
+/** A tool_result's text (clipped) and the URLs of any pictures it returned. */
+function resultEvent(content) {
+  const { text, images } = toolResultParts(content);
+  return images.length ? { text: clip(text), images } : { text: clip(text) };
 }
 
 function promptText(content) {
@@ -111,7 +109,7 @@ export function eventsFromTranscript(file) {
       const hasToolResult = Array.isArray(c) && c.some((x) => x.type === 'tool_result');
       if (hasToolResult) {
         for (const x of c) {
-          if (x.type === 'tool_result') events.push({ k: 'tool_result', toolUseId: x.tool_use_id, text: clip(resultText(x.content)), isError: !!x.is_error, ts });
+          if (x.type === 'tool_result') events.push({ k: 'tool_result', toolUseId: x.tool_use_id, ...resultEvent(x.content), isError: !!x.is_error, ts });
         }
       } else {
         const text = promptText(c).trim();
@@ -214,6 +212,41 @@ export class ChatSession {
     }
   }
 
+  /** Whether this chat still wants a generated title (see chat-title.js for the order of preference). */
+  needsTitle() {
+    const m = this.meta;
+    return config.autoTitles && m.kind === 'chat' && !m.customName && !m.autoTitle && (m.titleTries || 0) < 2 && !this.titling;
+  }
+
+  /** Replace the first-message placeholder with a short title. Never overrides a rename. */
+  async autoTitle() {
+    if (!this.needsTitle()) return;
+    const m = this.meta;
+    this.titling = true;
+    try {
+      let title = '';
+      let source = 'model';
+      const stored = m.claudeSessionId && (await transcriptTitle(transcriptPath(m.cwd, m.claudeSessionId)).catch(() => null));
+      if (stored) ({ title, source } = stored);
+      else {
+        const { user, assistant } = firstExchange(this.events);
+        if (!user && !assistant) return;
+        m.titleTries = (m.titleTries || 0) + 1;
+        title = await queueTitle(() => generateTitle({ user, assistant, env: sessionExtras(m).env }));
+      }
+      // The user may have renamed it while the title was being made.
+      if (!title || m.customName || !this.store.get(m.id)) return this.store.save();
+      m.name = title;
+      m.autoTitle = source;
+      if (source === 'custom') m.customName = true;
+      this.store.save();
+      this.store.changed?.();
+      this.broadcastState();
+    } finally {
+      this.titling = false;
+    }
+  }
+
   record(ev, { persist = true } = {}) {
     ev.ts ||= Date.now();
     if (persist) {
@@ -304,6 +337,8 @@ export class ChatSession {
     const uploads = path.join(config.dataDir, 'uploads', m.id);
     fs.mkdirSync(uploads, { recursive: true });
     args.push('--add-dir', uploads);
+    const envx = sessionExtras(m);
+    for (const d of envx.addDirs) args.push('--add-dir', d);
     const fork = this.forkAt;
     this.forkAt = undefined;
     if (fork && fork.from && fs.existsSync(transcriptPath(m.cwd, fork.from))) {
@@ -322,7 +357,7 @@ export class ChatSession {
     let proc;
     try {
       const cmd = resolveCommand(config.claudeBin, args);
-      proc = spawn(cmd.file, cmd.args, { cwd: m.cwd, env: childEnv(m.id), stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+      proc = spawn(cmd.file, cmd.args, { cwd: m.cwd, env: childEnv(m.id, envx.env), stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
     } catch (e) {
       this.record({ k: 'error', text: `Could not start ${config.claudeBin}: ${e.message}` });
       return;
@@ -476,7 +511,7 @@ export class ChatSession {
         if (Array.isArray(c)) {
           for (const x of c) {
             if (x.type === 'tool_result') {
-              this.record({ k: 'tool_result', toolUseId: x.tool_use_id, text: clip(resultText(x.content)), isError: !!x.is_error, parent: msg.parent_tool_use_id || null, uuid: msg.uuid });
+              this.record({ k: 'tool_result', toolUseId: x.tool_use_id, ...resultEvent(x.content), isError: !!x.is_error, parent: msg.parent_tool_use_id || null, uuid: msg.uuid });
             }
           }
         }
@@ -516,6 +551,7 @@ export class ChatSession {
         this.store.save();
         this.broadcastState();
         this.touchIdle();
+        if (!msg.is_error) this.autoTitle();
         break;
       case 'autocompact_state':
         if (msg.value?.effective_window) {
@@ -590,7 +626,7 @@ export class ChatSession {
   runShell(cmd) {
     const m = this.meta;
     const isWin = process.platform === 'win32';
-    const p = spawn(isWin ? 'cmd.exe' : process.env.SHELL || 'bash', isWin ? ['/d', '/s', '/c', cmd] : ['-lc', cmd], { cwd: m.cwd, env: childEnv(m.id), windowsHide: true });
+    const p = spawn(isWin ? 'cmd.exe' : process.env.SHELL || 'bash', isWin ? ['/d', '/s', '/c', cmd] : ['-lc', cmd], { cwd: m.cwd, env: childEnv(m.id, sessionExtras(m).env), windowsHide: true });
     let out = '';
     const add = (d) => {
       if (out.length < 200_000) out += d;

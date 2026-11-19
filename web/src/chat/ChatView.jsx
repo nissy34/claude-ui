@@ -8,6 +8,7 @@ import { Elicitation, McpSignInBar, startSignIn, needsSignIn, deliverCallback, L
 import Composer from './Composer.jsx';
 import QuoteReply from './QuoteReply.jsx';
 import { splitQuote } from './quote.js';
+import Linkify from './Linkify.jsx';
 import { getPrefs } from '../prefs.js';
 import SidePanel from './SidePanel.jsx';
 import { ChatCtx } from './ctx.js';
@@ -41,10 +42,40 @@ function Thinking({ text, streaming }) {
       <button className="thinking-head" onClick={() => setOpen((o) => !o)}>
         {streaming ? <span className="spinner" /> : '✳'} {streaming ? 'Thinking…' : 'Thought process'} <span className="chev">{open ? '▾' : '▸'}</span>
       </button>
-      {open && <div className="thinking-body">{text}</div>}
+      {open && <div className="thinking-body"><Linkify text={text} /></div>}
     </div>
   );
 }
+
+// Placeholder transcript shown until the chat's history arrives from the server.
+function LoadingTranscript() {
+  return (
+    <div className="chat-loading" role="status" aria-live="polite">
+      <div className="chat-loading-label">
+        <span className="spinner" /> Loading conversation…
+      </div>
+      <div className="sk-user">
+        <span className="sk-bar" style={{ width: '70%' }} />
+      </div>
+      <div className="sk-assistant">
+        <span className="sk-bar" style={{ width: '92%' }} />
+        <span className="sk-bar" style={{ width: '84%' }} />
+        <span className="sk-bar" style={{ width: '60%' }} />
+      </div>
+      <div className="sk-tool" />
+      <div className="sk-user">
+        <span className="sk-bar" style={{ width: '45%' }} />
+      </div>
+      <div className="sk-assistant">
+        <span className="sk-bar" style={{ width: '88%' }} />
+        <span className="sk-bar" style={{ width: '72%' }} />
+      </div>
+    </div>
+  );
+}
+
+// Long chats render their latest rows first; older ones are added as you scroll up.
+const PAGE_ROWS = 60;
 
 function fmtTime(ts) {
   const d = new Date(ts);
@@ -114,7 +145,7 @@ function UserMessage({ item, canEdit, onEdit, onOpen, onFork }) {
       <div className="bubble">
         {quoted && <div className="bubble-quote">{quoted}</div>}
         {item.images > 0 && <div className="img-note">🖼 {item.images} image{item.images > 1 ? 's' : ''}</div>}
-        {body}
+        <Linkify text={body} />
         {item.refs?.length > 0 && (
           <div className="attach-row in-bubble">
             {item.refs.map((r) => (
@@ -256,6 +287,9 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
   const [state, setState] = useState(session.state || 'idle');
   const [turns, setTurns] = useState(0);
   const [conn, setConn] = useState('connecting');
+  const [loaded, setLoaded] = useState(false); // history received at least once
+  const [hidden, setHidden] = useState(null); // rows not rendered yet at the top of a long chat
+  const growRef = useRef(null); // scroll height before showing earlier rows, to keep the view in place
   const [status, setStatus] = useState(null);
   const [stick, setStick] = useState(true);
   const [showTodos, setShowTodos] = useState(true);
@@ -311,6 +345,7 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
           setOauth(m.oauth || []);
           setDeltas({});
           setConn('open');
+          setLoaded(true);
           retry = 500;
         } else if (m.t === 'ev') {
           const e = m.ev;
@@ -389,7 +424,7 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
       run = [];
     };
     for (const it of items) {
-      if (!verbose && it.type === 'tool' && QUIET.has(it.name) && !(it.perm && !it.perm.done) && !it.result?.isError) run.push(it);
+      if (!verbose && it.type === 'tool' && QUIET.has(it.name) && !(it.perm && !it.perm.done) && !it.result?.isError && !it.result?.images?.length) run.push(it);
       else {
         flush();
         out.push(it);
@@ -403,6 +438,18 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
   const busy = state === 'busy' || state === 'waiting';
   // Resume shows on an exit error only while it is the latest thing in the chat.
   const lastResumable = busy ? -1 : rows.findLastIndex((r) => ['error', 'user', 'text', 'tool', 'group'].includes(r.type));
+  // Rows added after the chat opened always show; only the history above them is held back.
+  useEffect(() => {
+    if (hidden == null && loaded && rows.length) setHidden(Math.max(0, rows.length - PAGE_ROWS));
+  }, [hidden, loaded, rows.length]);
+  const start = Math.min(hidden ?? Infinity, Math.max(0, rows.length - PAGE_ROWS));
+  const visibleRows = start > 0 ? rows.slice(start) : rows;
+  const showEarlier = () => {
+    const el = listRef.current;
+    if (!el || start <= 0 || growRef.current != null) return;
+    growRef.current = el.scrollHeight - el.scrollTop;
+    setHidden(Math.max(0, start - PAGE_ROWS));
+  };
   const queued = Math.max(0, turns - 1);
   // Commands with descriptions when the CLI gave them, plus any other names it listed.
   const commandList = useMemo(() => {
@@ -421,11 +468,18 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
 
   useLayoutEffect(() => {
     const el = listRef.current;
-    if (el && stick) el.scrollTop = el.scrollHeight;
-  }, [items, stick]);
+    if (!el) return;
+    if (growRef.current != null) {
+      // Earlier rows were just added above: keep what you were looking at in place.
+      el.scrollTop = el.scrollHeight - growRef.current;
+      growRef.current = null;
+    } else if (stick) el.scrollTop = el.scrollHeight;
+  }, [items, stick, start]);
   const onScroll = () => {
     const el = listRef.current;
-    if (el) setStick(el.scrollHeight - el.scrollTop - el.clientHeight < 80);
+    if (!el) return;
+    setStick(el.scrollHeight - el.scrollTop - el.clientHeight < 80);
+    if (el.scrollTop < 400 && start > 0) showEarlier();
   };
 
   const answer = (a) => send({ t: 'perm', ...a });
@@ -596,6 +650,7 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
               <span className="tname">{meta.name}</span>
               <span className="muted tcwd">{project}</span>
               {meta.worktree && <span className="pill branch hide-mobile">⎇ {meta.worktree.branch}</span>}
+              {meta.envName && <span className="pill hide-mobile" title="Environment">{meta.envName}</span>}
             </div>
             {parent && (
               <button className="parent-link hide-mobile" onClick={() => onSelect(parent.id)}>
@@ -642,6 +697,12 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
 
           <div className="messages" ref={listRef} onScroll={onScroll}>
             <div className="messages-inner">
+              {!loaded && conn !== 'gone' && <LoadingTranscript />}
+              {start > 0 && (
+                <button className="show-earlier" onClick={showEarlier}>
+                  Show earlier messages ({start})
+                </button>
+              )}
               {items.length === 0 && conn === 'open' && (
                 <div className="welcome">
                   <span className="mark">&gt;_</span>
@@ -649,7 +710,8 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
                   <div className="wsub">{meta.cwd}</div>
                 </div>
               )}
-              {rows.map((it, n) => {
+              {visibleRows.map((it, i) => {
+                const n = start + i;
                 switch (it.type) {
                   case 'group':
                     return <ToolGroup key={it.key} tools={it.tools} cwd={meta.cwd} />;

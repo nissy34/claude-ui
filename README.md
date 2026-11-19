@@ -16,6 +16,8 @@ Sessions live on the server. Close the tab, open it on your phone, and the same 
 - **Edit an earlier message**: the conversation forks from that point and files Claude changed are restored (Claude Code file checkpoints)
 - **Child sessions**: ask Claude to "open another session for X" and it starts a parallel chat, nested under the parent in the sidebar. The parent can message it, wait for it and read its result, and you can open and talk to it directly
 - **Chats talk to each other**: one `send_to_session` tool works in every direction (parent to child, child to parent via id `parent`, any chat to any chat), and the receiver sees who sent it. Messages are non-blocking by default (updates, results); `wait_for_reply` makes it a blocking question that returns the answer. Messages that arrive while a chat is busy queue up and are delivered together, in order, when its turn ends; the chat shows the queue above the composer
+- **Clone from git** in the new-chat dialog: paste a repository address and it is cloned into the projects folder (with progress) and a chat opens in it. Private repositories use the server's own git login (credential helper or SSH key); git never prompts, so a missing login shows an error instead of hanging
+- **Environments** (Local, like the desktop app's): a named set of folders and environment variables. A chat started in one works in the first folder, gets the other folders added to its workspace (`--add-dir`), and passes the variables to Claude and the commands it runs. Create, edit and delete them from the new-chat dialog; they're stored in `~/.claude-web/environments.json`
 - **Worktrees**: start a chat in an isolated git worktree on its own branch, from the new-chat dialog or a project's ⋯ menu
 - Composer with permission mode (Shift+Tab cycles), model, effort, `@` file mentions, a slash-command menu, image paste/drag/attach, **any-file attachments** (uploaded to the server and handed to Claude), browser dictation, a context-usage ring with Compact, queued follow-ups, and Stop (Esc)
 - Consecutive tool calls fold into one compact row you can expand
@@ -244,6 +246,8 @@ All settings are environment variables; see [`.env.example`](.env.example).
 | `CW_CHAT_IDLE_MINUTES` | `30` | Stop idle chat processes (they resume on the next message); `0` keeps them |
 | `CW_ALLOW_ANY_DIR` | `0` | `1` allows sessions outside the projects root |
 | `CW_SCRATCH_DIR` | `~/.claude-web/scratch` | Folder that "No folder" chats run in (shared, so Past conversations works there) |
+| `CW_AUTO_TITLES` | `1` | Give chats a short title after the first reply, from one quick no-tools call to `CW_TITLE_MODEL` (about $0.001 per chat). A rename always wins; `0` keeps the first line of the first message |
+| `CW_TITLE_MODEL` | `haiku` | Model for chat titles |
 | `CW_CHILD_SESSIONS` | `1` | `0` turns off the built-in sessions tools (child sessions) |
 | `CW_DESKTOP_MCP` | `1` | `0` turns off the Claude Desktop handoff server (`/mcp`) and the shared notes tools |
 | `CW_PUBLIC_URL` | | Address other computers use to reach the server (e.g. `http://myserver:8787` or your Tailscale URL), used in the Claude Desktop setup snippets. Set it when running in Docker, where the hostname is the container id |

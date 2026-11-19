@@ -25,29 +25,35 @@ export default function BrowserView({ sessionId, onError }) {
     [base, editing]
   );
 
-  // Poll the picture while the panel is open and the tab is visible.
+  // Poll the picture while the panel is open and the tab is visible. Pictures load one at a time
+  // (as fast as the server makes them, at most ~4 a second); the page state is checked less often.
+  const kick = useRef(null);
   useEffect(() => {
     let stop = false;
     let timer;
-    let lastUrl = null;
+    let n = 0;
+    let open = false;
     const tick = async () => {
+      clearTimeout(timer);
       if (stop) return;
       if (!document.hidden) {
-        const s = await refreshState();
-        if (s?.open) {
+        if (n++ % 4 === 0 || !open) open = !!(await refreshState())?.open;
+        if (open) {
           const img = new Image();
           const next = `${base}/frame?t=${Date.now()}`;
           await new Promise((r) => {
             img.onload = img.onerror = r;
             img.src = next;
           });
-          if (!stop && img.naturalWidth) {
-            if (lastUrl) URL.revokeObjectURL?.(lastUrl);
-            setFrame(next);
-          }
+          if (!stop && img.naturalWidth) setFrame(next);
         }
       }
-      timer = setTimeout(tick, document.hidden ? 3000 : 900);
+      if (!stop) timer = setTimeout(tick, document.hidden ? 3000 : open ? 250 : 900);
+    };
+    // After an action, show its result right away instead of waiting for the next tick.
+    kick.current = () => {
+      clearTimeout(timer);
+      timer = setTimeout(tick, 60);
     };
     tick();
     return () => {
@@ -56,15 +62,35 @@ export default function BrowserView({ sessionId, onError }) {
     };
   }, [base, refreshState]);
 
-  const act = async (op, body = {}) => {
-    setBusy(true);
+  // Actions run in order (typed keys must not overtake each other); runs of typed characters go
+  // as one request.
+  const queue = useRef(Promise.resolve());
+  const pendingText = useRef('');
+  const post = async (op, body) => {
     try {
       const r = await api(`${base}/${op}`, { method: 'POST', body });
       if (r.state) setSt(r.state);
       if (r.url) setUrl(r.url);
-      setFrame(`${base}/frame?t=${Date.now()}`);
     } catch (e) {
       onError(e);
+    }
+    kick.current?.();
+  };
+  const send = (op, body) => (queue.current = queue.current.then(() => post(op, body)));
+  const typeChar = (ch) => {
+    const first = !pendingText.current;
+    pendingText.current += ch;
+    if (first)
+      queue.current = queue.current.then(() => {
+        const text = pendingText.current;
+        pendingText.current = '';
+        return text ? post('type', { text }) : null;
+      });
+  };
+  const act = async (op, body = {}) => {
+    setBusy(true);
+    try {
+      await send(op, body);
     } finally {
       setBusy(false);
     }
@@ -85,10 +111,10 @@ export default function BrowserView({ sessionId, onError }) {
   const onKey = (e) => {
     if (e.metaKey || (e.ctrlKey && !['a', 'c', 'v', 'x', 'z'].includes(e.key.toLowerCase()))) return;
     e.preventDefault();
-    if (e.key.length === 1 && !e.ctrlKey) act('type', { text: e.key });
+    if (e.key.length === 1 && !e.ctrlKey) typeChar(e.key);
     else {
       const mods = [e.ctrlKey && 'Control', e.altKey && 'Alt', e.shiftKey && e.key.length > 1 && 'Shift'].filter(Boolean);
-      act('press', { key: [...mods, e.key === ' ' ? 'Space' : e.key].join('+') });
+      send('press', { key: [...mods, e.key === ' ' ? 'Space' : e.key].join('+') });
     }
   };
 
@@ -99,7 +125,7 @@ export default function BrowserView({ sessionId, onError }) {
     wheel.t = setTimeout(() => {
       const dy = wheel.current;
       wheel.current = 0;
-      act('scroll', { dy });
+      send('scroll', { dy });
     }, 120);
   };
 
@@ -144,7 +170,7 @@ export default function BrowserView({ sessionId, onError }) {
       </form>
       {st?.open && frame ? (
         <div className="browser-view" tabIndex={0} onKeyDown={onKey} onWheel={onWheel}>
-          <img ref={imgRef} src={frame} alt={st.title || 'Browser'} draggable={false} onClick={(e) => (e.currentTarget.parentElement.focus(), act('click', point(e)))} />
+          <img ref={imgRef} src={frame} alt={st.title || 'Browser'} draggable={false} onClick={(e) => (e.currentTarget.parentElement.focus(), send('click', point(e)))} />
         </div>
       ) : (
         <div className="panel-empty">
