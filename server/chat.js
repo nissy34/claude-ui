@@ -6,6 +6,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import readline from 'node:readline';
 import { spawn } from 'node:child_process';
+import { sessionExtras } from './environments.js';
 import { fileURLToPath } from 'node:url';
 import { browserAvailable } from './browser.js';
 import { config, PRIVATE_ENV } from './config.js';
@@ -53,8 +54,8 @@ function fromLabel(f) {
   return `[${what} from ${f.role} session "${f.name}" (session id ${f.id})${tail}]`;
 }
 
-export function childEnv(sessionId) {
-  const env = { ...process.env };
+export function childEnv(sessionId, extra = {}) {
+  const env = { ...process.env, ...extra };
   for (const k of PRIVATE_ENV) delete env[k];
   // Lets "edit an earlier message" restore files to that point.
   env.CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING = '1';
@@ -304,6 +305,8 @@ export class ChatSession {
     const uploads = path.join(config.dataDir, 'uploads', m.id);
     fs.mkdirSync(uploads, { recursive: true });
     args.push('--add-dir', uploads);
+    const envx = sessionExtras(m);
+    for (const d of envx.addDirs) args.push('--add-dir', d);
     const fork = this.forkAt;
     this.forkAt = undefined;
     if (fork && fork.from && fs.existsSync(transcriptPath(m.cwd, fork.from))) {
@@ -322,7 +325,7 @@ export class ChatSession {
     let proc;
     try {
       const cmd = resolveCommand(config.claudeBin, args);
-      proc = spawn(cmd.file, cmd.args, { cwd: m.cwd, env: childEnv(m.id), stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+      proc = spawn(cmd.file, cmd.args, { cwd: m.cwd, env: childEnv(m.id, envx.env), stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
     } catch (e) {
       this.record({ k: 'error', text: `Could not start ${config.claudeBin}: ${e.message}` });
       return;
@@ -590,7 +593,7 @@ export class ChatSession {
   runShell(cmd) {
     const m = this.meta;
     const isWin = process.platform === 'win32';
-    const p = spawn(isWin ? 'cmd.exe' : process.env.SHELL || 'bash', isWin ? ['/d', '/s', '/c', cmd] : ['-lc', cmd], { cwd: m.cwd, env: childEnv(m.id), windowsHide: true });
+    const p = spawn(isWin ? 'cmd.exe' : process.env.SHELL || 'bash', isWin ? ['/d', '/s', '/c', cmd] : ['-lc', cmd], { cwd: m.cwd, env: childEnv(m.id, sessionExtras(m).env), windowsHide: true });
     let out = '';
     const add = (d) => {
       if (out.length < 200_000) out += d;

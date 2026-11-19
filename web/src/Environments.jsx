@@ -1,0 +1,305 @@
+import React, { useRef, useState } from 'react';
+import { api } from './api.js';
+
+export const FolderIcon = () => (
+  <svg className="pl-ico" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
+    <path d="M1.5 4.5a1 1 0 0 1 1-1h3.6l1.4 1.5h6a1 1 0 0 1 1 1v6.5a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1z" fill="none" stroke="currentColor" strokeWidth="1.2" />
+  </svg>
+);
+export const EnvIcon = () => (
+  <svg className="pl-ico" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
+    <path d="M8 1.8 14.2 5 8 8.2 1.8 5z M1.8 8 8 11.2 14.2 8 M1.8 11 8 14.2 14.2 11" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
+  </svg>
+);
+export const GitIcon = () => (
+  <svg className="pl-ico" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
+    <circle cx="4.5" cy="3.5" r="1.6" fill="none" stroke="currentColor" strokeWidth="1.2" />
+    <circle cx="4.5" cy="12.5" r="1.6" fill="none" stroke="currentColor" strokeWidth="1.2" />
+    <circle cx="11.5" cy="5.5" r="1.6" fill="none" stroke="currentColor" strokeWidth="1.2" />
+    <path d="M4.5 5.1v5.8M11.5 7.1c0 2.4-3 2.2-6.2 4" fill="none" stroke="currentColor" strokeWidth="1.2" />
+  </svg>
+);
+
+const base = (p) => (p || '').split(/[\\/]/).filter(Boolean).pop() || p;
+
+export function envToText(env) {
+  return Object.entries(env || {})
+    .map(([k, v]) => `${k}=${/[\s#"']/.test(v) ? JSON.stringify(v) : v}`)
+    .join('\n');
+}
+
+export function envSummary(e) {
+  const f = e.folders.length;
+  const v = Object.keys(e.env || {}).length;
+  const parts = [f ? `${f} folder${f > 1 ? 's' : ''}` : 'No folder', v ? `${v} variable${v > 1 ? 's' : ''}` : ''];
+  return parts.filter(Boolean).join(' · ');
+}
+
+/** Create or edit a Local environment: name, folders (first is where Claude works), env vars. */
+export function EnvironmentDialog({ env, projects, onSaved, onDeleted, onClose, onError }) {
+  const all = projects?.projects || [];
+  const [name, setName] = useState(env?.name || defaultName(all));
+  const [folders, setFolders] = useState(() => (env?.folderInfo || []).map((f) => ({ path: f.path, git: f.git, exists: f.exists })));
+  const [vars, setVars] = useState(envToText(env?.env));
+  const [showVars, setShowVars] = useState(false);
+  const [adding, setAdding] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const varCount = vars.split('\n').filter((l) => /^\s*[^#\s][^=]*=/.test(l)).length;
+
+  const add = (path, git) => {
+    if (!folders.some((f) => f.path === path)) setFolders((l) => [...l, { path, git, exists: true }]);
+    setAdding(false);
+  };
+  const remove = (path) => setFolders((l) => l.filter((f) => f.path !== path));
+  const makeMain = (path) => setFolders((l) => [l.find((f) => f.path === path), ...l.filter((f) => f.path !== path)]);
+
+  const save = async (e) => {
+    e?.preventDefault();
+    setBusy(true);
+    setErr('');
+    try {
+      const body = { name, folders: folders.map((f) => f.path), env: vars };
+      const { environment } = env ? await api(`/api/environments/${env.id}`, { method: 'PUT', body }) : await api('/api/environments', { method: 'POST', body });
+      onSaved(environment);
+    } catch (e2) {
+      setErr(e2.message);
+      if (/variable|KEY=value|set by Claude UI/.test(e2.message)) setShowVars(true);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const del = async () => {
+    if (!confirm(`Delete the environment "${env.name}"? Its folders are not touched.`)) return;
+    try {
+      await api(`/api/environments/${env.id}`, { method: 'DELETE' });
+      onDeleted(env.id);
+    } catch (e) {
+      onError(e);
+    }
+  };
+
+  return (
+    <div className="modal env-modal" onClick={(e) => (e.stopPropagation(), onClose())}>
+      <form className="modal-card env-dialog" onClick={(e) => e.stopPropagation()} onSubmit={save}>
+        <div className="modal-head">
+          <span className="mtitle">{env ? 'Edit environment' : 'New environment'}</span>
+          <button type="button" className="icon-btn" onClick={onClose} aria-label="Close">
+            ✕
+          </button>
+        </div>
+        <div className="modal-body">
+          <div className="env-tabs" role="tablist">
+            <span role="tab" aria-selected="true" className="on">
+              Local
+            </span>
+          </div>
+          <label className="env-label" htmlFor="env-name">
+            Name
+          </label>
+          <input id="env-name" className="field env-field" value={name} onChange={(e) => setName(e.target.value)} autoFocus={!env} maxLength={60} />
+
+          <div className="env-row-head">
+            <span className="env-label">
+              Folders <span className="muted">(optional)</span>
+            </span>
+            <button type="button" className="btn small" onClick={() => setAdding((a) => !a)} aria-expanded={adding}>
+              ＋ Add
+            </button>
+          </div>
+          {adding && <FolderPicker projects={all} taken={folders.map((f) => f.path)} onPick={add} onCancel={() => setAdding(false)} />}
+          {folders.length > 0 ? (
+            <div className="env-box">
+              {folders.map((f, i) => (
+                <div key={f.path} className="env-folder" title={f.path}>
+                  <FolderIcon />
+                  <span className="ef-name">{base(f.path)}</span>
+                  {i === 0 && folders.length > 1 && <span className="tag">main</span>}
+                  <span className="ef-git muted">{!f.exists ? 'Missing' : f.git ? 'Git repository' : f.git === false ? 'Not a Git repository' : ''}</span>
+                  {i > 0 && (
+                    <button type="button" className="link-btn" onClick={() => makeMain(f.path)} title="Claude starts in the main folder; the others are added to its workspace">
+                      Make main
+                    </button>
+                  )}
+                  <button type="button" className="icon-btn small" onClick={() => remove(f.path)} aria-label={`Remove ${base(f.path)}`}>
+                    ✕
+                  </button>
+                </div>
+              ))}
+            </div>
+          ) : (
+            !adding && <div className="env-box env-empty muted">No folders. Chats in this environment work in a scratch folder.</div>
+          )}
+
+          <div className="env-box">
+            <button type="button" className="env-vars-head" onClick={() => setShowVars((s) => !s)} aria-expanded={showVars}>
+              <span>
+                <span className="ev-title">Environment variables</span>
+                <span className="ev-sub muted">{varCount ? `${varCount} variable${varCount > 1 ? 's' : ''}` : 'None for this environment'}</span>
+              </span>
+              <svg className={`ev-chev ${showVars ? 'open' : ''}`} width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
+                <path d={showVars ? 'M3.5 6 8 10.5 12.5 6' : 'M6 3.5 10.5 8 6 12.5'} fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </button>
+            {showVars && (
+              <div className="env-vars-body">
+                <textarea className="field mono" rows={5} spellCheck={false} placeholder={'API_URL=https://staging.example.com\nDEBUG=1'} value={vars} onChange={(e) => setVars(e.target.value)} aria-label="Environment variables" />
+                <div className="muted small-note">One KEY=value per line. Passed to Claude and the commands it runs. Stored on the server in plain text.</div>
+              </div>
+            )}
+          </div>
+          {err && <div className="pl-warn err">{err}</div>}
+        </div>
+        <div className="modal-foot">
+          {env && (
+            <button type="button" className="btn ghost danger" onClick={del}>
+              Delete
+            </button>
+          )}
+          <span className="spacer" />
+          <button type="button" className="btn" onClick={onClose}>
+            Cancel
+          </button>
+          <button className="btn primary dark" disabled={busy || !name.trim()}>
+            {env ? 'Save' : 'Create environment'}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+function defaultName(all) {
+  return all.length ? 'Projects' : 'My environment';
+}
+
+function FolderPicker({ projects, taken, onPick, onCancel }) {
+  const [q, setQ] = useState('');
+  const needle = q.trim().toLowerCase();
+  const typed = /^([~/\\]|[A-Za-z]:)/.test(q.trim());
+  const list = projects.filter((p) => !taken.includes(p.path) && (!needle || p.name.toLowerCase().includes(needle)));
+  return (
+    <div className="env-picker">
+      <input
+        className="field"
+        autoFocus
+        placeholder="Search folders, or type a full path"
+        value={q}
+        onChange={(e) => setQ(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Escape') (e.preventDefault(), e.stopPropagation(), onCancel());
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            if (typed) onPick(q.trim());
+            else if (list[0]) onPick(list[0].path, list[0].git);
+          }
+        }}
+      />
+      <div className="pick-list">
+        {typed && (
+          <button type="button" onClick={() => onPick(q.trim())}>
+            <FolderIcon />
+            <span className="pl-name">Use {q.trim()}</span>
+          </button>
+        )}
+        {list.map((p) => (
+          <button type="button" key={p.path} onClick={() => onPick(p.path, p.git)}>
+            <FolderIcon />
+            <span className="pl-name">{p.name}</span>
+            {p.git && <span className="tag">git</span>}
+          </button>
+        ))}
+        {!typed && list.length === 0 && <div className="pad muted">No more folders</div>}
+      </div>
+    </div>
+  );
+}
+
+/** Clone a git repository into the projects root, with live progress. Calls onDone(path). */
+export function ClonePanel({ root, onDone, onCancel }) {
+  const [url, setUrl] = useState('');
+  const [name, setName] = useState('');
+  const [state, setState] = useState(null); // { phase, percent, line } while running
+  const [err, setErr] = useState('');
+  const ctl = useRef(null);
+  const guess = url.trim().replace(/[\\/]+$/, '').split(/[\\/:]/).pop()?.replace(/\.git$/i, '') || '';
+
+  const run = async (e) => {
+    e.preventDefault();
+    setErr('');
+    setState({ line: 'Starting…' });
+    ctl.current = new AbortController();
+    try {
+      const res = await fetch('/api/projects/clone', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: url.trim(), name: name.trim() || undefined }),
+        credentials: 'same-origin',
+        signal: ctl.current.signal,
+      });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `HTTP ${res.status}`);
+      const reader = res.body.getReader();
+      const dec = new TextDecoder();
+      let buf = '';
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        let i;
+        while ((i = buf.indexOf('\n')) >= 0) {
+          const msg = JSON.parse(buf.slice(0, i));
+          buf = buf.slice(i + 1);
+          if (msg.progress) setState((s) => ({ ...s, ...msg.progress, ...(msg.progress.percent == null ? { percent: s?.percent, phase: s?.phase } : {}) }));
+          if (msg.error) throw new Error(msg.error);
+          if (msg.path) return onDone(msg.path);
+        }
+      }
+      throw new Error('The server stopped before the clone finished');
+    } catch (e2) {
+      if (e2.name !== 'AbortError') setErr(e2.message);
+      setState(null);
+    }
+  };
+
+  const cancel = () => {
+    if (ctl.current && state) ctl.current.abort();
+    else onCancel();
+  };
+
+  return (
+    <form className="clone-panel" onSubmit={run}>
+      <div className="clone-head">
+        <GitIcon />
+        <span>Clone from git</span>
+      </div>
+      <input className="field" autoFocus placeholder="https://github.com/owner/repo or git@github.com:owner/repo.git" value={url} onChange={(e) => setUrl(e.target.value)} disabled={!!state} aria-label="Repository address" onKeyDown={(e) => e.key === 'Escape' && (e.stopPropagation(), cancel())} />
+      <div className="row">
+        <input className="field" placeholder={guess ? `Folder name (${guess})` : 'Folder name'} value={name} onChange={(e) => setName(e.target.value)} disabled={!!state} aria-label="Folder name" />
+        <button type="button" className="btn small" onClick={cancel}>
+          Cancel
+        </button>
+        <button className="btn small primary" disabled={!url.trim() || !!state}>
+          Clone
+        </button>
+      </div>
+      {state ? (
+        <div className="clone-progress" aria-live="polite">
+          <div className="bar">
+            <span style={{ width: `${state.percent ?? 4}%` }} className={state.percent == null ? 'indet' : ''} />
+          </div>
+          <div className="muted">{state.phase ? `${state.phase} ${state.percent}%` : state.line}</div>
+        </div>
+      ) : err ? null : (
+        <div className="muted small-note">
+          Goes into {root}. Private repositories use this server's git login (credential helper or SSH key).
+        </div>
+      )}
+      {err && (
+        <div className="pl-warn err" ref={(el) => el?.scrollIntoView({ block: 'nearest' })}>
+          {err}
+        </div>
+      )}
+    </form>
+  );
+}

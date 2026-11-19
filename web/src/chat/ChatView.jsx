@@ -591,6 +591,7 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
               <span className="tname">{meta.name}</span>
               <span className="muted tcwd">{project}</span>
               {meta.worktree && <span className="pill branch hide-mobile">⎇ {meta.worktree.branch}</span>}
+              {meta.envName && <span className="pill hide-mobile" title="Environment">{meta.envName}</span>}
             </div>
             {parent && (
               <button className="parent-link hide-mobile" onClick={() => onSelect(parent.id)}>
