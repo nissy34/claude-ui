@@ -5,12 +5,17 @@
 //   @@say <text>                     reply with text
 //   @@sleep <ms>                     wait (keeps the turn running)
 //   @@fail                           end the turn with an error
+//   @@write <path> <text>            write a file in the working folder (like an Edit)
+//   @@bashfail <command>             a Bash call that fails (tool_result with is_error)
+// PostToolUse HTTP hooks from --settings run after each tool call, like the real CLI's
+// ($VAR headers from allowedEnvVars); additionalContext they return is logged as hookContext.
 // Directives inside a JSON argument are passed along verbatim, so a test can make one session
 // tell another what to do. With no directive it replies "ok: <first line of the prompt>".
 import { spawn } from 'node:child_process';
 import readline from 'node:readline';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import path from 'node:path';
 
 const argv = process.argv.slice(2);
 const arg = (name) => {
@@ -50,6 +55,27 @@ for (const [name, cfg] of Object.entries(mcpCfg)) {
   servers[name] = { rpc, proc: p, ready: rpc('initialize', { protocolVersion: '2024-11-05' }) };
 }
 
+let hooks = [];
+try {
+  const st = JSON.parse(arg('--settings') || '{}');
+  hooks = (st.hooks?.PostToolUse || []).flatMap((h) => h.hooks || []).filter((h) => h.type === 'http');
+} catch {}
+async function postToolUse(toolName, input, response) {
+  for (const h of hooks) {
+    const allowed = new Set(h.allowedEnvVars || []);
+    const headers = { 'content-type': 'application/json' };
+    for (const [k, v] of Object.entries(h.headers || {})) headers[k] = String(v).replace(/\$([A-Z_][A-Z0-9_]*)/g, (m, n) => (allowed.has(n) ? process.env[n] || '' : ''));
+    try {
+      const r = await fetch(h.url, { method: 'POST', headers, body: JSON.stringify({ session_id: sessionId, hook_event_name: 'PostToolUse', tool_name: toolName, tool_input: input, tool_response: response }) });
+      const j = await r.json().catch(() => ({}));
+      const ctx = j.hookSpecificOutput?.additionalContext;
+      if (ctx) note({ hookContext: ctx });
+    } catch (e) {
+      note({ hookError: e.message });
+    }
+  }
+}
+
 out({ type: 'system', subtype: 'init', session_id: sessionId, model: arg('--model') || 'fake-model', permissionMode: arg('--permission-mode') || 'default', tools: [], mcp_servers: Object.keys(servers).map((n) => ({ name: n, status: 'connected' })), slash_commands: [], claude_code_version: 'fake' });
 
 let msgN = 0;
@@ -63,7 +89,7 @@ async function runTurn(text) {
   let failed = false;
   // Only top-level directives of the prompt (not ones nested inside JSON strings).
   for (const line of lines) {
-    const m = /^@@(call|say|sleep|fail)\b\s*(.*)$/.exec(line.trim());
+    const m = /^@@(call|say|sleep|fail|write|bashfail)\b\s*(.*)$/.exec(line.trim());
     if (!m) continue;
     const [, cmd, rest] = m;
     if (cmd === 'say') {
@@ -73,6 +99,17 @@ async function runTurn(text) {
       await new Promise((r) => setTimeout(r, Number(rest) || 100));
     } else if (cmd === 'fail') {
       failed = true;
+    } else if (cmd === 'write') {
+      const sp = rest.indexOf(' ');
+      const file = sp < 0 ? rest : rest.slice(0, sp);
+      fs.mkdirSync(path.dirname(path.resolve(file)), { recursive: true });
+      fs.writeFileSync(path.resolve(file), (sp < 0 ? '' : rest.slice(sp + 1)) + '\n');
+      await postToolUse('Write', { file_path: file }, 'ok');
+    } else if (cmd === 'bashfail') {
+      const useId = `toolu_${crypto.randomBytes(6).toString('hex')}`;
+      out({ type: 'assistant', message: { id: `msg_${++msgN}`, role: 'assistant', content: [{ type: 'tool_use', id: useId, name: 'Bash', input: { command: rest } }] }, parent_tool_use_id: null, session_id: sessionId });
+      out({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: useId, content: 'Exit code 1\nboom', is_error: true }] }, parent_tool_use_id: null, session_id: sessionId, uuid: crypto.randomUUID() });
+      await postToolUse('Bash', { command: rest }, 'Exit code 1');
     } else if (cmd === 'call') {
       const sp = rest.indexOf(' ');
       const full = sp < 0 ? rest : rest.slice(0, sp);
@@ -92,11 +129,12 @@ async function runTurn(text) {
         const r = await s.rpc('tools/call', { name: tool, arguments: input });
         result = r.result?.content?.map((c) => c.text).join('\n') || JSON.stringify(r.error || r);
       }
-      note({ call: full, input, result: result.slice(0, 500) });
+      note({ call: full, input, result: result.slice(0, 1500) });
       out({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: useId, content: result }] }, parent_tool_use_id: null, session_id: sessionId, uuid: crypto.randomUUID() });
+      await postToolUse(`mcp__${server}__${tool}`, input, result);
     }
   }
-  if (!said && !failed && !lines.some((l) => /^@@call/.test(l.trim()))) {
+  if (!said && !failed && !lines.some((l) => /^@@(call|write|bashfail)/.test(l.trim()))) {
     out({ type: 'assistant', message: { id: `msg_${++msgN}`, role: 'assistant', content: [{ type: 'text', text: `ok: ${lines.find((l) => l.trim()) || ''}`.slice(0, 200) }] }, parent_tool_use_id: null, session_id: sessionId });
   }
   out({ type: 'result', subtype: failed ? 'error_during_execution' : 'success', is_error: failed, result: failed ? 'fake failure' : 'done', duration_ms: Date.now() - t0, num_turns: 1, total_cost_usd: 0.001, session_id: sessionId });

@@ -54,7 +54,8 @@ app.disable('x-powered-by');
 // Library uploads (base64 in JSON) may be bigger than everything else.
 const jsonSmall = express.json({ limit: '1mb' });
 const jsonBig = express.json({ limit: '40mb' });
-app.use((req, res, next) => (req.method === 'POST' && /^\/api\/cprojects\/[^/]+\/library$/.test(req.path) ? jsonBig : jsonSmall)(req, res, next));
+// The project hook (after every tool call of a thread) needs no body, which can be a large tool result.
+app.use((req, res, next) => (req.path === '/internal/cproject/hook' ? next() : req.method === 'POST' && /^\/api\/cprojects\/[^/]+\/library$/.test(req.path) ? jsonBig(req, res, next) : jsonSmall(req, res, next)));
 app.use((req, res, next) => {
   res.setHeader('X-Frame-Options', 'DENY');
   res.setHeader('X-Content-Type-Options', 'nosniff');

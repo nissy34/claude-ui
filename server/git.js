@@ -248,6 +248,17 @@ export async function worktreeMerged(wt) {
   return git(repo, ['merge-base', '--is-ancestor', head, 'HEAD']).then(() => true, () => false);
 }
 
+/** Files a worktree changed against the commit it started from: committed, staged, unstaged and new. */
+export async function changedFiles(wt, max = 200) {
+  if (!wt?.path || !fs.existsSync(wt.path)) return [];
+  const out = new Set();
+  const add = (txt) => txt.split('\n').map((l) => l.trim()).filter(Boolean).forEach((l) => out.size < max && out.add(l));
+  if (wt.base) add(await git(wt.path, ['diff', '--name-only', wt.base]).catch(() => ''));
+  else add(await git(wt.path, ['diff', '--name-only', 'HEAD']).catch(() => ''));
+  add(await git(wt.path, ['ls-files', '--others', '--exclude-standard']).catch(() => ''));
+  return [...out].sort();
+}
+
 export async function removeWorktree(wt) {
   if (!wt?.path) return { removed: false };
   if (!fs.existsSync(wt.path)) {

@@ -14,6 +14,19 @@ export function mountProjectRoutes(app, { engine, store, resolveDir, wrap }) {
     })
   );
 
+  // ---- internal: PostToolUse hook of a thread; answers with pending notes (or nothing) ----
+  app.post('/internal/cproject/hook', (req, res) => {
+    req.resume(); // the tool result in the body is not needed
+    const s = store.get(req.headers['x-cw-session']);
+    let out = {};
+    try {
+      out = s ? engine.hookNotes(s) : {};
+    } catch (e) {
+      console.warn('project hook:', e.message);
+    }
+    res.json(out);
+  });
+
   const cleanFolders = (folders) => (Array.isArray(folders) ? folders : []).map((f) => ({ path: resolveDir(typeof f === 'string' ? f : f.path) }));
   const project = (req) => engine.get(req.params.id);
   const thread = (p, req) => {
@@ -106,7 +119,7 @@ export function mountProjectRoutes(app, { engine, store, resolveDir, wrap }) {
     '/api/cprojects/:id/threads',
     wrap(async (req, res) => {
       const p = project(req);
-      const s = await engine.startThread(p, { title: req.body?.title, brief: req.body?.brief, model: req.body?.model, effort: req.body?.effort, startedBy: 'user' });
+      const s = await engine.startThread(p, { title: req.body?.title, brief: req.body?.brief, model: req.body?.model, effort: req.body?.effort, dependsOn: req.body?.dependsOn, startedBy: 'user' });
       res.json({ thread: p.threadSummary(p.state.threads[s.id]) });
     })
   );
@@ -118,8 +131,38 @@ export function mountProjectRoutes(app, { engine, store, resolveDir, wrap }) {
       const p = project(req);
       const tid = thread(p, req);
       const types = new Set(['thread.started', 'user.message', 'thread.post', 'checklist.updated', 'decision.requested', 'session.message', 'reminder.set', 'reminder.due', 'thread.resolved', 'thread.reopened', 'pr.updated', 'notice']);
-      const feed = p.events.filter((e) => types.has(e.type) && (e.thread === tid || (e.type === 'session.message' && e.from?.id === tid)));
+      const feed = [];
+      for (const e of p.events) {
+        if (types.has(e.type) && (e.thread === tid || (e.type === 'session.message' && e.from?.id === tid))) feed.push(e);
+        // What passed between threads shows as activity rows: notes it shared, notes handed to it, signals about it.
+        else if (e.type === 'note.shared' && e.thread === tid && e.body.kind !== 'decision') feed.push(e);
+        else if (e.type === 'signal' && (e.thread === tid || (e.body.threads || []).includes(tid))) feed.push(e);
+        else if (e.type === 'notes.delivered' && e.body.session === tid && !e.body.dropped) {
+          const notes = e.body.ids.map((id) => p.state.notes?.[id]).filter(Boolean).map((n) => ({ id: n.id, kind: n.kind, text: n.text, files: n.files, from: n.by ? p.state.threads[n.by]?.title || n.by : 'the user' }));
+          if (notes.length) feed.push({ ...e, body: { ...e.body, notes } });
+        }
+      }
       res.json({ feed });
+    })
+  );
+
+  // Plain-text search over memory, notes, reports and threads' conversations (no model).
+  app.get(
+    '/api/cprojects/:id/search',
+    wrap(async (req, res) => {
+      const p = project(req);
+      res.json({ hits: p.search(String(req.query.q || ''), { limit: Math.min(Number(req.query.limit) || 12, 30) }) });
+    })
+  );
+
+  // Retract a note (it stops being delivered and found).
+  app.delete(
+    '/api/cprojects/:id/notes/:nid',
+    wrap(async (req, res) => {
+      const p = project(req);
+      if (!p.state.notes?.[req.params.nid]) throw new Error('No such note');
+      p.append({ type: 'note.retracted', from: { kind: 'user' }, trust: 'principal', body: { id: req.params.nid } });
+      res.json({ ok: true });
     })
   );
 
