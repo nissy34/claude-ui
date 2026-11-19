@@ -166,8 +166,10 @@ app.post(
       if (!wait) return res.json({ ok: true, note: `Delivered to "${s.meta.name}" as the reply it was waiting for; it carries on now.`, session: sessionSummary(s) });
     }
 
-    const r = replied ? { queued: 0 } : s.deliver({ text, from: { ...from, kind: wait ? 'question' : undefined } });
-    const where = r.held
+    const r = replied ? { queued: 0 } : s.deliver({ text, from: { ...from, kind: wait ? 'question' : undefined }, now: !!req.body?.now });
+    const where = r.interrupted
+      ? `Sent now: "${s.meta.name}" stopped its current turn and got your message.`
+      : r.held
       ? `Held for "${s.meta.name}" (it can't take messages right now); delivered when it can.`
       : r.queued
         ? `Queued for "${s.meta.name}": it is busy, ${r.queued} message(s) waiting, delivered in order when its current turn ends.`

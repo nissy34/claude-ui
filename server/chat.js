@@ -682,11 +682,20 @@ export class ChatSession {
    * chat is mid-turn it waits in an inbox; at the end of the turn everything queued is delivered in
    * order as one turn, each part labelled with its sender, so nothing is dropped or lands mid-turn.
    */
-  deliver({ text, from }) {
-    if (this.isBusy()) return { queued: this.enqueue({ text, from }) };
+  deliver({ text, from, now }) {
+    if (this.isBusy()) {
+      const item = this.enqueue({ text, from });
+      // Steer now: stop the current turn and send this right away (like Send now in the chat).
+      if (now) {
+        this.sendQueuedNow(item.id).catch(() => {});
+        return { queued: 0, interrupted: true };
+      }
+      return { queued: this.inbox.length };
+    }
     if (this.send({ text, from })) return { queued: 0 };
     // Couldn't start a turn (e.g. the conversation is open in the terminal): keep it for later.
-    return { queued: this.enqueue({ text, from }), held: true };
+    this.enqueue({ text, from });
+    return { queued: this.inbox.length, held: true };
   }
 
   /** Mid-turn (or while Claude waits on a permission or a form), new messages wait in the queue. */
@@ -705,7 +714,7 @@ export class ChatSession {
     this.inbox.push(item);
     this.store.save();
     this.broadcastState();
-    return this.inbox.length;
+    return item;
   }
 
   /**
