@@ -16,14 +16,16 @@ export function isTaskMessage(msg) {
 }
 
 export const bgTaskMethods = {
-  get bgTasks() {
+  // A method, not a getter: Object.assign onto the prototype would call a getter once and share
+  // its Map between every chat.
+  taskMap() {
     return (this._bgTasks ||= new Map());
   },
 
   /** What the UI shows: background tasks only (a foreground Bash call is just its tool card). */
   tasksSummary() {
     const out = [];
-    for (const t of this.bgTasks.values()) {
+    for (const t of this.taskMap().values()) {
       if (!t.background || t.ambient) continue;
       out.push({
         id: t.id,
@@ -48,7 +50,7 @@ export const bgTaskMethods = {
 
   liveTaskCount() {
     let n = 0;
-    for (const t of this.bgTasks.values()) if (t.background && !t.ambient && !ENDED.has(t.status)) n++;
+    for (const t of this.taskMap().values()) if (t.background && !t.ambient && !ENDED.has(t.status)) n++;
     return n;
   },
 
@@ -57,10 +59,10 @@ export const bgTaskMethods = {
   },
 
   taskFor(id, init) {
-    let t = this.bgTasks.get(id);
+    let t = this.taskMap().get(id);
     if (!t && init) {
       t = { id, kind: 'task', status: 'running', startedAt: Date.now(), background: false, description: '' };
-      this.bgTasks.set(id, t);
+      this.taskMap().set(id, t);
     }
     return t;
   },
@@ -140,7 +142,7 @@ export const bgTaskMethods = {
           t.background = true;
           if (ENDED.has(t.status)) t.status = 'running';
         }
-        for (const t of this.bgTasks.values()) {
+        for (const t of this.taskMap().values()) {
           if (t.background && !live.has(t.id) && !ENDED.has(t.status)) {
             t.status = 'completed';
             t.endedAt = now;
@@ -154,14 +156,14 @@ export const bgTaskMethods = {
   },
 
   pruneTasks() {
-    const ended = [...this.bgTasks.values()].filter((t) => ENDED.has(t.status) || !t.background).sort((a, b) => (b.endedAt || b.startedAt) - (a.endedAt || a.startedAt));
-    for (const t of ended.slice(KEEP_ENDED)) this.bgTasks.delete(t.id);
+    const ended = [...this.taskMap().values()].filter((t) => ENDED.has(t.status) || !t.background).sort((a, b) => (b.endedAt || b.startedAt) - (a.endedAt || a.startedAt));
+    for (const t of ended.slice(KEEP_ENDED)) this.taskMap().delete(t.id);
   },
 
   /** The Claude process went away: its background shells and agents went with it. */
   endTasksOnExit() {
     let changed = false;
-    for (const t of this.bgTasks.values()) {
+    for (const t of this.taskMap().values()) {
       if (!ENDED.has(t.status)) {
         t.status = 'stopped';
         t.endedAt = Date.now();
@@ -173,7 +175,7 @@ export const bgTaskMethods = {
   },
 
   async taskOutput(id) {
-    const t = this.bgTasks.get(id);
+    const t = this.taskMap().get(id);
     if (!t) throw new Error('No such background task');
     let output = '';
     if (t.kind === 'shell' || t.kind === 'monitor') {
@@ -190,7 +192,7 @@ export const bgTaskMethods = {
   },
 
   async stopTask(id) {
-    const t = this.bgTasks.get(id);
+    const t = this.taskMap().get(id);
     if (!t) throw new Error('No such background task');
     if (ENDED.has(t.status)) return;
     if (!this.proc) throw new Error('Claude is not running');
@@ -203,8 +205,8 @@ export const bgTaskMethods = {
   },
 
   dismissTask(id) {
-    const t = this.bgTasks.get(id);
-    if (t && ENDED.has(t.status)) this.bgTasks.delete(id);
+    const t = this.taskMap().get(id);
+    if (t && ENDED.has(t.status)) this.taskMap().delete(id);
     this.broadcastTasks();
   },
 };
