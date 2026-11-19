@@ -983,7 +983,7 @@ app.post(
   wrap(async (req, res) => {
     const b = req.body || {};
     const cwd = optCwd(b.cwd);
-    const fn = { add: admin.mcpAdd, remove: admin.mcpRemove, toggle: admin.mcpToggle }[req.params.action];
+    const fn = { add: admin.mcpAdd, update: admin.mcpUpdate, remove: admin.mcpRemove, toggle: admin.mcpToggle }[req.params.action];
     if (!fn) throw new Error('Unknown action');
     res.json(await fn(cwd || config.projectsRoot, b));
   })

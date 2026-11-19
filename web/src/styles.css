@@ -976,3 +976,12 @@ a.autolink:hover { text-decoration-color: currentColor; }
 .tool-head .tbg { flex: none; font-size: 11.5px; padding: 1px 8px; border-radius: 10px; background: var(--panel-2); color: var(--muted); cursor: pointer; }
 .tool-head .tbg.live { background: var(--accent-soft); color: var(--accent); }
 .tool-head .tbg:hover { text-decoration: underline; }
+.form-grid label.top { align-self: start; padding-top: 6px; }
+.form-hint { font-size: 11.5px; margin-top: 4px; }
+.kv-rows { display: flex; flex-direction: column; gap: 6px; }
+.kv-row { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 3fr) auto; gap: 6px; align-items: center; }
+.kv-row input { font-family: var(--mono); font-size: 12px; }
+.kv-add { align-self: flex-start; }
+.secret-in { display: flex; align-items: center; gap: 2px; min-width: 0; }
+.secret-in input { flex: 1; min-width: 0; }
+.secret-in .icon-btn { min-width: 28px; height: 28px; padding: 2px; }

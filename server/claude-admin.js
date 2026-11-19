@@ -93,7 +93,7 @@ function statusMap(text) {
   return out;
 }
 
-export async function mcpServers(cwd) {
+export async function mcpServers(cwd, { status = true } = {}) {
   const home = readJson(homeConfigPath()) || {};
   const proj = (cwd && home.projects?.[cwd]) || {};
   const disabled = new Set(proj.disabledMcpServers || []);
@@ -104,9 +104,10 @@ export async function mcpServers(cwd) {
   add('user', home.mcpServers);
   add('local', proj.mcpServers);
   if (cwd) add('project', readJson(path.join(cwd, '.mcp.json'))?.mcpServers);
+  if (!status) return { servers: list };
   const r = await runClaude(['mcp', 'list'], cwd, 60_000);
-  const status = statusMap(r.out);
-  for (const s of list) s.status = s.enabled ? status[s.name] || 'unknown' : 'disabled';
+  const st = statusMap(r.out);
+  for (const s of list) s.status = s.enabled ? st[s.name] || 'unknown' : 'disabled';
   return { servers: list, raw: r.out || r.err };
 }
 
@@ -127,6 +128,23 @@ export async function mcpAdd(cwd, { name, scope, server }) {
   checkName(name);
   if (!server || typeof server !== 'object') throw new Error('Server config is required');
   return { out: await mustRun(['mcp', 'add-json', name, JSON.stringify(server), '-s', scopeOf(scope)], cwd) };
+}
+
+// Edit = remove + add-json (the CLI has no update). If the new config is refused, put the old one back.
+export async function mcpUpdate(cwd, { name, scope, server }) {
+  checkName(name);
+  if (!server || typeof server !== 'object') throw new Error('Server config is required');
+  const s = scopeOf(scope);
+  const { servers } = await mcpServers(cwd, { status: false });
+  const old = servers.find((x) => x.name === name && x.scope === s);
+  if (!old) throw new Error(`No ${s} MCP server named "${name}"`);
+  await mustRun(['mcp', 'remove', name, '-s', s], cwd);
+  const r = await runClaude(['mcp', 'add-json', name, JSON.stringify(server), '-s', s], cwd);
+  if (!r.ok) {
+    await runClaude(['mcp', 'add-json', name, JSON.stringify(old.config), '-s', s], cwd);
+    throw new Error(r.err || r.out || 'Could not save the server');
+  }
+  return { out: r.out };
 }
 
 export async function mcpRemove(cwd, { name, scope }) {
