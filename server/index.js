@@ -1,3 +1,4 @@
+import { mountToolImages } from './tool-images.js';
 import http from 'node:http';
 import os from 'node:os';
 import crypto from 'node:crypto';
@@ -389,6 +390,9 @@ app.use('/api', (req, res, next) => {
   if (!isAuthed(req)) return res.status(401).json({ error: 'Not logged in' });
   next();
 });
+
+// Pictures from tool results (MCP screenshots and the like), shown inline in chats.
+mountToolImages(app);
 
 // ---------- helpers ----------
 function resolveDir(input) {

@@ -1,4 +1,5 @@
-import React, { useContext, useMemo, useState } from 'react';
+import React, { useContext, useEffect, useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { ChatCtx } from './ctx.js';
 import { artifactKind } from './ArtifactView.jsx';
 import { diffLines } from 'diff';
@@ -180,6 +181,50 @@ function errorLine(text) {
   return clean.length > 200 ? clean.slice(0, 200) + '…' : clean;
 }
 
+/** Pictures a tool returned (screenshots and the like), shown in the card; click one to enlarge. */
+export function ToolImages({ images, label }) {
+  const [big, setBig] = useState(null);
+  const [broken, setBroken] = useState({});
+  return (
+    <div className="tool-images">
+      {images.map((src, n) =>
+        broken[src] ? (
+          <span key={src + n} className="tool-image-gone muted">
+            Image no longer available
+          </span>
+        ) : (
+        <button key={src + n} className="tool-image" title="Click to enlarge" onClick={() => setBig(src)}>
+          <img src={src} alt={`${label} result${images.length > 1 ? ` ${n + 1}` : ''}`} loading="lazy" onError={() => setBroken((b) => ({ ...b, [src]: true }))} />
+        </button>
+        ),
+      )}
+      {big && <ImageLightbox src={big} alt={label} onClose={() => setBig(null)} />}
+    </div>
+  );
+}
+
+export function ImageLightbox({ src, alt, onClose }) {
+  useEffect(() => {
+    const onKey = (e) => e.key === 'Escape' && onClose();
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+  return createPortal(
+    <div className="lightbox" role="dialog" aria-label="Image" onClick={onClose}>
+      <img src={src} alt={alt} onClick={(e) => e.stopPropagation()} />
+      <div className="lightbox-bar" onClick={(e) => e.stopPropagation()}>
+        <a className="btn small" href={src} target="_blank" rel="noreferrer">
+          Open original ↗
+        </a>
+        <button className="btn small" onClick={onClose}>
+          Close
+        </button>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
 export default function ToolCard({ item, cwd, children }) {
   const plan = isPlanTool(item.name);
   // update_plan renders like the built-in task list.
@@ -232,6 +277,7 @@ export default function ToolCard({ item, cwd, children }) {
         )}
         <span className={`tstate ${status}`}>{status === 'running' ? <span className="spinner" /> : status === 'error' ? '!' : status === 'waiting' ? '…' : '✓'}</span>
       </button>
+      {result?.images?.length > 0 && <ToolImages images={result.images} label={name.replace(/^mcp__([^_]+)__/, '$1 · ')} />}
       {status === 'error' && !open && resultText && (
         <div className="tool-err" title={resultText} onClick={() => setOpen(true)}>
           {errorLine(resultText)}
