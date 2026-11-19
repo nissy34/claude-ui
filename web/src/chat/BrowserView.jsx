@@ -175,7 +175,7 @@ export default function BrowserView({ sessionId, onError }) {
         </div>
       ) : (
         <div className="panel-empty">
-          <div style={{ fontSize: 28, marginBottom: 8 }}>◎</div>
+          <div className="empty-icon">◎</div>
           This chat's browser runs on the server, so it can open your dev servers on localhost. Claude can use it too: ask it to open your app and test it, and you'll see it here.
           <div style={{ marginTop: 12 }}>
             <Button variant="primary" size="sm" onClick={() => act('navigate', { url: url.trim() || 'about:blank' })}>

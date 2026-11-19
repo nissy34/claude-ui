@@ -24,8 +24,8 @@ export default function ArtifactsGallery({ onClose, onOpen, onError }) {
     <Modal onClose={onClose} size="wide">
       <div className="modal-head">
         <span className="mtitle">Artifacts</span>
-        <input className="search-in" placeholder="Search" value={q} onChange={(e) => setQ(e.target.value)} autoFocus />
-        <select className="proj-pick" style={{ flex: 'none' }} value={kind} onChange={(e) => setKind(e.target.value)}>
+        <input className="field sm search-in" placeholder="Search" value={q} onChange={(e) => setQ(e.target.value)} autoFocus />
+        <select className="field sm proj-pick" style={{ flex: 'none' }} value={kind} onChange={(e) => setKind(e.target.value)}>
           <option value="">All types</option>
           {Object.entries(LABEL).map(([k, l]) => (
             <option key={k} value={k}>
@@ -44,7 +44,7 @@ export default function ArtifactsGallery({ onClose, onOpen, onError }) {
           {shown.map((a) => {
             const k = artifactKind(a.path);
             return (
-              <button key={a.sessionId + a.path} className="art-tile" onClick={() => onOpen(a)} title={a.path}>
+              <button key={a.sessionId + a.path} className="art-tile card interactive" onClick={() => onOpen(a)} title={a.path}>
                 <div className="art-thumb">
                   {k === 'image' ? <img src={a.url} alt="" loading="lazy" /> : k === 'html' ? <iframe src={a.url} title={a.name} sandbox="" loading="lazy" tabIndex={-1} /> : <span>{ICON[k]}</span>}
                 </div>

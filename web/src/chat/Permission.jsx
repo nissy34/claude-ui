@@ -53,7 +53,7 @@ function Questions({ input, onAnswer }) {
               );
             })}
             <input
-              className="qother"
+              className="field qother"
               placeholder="Other…"
               value={other[q.question] || ''}
               onChange={(e) => setOther((x) => ({ ...x, [q.question]: e.target.value }))}
@@ -117,7 +117,7 @@ export default function Permission({ perm, cwd, onAnswer, onMode, showBody = tru
           </Button>
         </div>
         {denying && (
-          <form className="deny-form" onSubmit={(e) => (e.preventDefault(), answer('deny', { message: denyMsg || 'Keep planning.' }))}>
+          <form className="deny-form fields" onSubmit={(e) => (e.preventDefault(), answer('deny', { message: denyMsg || 'Keep planning.' }))}>
             <input autoFocus placeholder="What should change in the plan?" value={denyMsg} onChange={(e) => setDenyMsg(e.target.value)} />
             <Button size="sm">Send</Button>
           </form>
@@ -149,7 +149,7 @@ export default function Permission({ perm, cwd, onAnswer, onMode, showBody = tru
         </Button>
       </div>
       {denying && (
-        <form className="deny-form" onSubmit={(e) => (e.preventDefault(), answer('deny', { message: denyMsg || undefined }))}>
+        <form className="deny-form fields" onSubmit={(e) => (e.preventDefault(), answer('deny', { message: denyMsg || undefined }))}>
           <input autoFocus placeholder="Tell Claude what to do instead (optional)" value={denyMsg} onChange={(e) => setDenyMsg(e.target.value)} />
           <Button size="sm">Deny</Button>
         </form>

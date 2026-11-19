@@ -105,7 +105,7 @@ export function EnvironmentDialog({ env, projects, onSaved, onDeleted, onClose, 
         </div>
         {adding && <FolderPicker projects={all} taken={folders.map((f) => f.path)} onPick={add} onCancel={() => setAdding(false)} />}
         {folders.length > 0 ? (
-          <div className="env-box">
+          <div className="env-box card">
             {folders.map((f, i) => (
               <div key={f.path} className="env-folder" title={f.path}>
                 <FolderIcon />
@@ -124,10 +124,10 @@ export function EnvironmentDialog({ env, projects, onSaved, onDeleted, onClose, 
             ))}
           </div>
         ) : (
-          !adding && <div className="env-box env-empty muted">No folders. Chats in this environment work in a scratch folder.</div>
+          !adding && <div className="env-box card env-empty muted">No folders. Chats in this environment work in a scratch folder.</div>
         )}
 
-        <div className="env-box">
+        <div className="env-box card">
           <button type="button" className="env-vars-head" onClick={() => setShowVars((s) => !s)} aria-expanded={showVars}>
             <span>
               <span className="ev-title">Environment variables</span>
@@ -262,7 +262,7 @@ export function ClonePanel({ root, onDone, onCancel }) {
   };
 
   return (
-    <form className="clone-panel" onSubmit={run}>
+    <form className="clone-panel card" onSubmit={run}>
       <div className="clone-head">
         <GitIcon />
         <span>Clone from git</span>

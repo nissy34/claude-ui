@@ -33,10 +33,12 @@ function useNow(on) {
   return now;
 }
 
+const STATUS_TONE = { running: 'accent', pending: 'accent', stopping: 'accent', completed: 'green', failed: 'red' };
+
 function StatusChip({ status }) {
   const label = { running: 'Running', stopping: 'Stopping…', pending: 'Pending', paused: 'Paused', completed: 'Done', failed: 'Failed', stopped: 'Stopped', killed: 'Stopped' }[status] || status;
   return (
-    <span className={`bg-status ${status}`}>
+    <span className={`pill bg-status ${STATUS_TONE[status] || ''}`}>
       {(status === 'running' || status === 'stopping') && <span className="bg-spin" />}
       {label}
     </span>

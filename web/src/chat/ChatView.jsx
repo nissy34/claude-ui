@@ -164,7 +164,7 @@ function UserMessage({ item, canEdit, onEdit, onOpen, onFork }) {
         <div className="edit-box">
           <textarea autoFocus value={draft} onChange={(e) => setDraft(e.target.value)} />
           <div className="row">
-            <span className="muted" style={{ fontSize: 12, marginRight: 'auto' }}>
+            <span className="muted text-sm" style={{ marginRight: 'auto' }}>
               Later messages are removed and files are restored to this point.
             </span>
             <Button size="sm" onClick={() => setEditing(false)}>
@@ -291,7 +291,7 @@ function InfoDialog({ meta, onClose, onSignIn }) {
           <span className="k">Claude Code</span>
           <span className="v">{meta.cliVersion || '–'}</span>
           <span className="k">Conversation id</span>
-          <span className="v" style={{ fontFamily: 'var(--mono)', fontSize: 12 }}>
+          <span className="v mono text-sm">
             {meta.claudeSessionId || '–'}
           </span>
         </div>
@@ -300,8 +300,8 @@ function InfoDialog({ meta, onClose, onSignIn }) {
             <span className="label">Usage limits</span>
             {Object.entries(rl).map(([k, w]) => (
               <div key={k}>
-                <div className="row" style={{ fontSize: 13 }}>
-                  <span style={{ flex: 1 }}>{k.replace('_', '-').replace('hour', 'hour window').replace('day', 'day window')}</span>
+                <div className="row text-md">
+                  <span className="grow">{k.replace('_', '-').replace('hour', 'hour window').replace('day', 'day window')}</span>
                   <span className="muted">
                     {Math.round((w.utilization || 0) * 100)}%{w.resetsAt ? ` · resets ${new Date(w.resetsAt * 1000).toLocaleString()}` : ''}
                   </span>
@@ -314,11 +314,11 @@ function InfoDialog({ meta, onClose, onSignIn }) {
           </>
         )}
         <span className="label">MCP servers</span>
-        {(meta.mcpServers || []).length === 0 && <span className="muted" style={{ fontSize: 13 }}>Shown after the first message.</span>}
+        {(meta.mcpServers || []).length === 0 && <span className="muted text-md">Shown after the first message.</span>}
         {(meta.mcpServers || []).map((m) => (
           <div key={m.name} className="mcp-row">
             <span className={`dot ${m.status === 'connected' ? 'on' : m.status === 'pending' ? 'busy' : 'off'}`} />
-            <span style={{ flex: 1 }}>{m.name}</span>
+            <span className="grow">{m.name}</span>
             <span className="muted">{m.status}</span>
             {needsSignIn(m) && (
               <Button variant="primary" size="sm" className="mcp-signin" onClick={() => onSignIn(m.name)}>
@@ -722,7 +722,7 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
             <div className="title" onClick={rename} title="Rename">
               <span className="tname">{meta.name}</span>
               <span className="muted tcwd">{project}</span>
-              {meta.worktree && <span className="pill branch hide-mobile">⎇ {meta.worktree.branch}</span>}
+              {meta.worktree && <span className="pill mono hide-mobile">⎇ {meta.worktree.branch}</span>}
               {meta.envName && <span className="pill hide-mobile" title="Environment">{meta.envName}</span>}
             </div>
             {parent && (
@@ -748,7 +748,7 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
                 {menu && (
                   <Menu place="down">
                     <button onClick={() => (setMenu(false), openPanel('tasks'))}>
-                      Background tasks{liveTasks.length > 0 && <span className="menu-count">{liveTasks.length}</span>}
+                      Background tasks{liveTasks.length > 0 && <span className="count menu-count">{liveTasks.length}</span>}
                     </button>
                     <button onClick={() => (setMenu(false), setInfo(true))}>Session info and usage</button>
                     <button onClick={openTui}>Open in Claude's terminal</button>
@@ -762,7 +762,7 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
                     {meta.live && <button onClick={() => (setMenu(false), send({ t: 'stop' }))}>Stop Claude process</button>}
                     <button onClick={() => (setMenu(false), relogin())}>Log in to Claude again</button>
                     <div className="sep" />
-                    <button className="danger" onClick={remove} style={{ color: 'var(--red)' }}>
+                    <button className="danger" onClick={remove}>
                       Delete chat
                     </button>
                   </Menu>
@@ -870,7 +870,7 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
                 </div>
               )}
               {children.length > 0 && (
-                <div className="notice" style={{ gap: 6 }}>
+                <div className="notice">
                   Child sessions:
                   {children.map((c) => (
                     <button key={c.id} className="link-btn" onClick={() => onSelect(c.id)}>

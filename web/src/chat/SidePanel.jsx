@@ -51,7 +51,7 @@ function UnifiedDiff({ diff, path, comments, onComment }) {
               </div>
             ))}
           {draft?.i === i && (
-            <div className="dl-draft">
+            <div className="dl-draft fields sm">
               <textarea
                 autoFocus
                 rows={2}
@@ -99,7 +99,7 @@ function PrCard({ sessionId, refreshKey, onPrompt, busy, onError }) {
     return () => clearInterval(t);
   }, [pending]); // eslint-disable-line react-hooks/exhaustive-deps
   if (!st) return null;
-  if (!st.available) return <div className="pr-card muted pr-note">{st.reason}</div>;
+  if (!st.available) return <div className="pr-card card muted pr-note">{st.reason}</div>;
   const pr = st.pr;
   if (!pr) return null;
   const { pass, fail, pending: pend } = pr.summary;
@@ -115,9 +115,9 @@ function PrCard({ sessionId, refreshKey, onPrompt, busy, onError }) {
     }
   };
   return (
-    <div className="pr-card">
+    <div className="pr-card card">
       <div className="pr-top">
-        <span className={`pr-state ${pr.state.toLowerCase()}`}>{pr.state === 'OPEN' ? 'Open' : pr.state === 'DRAFT' ? 'Draft' : pr.state === 'MERGED' ? 'Merged' : 'Closed'}</span>
+        <span className={`pill strong pr-state ${{ OPEN: 'green', MERGED: 'purple', CLOSED: 'red' }[pr.state] || ''}`}>{pr.state === 'OPEN' ? 'Open' : pr.state === 'DRAFT' ? 'Draft' : pr.state === 'MERGED' ? 'Merged' : 'Closed'}</span>
         <a href={pr.url} target="_blank" rel="noreferrer" className="pr-title" title={pr.title}>
           #{pr.number} {pr.title}
         </a>
@@ -215,11 +215,11 @@ function Changes({ sessionId, refreshKey, onOpenFile, onPrompt, busy }) {
   return (
     <>
       <div className="changes-summary">
-        <span className="pill branch">⎇ {data.branch}</span>
+        <span className="pill mono">⎇ {data.branch}</span>
         <span>
           {data.files.length} file{data.files.length === 1 ? '' : 's'} <span className="add">+{add}</span> <span className="del">−{del}</span>
         </span>
-        <span style={{ flex: 1 }} />
+        <span className="spacer" />
         <IconButton title="Refresh" onClick={load}>
           {loading ? <span className="spinner" /> : '↻'}
         </IconButton>
@@ -248,7 +248,7 @@ function Changes({ sessionId, refreshKey, onOpenFile, onPrompt, busy }) {
           <span>
             {comments.length} comment{comments.length === 1 ? '' : 's'}
           </span>
-          <span style={{ flex: 1 }} />
+          <span className="spacer" />
           <Button variant="ghost" size="sm" onClick={() => setComments([])}>
             Discard
           </Button>
@@ -306,13 +306,13 @@ function FileView({ sessionId, path, refreshKey }) {
   return (
     <>
       <div className="file-meta">
-        <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis' }}>{path}</span>
+        <span className="grow ellipsis">{path}</span>
         <span>{lines.length} lines</span>
         <Button variant="ghost" size="sm" onClick={() => navigator.clipboard?.writeText(data.content)}>
           Copy
         </Button>
       </div>
-      <div className="file-view diff" style={{ borderRadius: 0, maxHeight: 'none' }}>
+      <div className="file-view diff flush">
         {lines.map((l, i) => (
           <div key={i} className="ln">
             <span className="lno">{i + 1}</span>
@@ -338,7 +338,7 @@ export default function SidePanel({ sessionId, tab, files, onTab, onCloseFile, o
           </button>
           {(tab === 'tasks' || tasks.length > 0) && (
             <button className={`panel-tab ${tab === 'tasks' ? 'on' : ''}`} onClick={() => onTab('tasks')} title="Background tasks">
-              Background{liveTasks > 0 && <span className="tab-count">{liveTasks}</span>}
+              Background{liveTasks > 0 && <span className="count tab-count">{liveTasks}</span>}
             </button>
           )}
           {files.map((f) => (

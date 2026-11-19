@@ -1,14 +1,14 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { api } from './api.js';
 import { McpLogins, PasteCallback } from './chat/McpAuth.jsx';
-import { Button, IconButton } from './ui/index.jsx';
+import { Button, IconButton, Segmented, Toggle } from './ui/index.jsx';
 
 const RESTART_NOTE = 'Changes apply to new chats, and to open chats after their next restart.';
 
 export function ProjectPicker({ projects, value, onChange, allowNone = true }) {
   const options = [...new Set([value, ...projects.projects.map((p) => p.path)].filter(Boolean))];
   return (
-    <select className="proj-pick" value={value || ''} onChange={(e) => onChange(e.target.value)}>
+    <select className="field sm proj-pick" value={value || ''} onChange={(e) => onChange(e.target.value)}>
       {allowNone && <option value="">No project (user settings)</option>}
       {options.map((p) => (
         <option key={p} value={p}>
@@ -17,10 +17,6 @@ export function ProjectPicker({ projects, value, onChange, allowNone = true }) {
       ))}
     </select>
   );
-}
-
-function Toggle({ value, onChange, disabled }) {
-  return <button className={`toggle ${value ? 'on' : ''}`} role="switch" aria-checked={value} disabled={disabled} onClick={() => onChange(!value)} />;
 }
 
 function useAction(onError, reload) {
@@ -188,7 +184,7 @@ function ServerForm({ cwd, edit, onDone, onError }) {
     }
   };
   return (
-    <form className="add-form" onSubmit={submit} autoComplete="off">
+    <form className="add-form card sunken fields sm" onSubmit={submit} autoComplete="off">
       {edit && <div className="item-title">Edit {edit.name}</div>}
       <div className="form-grid">
         <label>Name</label>
@@ -311,7 +307,7 @@ export function McpTab({ projects, activeCwd, onError }) {
       {data?.servers.length === 0 && <div className="empty-box">No MCP servers yet.</div>}
       <div className="item-list">
         {data?.servers.map((s) => (
-          <div key={s.scope + s.name} className="item">
+          <div key={s.scope + s.name} className="item card">
             <span className={`dot ${/connected|✓/i.test(s.status) ? 'on' : /disabled/.test(s.status) ? 'off' : /pending|needs/i.test(s.status) ? 'busy' : 'err'}`} />
             <div className="item-main">
               <div className="item-title">
@@ -382,7 +378,7 @@ function PluginConfig({ id, onDone, onError }) {
     }
   };
   return (
-    <form className="add-form plugin-config" onSubmit={save} autoComplete="off">
+    <form className="add-form plugin-config card sunken fields sm" onSubmit={save} autoComplete="off">
       <div className="item-title">Options for {cfg.displayName || id}</div>
       <div className="form-grid">
         {Object.entries(cfg.schema || {}).map(([k, def]) => {
@@ -475,18 +471,16 @@ export function PluginsTab({ onError }) {
   return (
     <>
       <div className="tab-top">
-        <div className="seg">
-          <button className={view === 'installed' ? 'on' : ''} onClick={() => setView('installed')}>
-            Installed{data ? ` (${data.installed.length})` : ''}
-          </button>
-          <button className={view === 'browse' ? 'on' : ''} onClick={() => setView('browse')}>
-            Browse
-          </button>
-          <button className={view === 'marketplaces' ? 'on' : ''} onClick={() => setView('marketplaces')}>
-            Marketplaces
-          </button>
-        </div>
-        {view !== 'marketplaces' && <input className="search-in" placeholder="Search plugins" value={q} onChange={(e) => setQ(e.target.value)} />}
+        <Segmented
+          value={view}
+          onChange={setView}
+          options={[
+            ['installed', `Installed${data ? ` (${data.installed.length})` : ''}`],
+            ['browse', 'Browse'],
+            ['marketplaces', 'Marketplaces'],
+          ]}
+        />
+        {view !== 'marketplaces' && <input className="field sm search-in" placeholder="Search plugins" value={q} onChange={(e) => setQ(e.target.value)} />}
       </div>
       <p className="muted set-note">{RESTART_NOTE}</p>
       {!data && <div className="muted">Loading plugins…</div>}
@@ -505,7 +499,7 @@ export function PluginsTab({ onError }) {
               ).then((ok) => ok && setMkt(''));
             }}
           >
-            <input className="search-in" style={{ flex: 1 }} value={mkt} onChange={(e) => setMkt(e.target.value)} placeholder="owner/repo, git URL or local path" />
+            <input className="field sm search-in" style={{ flex: 1 }} value={mkt} onChange={(e) => setMkt(e.target.value)} placeholder="owner/repo, git URL or local path" />
             <Button variant="primary" size="sm" disabled={!mkt.trim() || busy === 'mkt'}>
               {busy === 'mkt' ? 'Adding…' : 'Add marketplace'}
             </Button>
@@ -514,7 +508,7 @@ export function PluginsTab({ onError }) {
             {(data?.marketplaces || []).map((m) => {
               const name = m.name || m.id || String(m);
               return (
-                <div key={name} className="item">
+                <div key={name} className="item card">
                   <div className="item-main">
                     <div className="item-title">{name}</div>
                     <div className="item-sub">{m.source ? JSON.stringify(m.source) : m.url || m.path || ''}</div>
@@ -563,7 +557,7 @@ export function PluginsTab({ onError }) {
             const unset = p.unconfigured?.length || 0;
             return (
               <React.Fragment key={id + (p.scope || '')}>
-                <div className="item">
+                <div className="item card">
                   <div className="item-main">
                     <div className="item-title">
                       {p.name || id} {p.version && <span className="tag">v{p.version}</span>} {p.scope && <span className="tag">{p.scope}</span>}
@@ -647,7 +641,7 @@ export function SkillsTab({ projects, activeCwd, onError }) {
           {edit.create ? (
             <>
               <input
-                className="search-in"
+                className="field sm search-in"
                 value={edit.id}
                 placeholder="skill-name"
                 onChange={(e) =>
@@ -657,7 +651,7 @@ export function SkillsTab({ projects, activeCwd, onError }) {
                   })
                 }
               />
-              <select className="proj-pick" value={edit.scope} onChange={(e) => setEdit({ ...edit, scope: e.target.value })}>
+              <select className="field sm proj-pick" value={edit.scope} onChange={(e) => setEdit({ ...edit, scope: e.target.value })}>
                 <option value="user">All projects</option>
                 <option value="project" disabled={!cwd}>
                   This project
@@ -665,7 +659,7 @@ export function SkillsTab({ projects, activeCwd, onError }) {
               </select>
             </>
           ) : (
-            <b style={{ flex: 1 }}>
+            <b className="grow">
               {edit.id} <span className="tag">{edit.scope}</span>
             </b>
           )}
@@ -705,7 +699,7 @@ export function SkillsTab({ projects, activeCwd, onError }) {
       {list?.length === 0 && <div className="empty-box">No skills yet.</div>}
       <div className="item-list">
         {list?.map((s) => (
-          <div key={s.scope + s.id} className="item">
+          <div key={s.scope + s.id} className="item card">
             <div className="item-main">
               <div className="item-title">
                 {s.name} <span className="tag">{s.scope}</span>

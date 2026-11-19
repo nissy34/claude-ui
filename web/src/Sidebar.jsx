@@ -509,7 +509,7 @@ export function NewChatDialog({ projects, onCreate, onClose, onReloadProjects, o
           </div>
         )}
         {selProject?.git && !cloning && (
-          <div className="wt-row">
+          <div className="wt-row card">
             <div className="wt-text">
               <div>Isolated worktree</div>
               <div className="desc">Claude works on its own branch, so your checkout stays untouched</div>

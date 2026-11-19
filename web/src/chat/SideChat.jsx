@@ -64,7 +64,7 @@ export default function SideChat({ sessionId, initial, onClose }) {
       <div className="side-chat-head">
         <span>Side chat</span>
         <span className="muted">Not added to the conversation</span>
-        <span style={{ flex: 1 }} />
+        <span className="spacer" />
         <IconButton title="Close (Esc)" onClick={onClose}>
           ✕
         </IconButton>
@@ -83,7 +83,7 @@ export default function SideChat({ sessionId, initial, onClose }) {
         <div ref={endRef} />
       </div>
       <form
-        className="side-chat-input"
+        className="side-chat-input fields"
         onSubmit={(e) => {
           e.preventDefault();
           ask(q);

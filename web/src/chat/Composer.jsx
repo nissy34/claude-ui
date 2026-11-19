@@ -97,7 +97,7 @@ function ContextRing({ used, window: win, onCompact }) {
         <Menu place="up" align="right">
           <div className="pad">
             <b>{Math.round(pct * 100)}% of context used</b>
-            <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+            <div className="muted text-sm" style={{ marginTop: 4 }}>
               {used.toLocaleString()} of {(win || 200000).toLocaleString()} tokens. Claude compacts automatically when it gets full.
             </div>
           </div>
@@ -451,7 +451,7 @@ export default function Composer({ sessionId, disabled, busy, onSend, onStop, mo
         }}
       >
         {suggest && (
-          <div className={`cmd-menu ${suggest.type === 'cmd' ? 'cmds' : ''}`} ref={menuRef} onScroll={placeTip}>
+          <div role="listbox" className={`pop cmd-menu ${suggest.type === 'cmd' ? 'cmds' : ''}`} ref={menuRef} onScroll={placeTip}>
             {suggest.items.map((it, i) => (
               <button
                 key={it.label}
@@ -552,7 +552,7 @@ export default function Composer({ sessionId, disabled, busy, onSend, onStop, mo
                   onClick={() => (sub !== 'mcp' && onMcpRefresh?.(), setSub(sub === 'mcp' ? null : 'mcp'))}
                 >
                   <span className="check">⌗</span> Connectors
-                  {(mcpServers || []).some((m) => m.status !== 'connected' && m.status !== 'pending') && <span className="warn-pill">⚠ {(mcpServers || []).filter((m) => m.status !== 'connected' && m.status !== 'pending').length}</span>}
+                  {(mcpServers || []).some((m) => m.status !== 'connected' && m.status !== 'pending') && <span className="pill accent warn-pill">⚠ {(mcpServers || []).filter((m) => m.status !== 'connected' && m.status !== 'pending').length}</span>}
                   <span className="chev-r">›</span>
                 </button>
                 <button onMouseEnter={() => setSub(null)} onClick={() => (setMenu(null), onSettings?.('plugins'))}>
@@ -585,7 +585,7 @@ export default function Composer({ sessionId, disabled, busy, onSend, onStop, mo
                     {(mcpServers || []).map((m) => (
                       <div key={m.name} className="pad mcp-line">
                         <span className={`dot ${m.status === 'connected' ? 'on' : m.status === 'pending' ? 'busy' : 'err'}`} />
-                        <span style={{ flex: 1 }}>{m.name}</span>
+                        <span className="grow">{m.name}</span>
                         {needsSignIn(m) && onMcpSignIn ? (
                           <Button variant="primary" size="sm" className="mcp-signin" onClick={() => (setMenu(null), setSub(null), onMcpSignIn(m.name))}>
                             Sign in

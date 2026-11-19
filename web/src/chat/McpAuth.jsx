@@ -92,7 +92,7 @@ export function McpSignInBar({ sessionId, flows, onError, onDone }) {
       <div className="mcp-auth-text">
         <span className="dot-pulse" /> Signing in to <b>{names}</b>. Approve access in the tab that opened. If it ends on a page that can’t load (<code>localhost</code>), copy that page’s address and paste it here.
       </div>
-      <div className="mcp-auth-row">
+      <div className="mcp-auth-row fields sm">
         <input
           value={url}
           onChange={(e) => setUrl(e.target.value)}
@@ -147,7 +147,7 @@ export function PasteCallback({ onError }) {
       <summary className="muted">A sign-in ended on a localhost page that can’t load?</summary>
       <form onSubmit={submit}>
         <p className="muted set-note">This server has no built-in browser, so sign-in pages open on your device. Paste the address of the page that failed to load.</p>
-        <div className="mcp-auth-row">
+        <div className="mcp-auth-row fields sm">
           <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="http://localhost:…/callback?code=…" autoComplete="off" spellCheck={false} />
           <Button variant="primary" disabled={busy || !url.trim()}>
             {busy ? 'Delivering…' : 'Deliver'}
@@ -231,7 +231,7 @@ export function Elicitation({ req, done, onAnswer }) {
   const answer = (action, content) => onAnswer({ reqId: req.reqId, action, content });
   if (done)
     return (
-      <div className="elicit done">
+      <div className="elicit done card">
         <span className="muted">
           {req.server}: {done === 'accept' ? 'sent' : done === 'decline' ? 'declined' : 'cancelled'}
         </span>
@@ -244,7 +244,7 @@ export function Elicitation({ req, done, onAnswer }) {
     answer('accept', content);
   };
   return (
-    <form className="elicit" onSubmit={submit} autoComplete="on">
+    <form className="elicit card fields" onSubmit={submit} autoComplete="on">
       <div className="elicit-head">
         <b>{req.title || req.server}</b> <span className="muted">asks</span>
       </div>
@@ -362,7 +362,7 @@ export function McpLogins({ cwd, onError, onChange }) {
         {servers.map((s) => {
           const flow = data.oauth.find((f) => f.name === s.name);
           return (
-            <div key={s.name} className="item">
+            <div key={s.name} className="item card">
               <span className={`dot ${s.status === 'connected' ? 'on' : s.status === 'pending' || flow ? 'busy' : s.status === 'disabled' ? 'off' : 'err'}`} />
               <div className="item-main">
                 <div className="item-title">
@@ -407,7 +407,7 @@ export function McpLogins({ cwd, onError, onChange }) {
                 )}
               </div>
               {flow && !browserOn && (
-                <form className="mcp-auth-row login-paste" onSubmit={deliver}>
+                <form className="mcp-auth-row login-paste fields sm" onSubmit={deliver}>
                   <input value={paste} onChange={(e) => setPaste(e.target.value)} placeholder="Paste the http://localhost:…/callback?code=… address" autoComplete="off" spellCheck={false} />
                   <Button variant="primary" size="sm" disabled={!paste.trim()}>
                     Connect

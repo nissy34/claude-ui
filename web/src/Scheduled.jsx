@@ -75,7 +75,7 @@ function TaskForm({ task, projects, defaultCwd, onSave, onCancel, onError }) {
   };
   const folders = [...new Set([f.cwd, ...projects.projects.map((p) => p.path)].filter(Boolean))];
   return (
-    <div className="sched-form">
+    <div className="sched-form fields">
       <label>
         Name
         <input value={f.name} onChange={set('name')} placeholder="Morning build check" autoFocus />
@@ -214,10 +214,10 @@ export default function Scheduled({ projects, defaultCwd, onClose, onOpen, onErr
     <Modal onClose={onClose} size="wide">
       <div className="modal-head">
         <span className="mtitle">Scheduled</span>
-        <span className="muted" style={{ fontSize: 12 }}>
+        <span className="muted text-sm">
           {data?.tz ? `Server time zone: ${data.tz}` : ''}
         </span>
-        <span style={{ flex: 1 }} />
+        <span className="spacer" />
         {!editing && (
           <Button variant="primary" size="sm" onClick={() => setEditing('new')}>
             ＋ New task
@@ -234,7 +234,7 @@ export default function Scheduled({ projects, defaultCwd, onClose, onOpen, onErr
           <div className="muted">Loading…</div>
         ) : data.tasks.length === 0 ? (
           <div className="panel-empty">
-            <div style={{ fontSize: 28, marginBottom: 8 }}>◷</div>
+            <div className="empty-icon">◷</div>
             Run a prompt on a schedule: a morning summary, a nightly test run, a weekly dependency check. Each run starts a new chat on this server, so it runs even when your laptop is closed. You can also ask Claude in any chat to schedule something.
           </div>
         ) : (
@@ -266,7 +266,7 @@ export default function Scheduled({ projects, defaultCwd, onClose, onOpen, onErr
                 {open === t.id && (
                   <div className="sched-detail">
                     <pre className="sched-prompt">{t.prompt}</pre>
-                    <div className="muted" style={{ fontSize: 12, margin: '6px 0 4px' }}>
+                    <div className="muted text-sm" style={{ margin: '6px 0 4px' }}>
                       History
                     </div>
                     {(t.history || []).length === 0 && <div className="muted">No runs yet.</div>}
@@ -274,7 +274,7 @@ export default function Scheduled({ projects, defaultCwd, onClose, onOpen, onErr
                       <div key={i} className="sched-run">
                         <span>{when(h.at)}</span>
                         <span className="muted">{h.why}</span>
-                        {h.status === 'failed' ? <span style={{ color: 'var(--red)' }}>Failed: {h.error}</span> : h.sessionId ? <button className="link-btn" onClick={() => onOpen(h.sessionId)}>Open chat</button> : null}
+                        {h.status === 'failed' ? <span className="text-red">Failed: {h.error}</span> : h.sessionId ? <button className="link-btn" onClick={() => onOpen(h.sessionId)}>Open chat</button> : null}
                       </div>
                     ))}
                   </div>

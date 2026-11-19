@@ -281,7 +281,7 @@ export default function ToolCard({ item, cwd, children }) {
         )}
         {bg && (
           <span
-            className={`tbg ${bg.live ? 'live' : ''}`}
+            className={`pill tbg ${bg.live ? 'accent' : ''}`}
             title="Show in Background tasks"
             onClick={(e) => {
               e.stopPropagation();
@@ -323,7 +323,7 @@ export default function ToolCard({ item, cwd, children }) {
         </div>
       )}
       {filePath && name !== 'Read' && artifactKind(filePath) && status !== 'error' && (
-        <button className="artifact-card" onClick={() => ctx.openArtifact(filePath)}>
+        <button className="artifact-card card interactive" onClick={() => ctx.openArtifact(filePath)}>
           <span className="art-icon">{{ html: '◰', image: '▣', markdown: '¶', pdf: '▤', csv: '▦' }[artifactKind(filePath)]}</span>
           <span className="art-meta">
             <b>{filePath.split(/[\\/]/).pop()}</b>
@@ -333,7 +333,7 @@ export default function ToolCard({ item, cwd, children }) {
         </button>
       )}
       {linkedSession && (
-        <div className="tool-body" style={{ borderTop: '1px solid var(--line)' }}>
+        <div className="tool-body">
           <Button size="sm" className="open-session" onClick={() => ctx.openSession(linkedSession)}>
             Open session →
           </Button>

@@ -6,7 +6,7 @@ import { MODES } from './chat/Composer.jsx';
 import { useModels } from './models.js';
 import { McpTab, PluginsTab, SkillsTab } from './Customize.jsx';
 import DesktopTab from './DesktopTab.jsx';
-import { Button, IconButton, Modal, ModalHead } from './ui/index.jsx';
+import { Button, IconButton, Modal, ModalHead, Segmented, Toggle } from './ui/index.jsx';
 
 const TABS = [
   ['general', 'General'],
@@ -27,25 +27,9 @@ function Row({ label, desc, children }) {
         {label}
         {desc && <div className="desc">{desc}</div>}
       </div>
-      <div className="set-ctl">{children}</div>
+      <div className="set-ctl fields sm">{children}</div>
     </div>
   );
-}
-
-function Segmented({ value, options, onChange }) {
-  return (
-    <div className="seg">
-      {options.map(([v, l]) => (
-        <button key={v} className={v === value ? 'on' : ''} onClick={() => onChange(v)}>
-          {l}
-        </button>
-      ))}
-    </div>
-  );
-}
-
-function Toggle({ value, onChange }) {
-  return <button className={`toggle ${value ? 'on' : ''}`} role="switch" aria-checked={value} onClick={() => onChange(!value)} />;
 }
 
 function General({ prefs, set, onKeys }) {
@@ -170,8 +154,8 @@ function Permissions({ projects, activeCwd, onError }) {
       {rules?.length > 0 && (
         <div className="rule-list">
           {rules.map((r, i) => (
-            <div key={i} className="rule">
-              <span className={`rbadge ${r.behavior}`}>{r.behavior === 'defaultMode' ? 'mode' : r.behavior}</span>
+            <div key={i} className="rule card">
+              <span className={`pill rbadge ${r.behavior === 'allow' ? 'green' : r.behavior === 'deny' ? 'red' : ''}`}>{r.behavior === 'defaultMode' ? 'mode' : r.behavior}</span>
               <code title={r.file}>{r.rule}</code>
               <span className="muted rscope">{r.scope}</span>
               {r.behavior !== 'defaultMode' && (

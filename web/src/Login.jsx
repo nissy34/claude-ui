@@ -27,6 +27,7 @@ export default function Login({ onLogin }) {
         <span className="mark">&gt;_</span>
         <h1>Claude Web</h1>
         <input
+          className="field lg"
           type="password"
           autoFocus
           autoComplete="current-password"
