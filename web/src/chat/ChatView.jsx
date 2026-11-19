@@ -6,6 +6,7 @@ import ToolCard, { Todos, ToolGroup } from './ToolCard.jsx';
 import Permission from './Permission.jsx';
 import { Elicitation, McpSignInBar, startSignIn, needsSignIn, deliverCallback, LOCAL_CALLBACK } from './McpAuth.jsx';
 import Composer from './Composer.jsx';
+import Linkify from './Linkify.jsx';
 import { getPrefs } from '../prefs.js';
 import SidePanel from './SidePanel.jsx';
 import { ChatCtx } from './ctx.js';
@@ -39,7 +40,7 @@ function Thinking({ text, streaming }) {
       <button className="thinking-head" onClick={() => setOpen((o) => !o)}>
         {streaming ? <span className="spinner" /> : '✳'} {streaming ? 'Thinking…' : 'Thought process'} <span className="chev">{open ? '▾' : '▸'}</span>
       </button>
-      {open && <div className="thinking-body">{text}</div>}
+      {open && <div className="thinking-body"><Linkify text={text} /></div>}
     </div>
   );
 }
@@ -140,7 +141,7 @@ function UserMessage({ item, canEdit, onEdit, onOpen, onFork }) {
       )}
       <div className="bubble">
         {item.images > 0 && <div className="img-note">🖼 {item.images} image{item.images > 1 ? 's' : ''}</div>}
-        {body}
+        <Linkify text={body} />
         {item.refs?.length > 0 && (
           <div className="attach-row in-bubble">
             {item.refs.map((r) => (

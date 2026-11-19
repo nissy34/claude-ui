@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { renderMarkdown } from './markdown.js';
+import Linkify from './Linkify.jsx';
 
 // Desktop's side chat (/btw, Ctrl/⌘+;): ask about the conversation without adding to it.
 // Answers come from a throwaway, read-only fork of the chat; nothing is saved.
@@ -71,7 +72,7 @@ export default function SideChat({ sessionId, initial, onClose }) {
         {list.length === 0 && <div className="muted side-chat-empty">Ask a quick question about this chat: what a change does, where something lives, what Claude meant. Claude answers from the conversation and can read files, but won't change anything.</div>}
         {list.map((x, i) => (
           <div key={i} className="sc-pair">
-            <div className="sc-q">{x.q}</div>
+            <div className="sc-q"><Linkify text={x.q} /></div>
             <div className="sc-a">
               {x.a ? <div className="md" dangerouslySetInnerHTML={{ __html: renderMarkdown(x.a) }} /> : x.live ? <span className="spinner" /> : null}
               {x.error && <div className="sys-error">{x.error}</div>}
