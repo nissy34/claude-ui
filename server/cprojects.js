@@ -19,7 +19,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { config } from './config.js';
-import { createWorktree, isGitRepo, removeWorktree } from './git.js';
+import { createWorktree, isGitRepo, removeWorktree, worktreeMerged } from './git.js';
 import { prStatus } from './pr-status.js';
 import { coordinatorPrompt, threadPrompt, instructionsBlock, memoryBlock } from './cproject-prompts.js';
 import { ProjectMemory } from './cproject-memory.js';
@@ -485,7 +485,7 @@ export class Project {
   }
 
   afterEvent(ev) {
-    if (ev.type === 'thread.resolved') setTimeout(() => this.engine.cleanupWorktree(this, ev.thread).catch(() => {}), 2000).unref?.();
+    if (ev.type === 'thread.resolved') setTimeout(() => this.engine.cleanupWorktree(this, ev.thread).catch((e) => console.warn('worktree cleanup:', e.message)), 2000).unref?.();
     // Follow-ups: the coordinator asked to hear when these threads change state.
     if (['turn.ended', 'thread.post', 'thread.resolved', 'decision.requested', 'session.error'].includes(ev.type)) this.checkFollowUps();
   }
@@ -1281,7 +1281,8 @@ export class ProjectEngine {
   async cleanupWorktree(p, sid) {
     const t = p.state.threads[sid];
     const s = this.store.get(sid);
-    if (!t?.resolved || t.pr?.state !== 'MERGED' || !s?.meta.worktree || s.isBusy()) return;
+    if (!t?.resolved || !s?.meta.worktree || s.meta.worktreeRemoved || s.isBusy()) return;
+    if (t.pr?.state !== 'MERGED' && !(await worktreeMerged(s.meta.worktree))) return;
     await s.stopAndWait?.();
     const r = await removeWorktree(s.meta.worktree).catch((e) => ({ removed: false, kept: e.message }));
     if (r.removed) {
@@ -1443,8 +1444,9 @@ export class ProjectEngine {
       }
       case 'start_thread': {
         const tt = await this.startThread(p, { title: a.title, brief: a.brief, cites: a.cite_ids, model: a.model, effort: a.effort, dependsOn: a.depends_on });
-        const status = p.statusOf(tt.id);
-        return { ok: true, thread_id: tt.id, status: STATUS_LABEL[status], branch: tt.meta.worktree?.branch || null, note: status === 'queued' ? `Queued: ${p.settings.policy.maxRunning} thread turns are already running (the cap). It starts when a slot frees up.` : 'Started. Its results, blockers and questions reach you as events; no need to poll.' };
+        // Its first wake is still being delivered here, so "queued" only means the cap when the cap is actually full.
+        const capFull = p.runningThreadTurns() >= p.settings.policy.maxRunning && p.statusOf(tt.id) === 'queued';
+        return { ok: true, thread_id: tt.id, status: capFull ? STATUS_LABEL.queued : STATUS_LABEL.working, branch: tt.meta.worktree?.branch || null, note: capFull ? `Queued: ${p.settings.policy.maxRunning} thread turns are already running (the cap). It starts when a slot frees up.` : 'Started. Its results, blockers and questions reach you as events; no need to poll.' };
       }
       case 'message_thread': {
         const to = threadArg(a.thread_id ?? a.id);
