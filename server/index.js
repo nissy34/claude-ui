@@ -35,6 +35,7 @@ import * as notes from './notes.js';
 import { controlSession } from './session-control.js';
 import { transcriptTitle } from './chat-title.js';
 import { createDesktopMcp, getToken as getMcpToken, rotateToken as rotateMcpToken } from './desktop-mcp.js';
+import { mountFileLinks } from './desktop-files.js';
 import { authStatus, mcpList, pluginList, cliVersion, permissionRules, removePermissionRule } from './claude-admin.js';
 
 if (!config.password && !config.passwordHash) {
@@ -48,6 +49,8 @@ const distDir = path.resolve(__dirname, '..', 'dist');
 const app = express();
 if (config.trustProxy) app.set('trust proxy', 'loopback, linklocal, uniquelocal');
 app.disable('x-powered-by');
+// Upload/download links from the handoff MCP's file tools stream their bodies, so they go before the JSON parser.
+if (config.desktopMcp) mountFileLinks(app, () => store);
 app.use(express.json({ limit: '1mb' }));
 app.use((req, res, next) => {
   res.setHeader('X-Frame-Options', 'DENY');

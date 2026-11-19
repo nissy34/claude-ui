@@ -183,6 +183,13 @@ A chat's notes tools default to its own project (`scope: "global"` for global no
 
 Tools Desktop gets: `list_projects`, `list_sessions`, `get_session` (transcript, files edited, commands run, uncommitted changes), `handoff`, `send_message`, `stop_session`, `rename_session`, `archive_session`, `set_session_options` (model, effort, permission mode), `list_notes`, `read_note`, `write_note`, `delete_note`. `get_session` also returns the chat's current task list.
 
+**Copying files.** A chat's files live on this machine, not on the computer Claude Desktop runs on (or, in Docker, inside the container's view of the disk), so `ls` from Desktop won't find a path a chat mentions. Desktop copies them with:
+- `list_files`, `read_file` (text, or pictures as images) and `write_file` (small files, text or base64) for things that fit in a message.
+- `download_link`: a short-lived link to a file, or a whole folder as a `.zip`, that Desktop fetches with `curl`. The bytes don't go through the conversation, so binary and big files are fine.
+- `upload_link`: a short-lived link to upload into a folder: `curl -T file <link>`, several with `curl -T "{a,b}" <link>`, or a zip of a folder to `<link>?extract=zip`, which unpacks it there.
+
+Each tool takes a chat (`id`) or a project (`project`), and paths stay inside that folder (symlinks and `..` that lead out are refused, as are `..` and symlinks inside uploaded zips). Existing files are only replaced with `overwrite`. Links expire after 15 minutes by default (`expires_minutes`, up to a day) and work for anyone who has them until then. Uploads are capped at `CW_MCP_UPLOAD_MAX_MB` (2048) per request and folder downloads at `CW_MCP_ZIP_MAX_MB` (2048, uncompressed). The chat shows a note when Desktop adds files. `bash scripts/test-mcp-files.sh` tests all of this end to end.
+
 Chats here get the same session control (`stop_session`, `rename_session`, `archive_session` next to `set_session_options`), and an `update_plan` tool that shows a live task list with a progress bar above the message box.
 
 **Set it up** in Settings > Claude Desktop, which shows your token and ready-to-copy snippets.
@@ -252,6 +259,8 @@ All settings are environment variables; see [`.env.example`](.env.example).
 | `CW_DESKTOP_MCP` | `1` | `0` turns off the Claude Desktop handoff server (`/mcp`) and the shared notes tools |
 | `CW_PUBLIC_URL` | | Address other computers use to reach the server (e.g. `http://myserver:8787` or your Tailscale URL), used in the Claude Desktop setup snippets. Set it when running in Docker, where the hostname is the container id |
 | `CW_MCP_TOKEN` | generated | Fixed bearer token for `/mcp` instead of the generated one |
+| `CW_MCP_UPLOAD_MAX_MB` | `2048` | Largest upload (one file or zip) through the handoff MCP's upload links |
+| `CW_MCP_ZIP_MAX_MB` | `2048` | Largest folder (uncompressed) the handoff MCP's download links zip up |
 | `CW_BROWSER` | `1` | `0` turns off the built-in browser |
 | `CW_BROWSER_PATH` | | A Chrome/Chromium/Edge binary for the built-in browser. Without it, the Playwright Chromium is used, then an installed Chrome or Edge |
 | `CW_TRUST_PROXY` | `0` | `1` behind a reverse proxy / Tailscale Serve |
@@ -264,7 +273,7 @@ All settings are environment variables; see [`.env.example`](.env.example).
 - Auth is an HMAC-signed, `HttpOnly`, `SameSite=Strict` cookie. WebSocket upgrades check the cookie and the `Origin` header. Change `CW_SECRET` (or delete `~/.claude-web/secret`) to log out every device. Chats started with **No folder** run in `CW_SCRATCH_DIR`.
 - Sessions can only start inside `CW_PROJECTS_ROOT` unless you set `CW_ALLOW_ANY_DIR=1`.
 - The password, hash and secret are stripped from the environment of every process the server starts.
-- The Claude Desktop handoff endpoint (`/mcp`) uses its own bearer token, refuses browser origins, and rate-limits wrong tokens. Anyone with the token can start chats, so treat it like the password.
+- The Claude Desktop handoff endpoint (`/mcp`) uses its own bearer token, refuses browser origins, and rate-limits wrong tokens. Anyone with the token can start chats, so treat it like the password. The file tools' download and upload links (`/mcp/files/...`) need no token: each is a random, single-folder link that expires (15 minutes by default).
 - Whoever can log in can do anything Claude or a shell can do as your user. Treat the password like an SSH key.
 
 ## Development
