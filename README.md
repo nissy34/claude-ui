@@ -174,7 +174,7 @@ Then use "Add to Home Screen" for a full-screen app.
 
 ## Projects (coordinator + threads)
 
-A **Project** is one conversation with a coordinator that hands work to parallel **threads**, like Projects in Claude Code. Create one with **＋** next to *Projects* in the sidebar: pick folders, the models for each role and how many threads may run at once.
+A **Project** is one conversation with a coordinator that hands work to parallel **threads**, like Projects in Claude Code. Create one with **＋** next to *Projects* in the sidebar: pick folders and the models for each role.
 
 - **Project chat**: you talk to the coordinator. It answers quick questions itself (it can read the code but has no shell or edit tools) and starts threads for real work. Thread cards and decision cards show up inline, with live status.
 - **Threads** are ordinary chats in their own git worktree and branch, started with a brief and the exact words you wrote (cited, not paraphrased). Open one to talk to it directly, answer its permission prompts, or watch it work. A checklist and decision cards sit above its chat.
@@ -183,13 +183,12 @@ A **Project** is one conversation with a coordinator that hands work to parallel
 - **Notes between threads.** A thread that learns something others could hit (a fix, a gotcha, a reusable helper, a fact, a warning) shares it in one line. The engine hands each note only where it matters: warnings to every open thread, notes naming files to running threads in the same repo whose brief or changed files match, and the rest only to search. Notes arrive at a thread's next wake or, mid-turn, after its next tool call (a PostToolUse HTTP hook); they never start a turn. Your answers to decision cards reach every open thread and memory. Threads resolve with what they learned, search the project before digging (`project_search`), and start with the top search hits and the board in their brief. The coordinator only does judgment: it gets board changes, notes marked for it, and signals (two threads changed the same file, a thread looks stuck, a dependency landed). Context › Activity lists what passed between threads.
 - **Side question** (in a thread's bar) forks the thread into a side thread that looks at the same worktree and answers you there, without interrupting the thread or waking the coordinator.
 - **Move into a project…** (a regular chat's ⋯ menu) turns an existing chat into a thread of a project, keeping its folder, branch and history.
-- **Budget** (project Settings): the project pauses once it has cost that much; a message from you or Resume continues.
 - **Models per role**: coordinator default Sonnet at low effort, threads Opus at high effort. Change them in the project's Settings; the coordinator can pick a cheaper model per thread for small jobs.
 
 How it works (server/cprojects.js): code, not a model, owns the project. Every input becomes an event in an append-only log (`~/.claude-web/cprojects/<id>/events.jsonl`); a reducer derives statuses; a router decides which session to wake; the engine delivers queued events to an idle session as one labelled envelope per turn and marks it delivered when the CLI echoes it. So:
 
 - Thread results are batched for the coordinator (held 10 s after the last one, at most 60 s, sent at once when no other thread is working). Ten threads finishing together cost one coordinator turn.
-- The running cap is enforced (thread turns, not threads; your own messages bypass it). Proactivity (quiet / normal / chatty) changes routing rules, so it is enforced too; limits you tell the coordinator ("at most two at a time") are saved as settings.
+- Proactivity (quiet / normal / chatty) changes routing rules, so it is enforced; what you tell the coordinator ("only tell me when something finishes") is saved as a setting.
 - Every message carries a trust label stamped by the server (principal = you, relay = another Claude, system = the engine) inside a per-session random marker, so a thread's text can't pose as you. Decision cards for steps that can't be undone can only be answered in the web UI. "Always ask before" rules (project Settings > Advanced) still prompt in Auto mode.
 - The coordinator's context is reset to a digest (recent chat, thread table, open cards and promises) past a token threshold; promises it makes ("I'll tell you when both are done") are recorded with `follow_up` and survive the reset.
 - Restarts replay the log: queued wakes are delivered, wakes in flight are re-sent unless the transcript shows them, and turns cut off get a "check what was already done" wake. A session woken more than 20 times in 10 minutes pauses the project.

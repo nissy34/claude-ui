@@ -52,13 +52,11 @@ export const DEFAULT_SETTINGS = {
     thread: { model: 'opus', effort: 'high' },
   },
   policy: {
-    maxRunning: 3,
     proactivity: 'normal',
     threadPermissionMode: 'auto',
     worktrees: true,
     checkInMinutes: 30,
     rotateTokens: 60_000,
-    budgetUsd: 0, // pause new turns once the project has cost this much (0 = no budget)
     continueOnReset: true, // cut-off turns continue by themselves when the usage limit resets
     quietHours: null, // { from: '23:00', to: '07:00' } holds browser notifications
     askRules: ['Bash(git push --force:*)', 'Bash(git push -f:*)', 'Bash(git push origin main:*)', 'Bash(git push origin master:*)', 'Bash(gh pr merge:*)', 'Bash(rm -rf /:*)'],
@@ -122,14 +120,14 @@ export function cleanSettings(s) {
     if (m.effort && !EFFORTS.includes(m.effort)) m.effort = '';
   }
   const p = out.policy;
-  p.maxRunning = Math.min(Math.max(parseInt(p.maxRunning, 10) || 3, 1), 20);
+  delete p.maxRunning; // removed settings: no running cap, no dollar budget
+  delete p.budgetUsd;
   if (!PROACTIVITY.includes(p.proactivity)) p.proactivity = 'normal';
   if (!THREAD_MODES.includes(p.threadPermissionMode)) p.threadPermissionMode = 'auto';
   p.worktrees = p.worktrees !== false;
   p.continueOnReset = p.continueOnReset !== false;
   p.checkInMinutes = Math.min(Math.max(parseInt(p.checkInMinutes, 10) || 30, 5), 24 * 60);
   p.rotateTokens = Math.min(Math.max(parseInt(p.rotateTokens, 10) || 60_000, 20_000), 500_000);
-  p.budgetUsd = Math.max(Math.round((Number(p.budgetUsd) || 0) * 10_000) / 10_000, 0);
   p.askRules = (Array.isArray(p.askRules) ? p.askRules : []).map((r) => String(r).trim()).filter(Boolean).slice(0, 50);
   if (p.quietHours && !(/^\d\d:\d\d$/.test(p.quietHours.from) && /^\d\d:\d\d$/.test(p.quietHours.to))) p.quietHours = null;
   return out;
@@ -152,7 +150,6 @@ function initialState() {
     coordinatorFresh: true, // next coordinator wake starts with a digest
     limit: null, // { until } while the account's usage limit is hit
     suggestions: {}, // id -> { id, title, brief, reason, ts, answer }
-    budgetHit: 0, // the budget (USD) that last paused the project
     notes: {}, // id -> { id, kind, text, files, by, ts, durable, forCoordinator, scope, retracted, replacedBy }
     inbox: {}, // sid -> [noteId] handed over at its next wake or tool call (never starts a turn)
     signals: {}, // signal key -> ts, so each one fires once
@@ -343,9 +340,6 @@ export function reduce(st, ev) {
       if (sg) sg.answer = { action: ev.body.action, thread: ev.body.thread || null, ts: ev.ts, by: ev.from?.kind || 'user' };
       break;
     }
-    case 'budget.reached':
-      st.budgetHit = ev.body.budget;
-      break;
     case 'note.shared': {
       const b = ev.body;
       (st.notes ||= {})[b.id] = { id: b.id, kind: b.kind, text: b.text, files: b.files || [], by: ev.from?.kind === 'thread' ? ev.from.id : null, ts: ev.ts, durable: !!b.durable, forCoordinator: !!b.forCoordinator, scope: b.scope || null, replaces: b.replaces || null, memory: b.memory || null };
@@ -519,7 +513,6 @@ export class Project {
       case 'thread.resolved':
         return ev.from?.kind === 'thread' && pro !== 'quiet' && !this.state.threads[ev.thread]?.sideOf ? coord({ batch: true }) : [];
       case 'thread.suggested':
-      case 'budget.reached':
       case 'note.retracted':
       case 'notes.delivered':
       case 'files.changed':
@@ -554,7 +547,6 @@ export class Project {
   }
 
   afterEvent(ev) {
-    if (ev.type === 'turn.ended') this.checkBudget();
     if (ev.type === 'decision.answered' && ev.trust === 'principal') this.decisionNote(ev);
     if (ev.type === 'user.message' && ev.thread && ev.trust === 'principal' && (ev.body.where === 'thread' || ev.body.where === 'steer')) this.correctionNote(ev);
     if (ev.type === 'thread.resolved') this.dependencyLanded(ev.thread);
@@ -563,14 +555,6 @@ export class Project {
     if (ev.type === 'thread.resolved') setTimeout(() => this.engine.cleanupWorktree(this, ev.thread).catch((e) => console.warn('worktree cleanup:', e.message)), 2000).unref?.();
     // Follow-ups: the coordinator asked to hear when these threads change state.
     if (['turn.ended', 'thread.post', 'thread.resolved', 'decision.requested', 'session.error'].includes(ev.type)) this.checkFollowUps();
-  }
-
-  /** Over the budget: pause once per budget value (a message from the user, or Resume, continues). */
-  checkBudget() {
-    const budget = this.settings.policy.budgetUsd;
-    if (!budget || this.state.cost < budget || this.state.budgetHit === budget) return;
-    this.append({ type: 'budget.reached', body: { budget, total: Math.round(this.state.cost * 100) / 100 } });
-    if (!this.state.paused) this.append({ type: 'project.paused', body: { reason: `Paused: the project reached its $${budget.toFixed(2)} budget ($${this.state.cost.toFixed(2)} used). Send a message or press Resume to continue, or raise the budget in Settings.` } });
   }
 
   checkFollowUps() {
@@ -907,7 +891,7 @@ export class Project {
     if (this.state.paused) return;
     const c = this.state.coordinator;
     let next = Infinity;
-    // Coordinator first (it never counts against the cap), then threads oldest-queued first.
+    // Coordinator first, then threads oldest-queued first.
     const order = Object.keys(this.state.queue).filter((sid) => this.state.queue[sid].length);
     order.sort((a, b) => (a === c ? -1 : b === c ? 1 : this.state.queue[a][0].at - this.state.queue[b][0].at));
     for (const sid of order) {
@@ -937,7 +921,6 @@ export class Project {
       this.append({ type: 'thread.reopened', thread: sid, body: {} });
     }
     if (this.state.limit && Date.now() < this.state.limit.until && !items.some((q) => q.user)) return this.state.limit.until + 1000;
-    if (!isCoord && !items.some((q) => q.user) && this.runningThreadTurns() >= this.settings.policy.maxRunning) return false;
     if (!items.some((q) => !q.batch)) {
       // Only batched items (thread results for the coordinator): adaptive hold.
       const now = Date.now();
@@ -1384,7 +1367,7 @@ export class Project {
   }
 
   detail({ limit = 300 } = {}) {
-    const chatTypes = new Set(['user.message', 'chat.post', 'thread.started', 'decision.requested', 'decision.answered', 'decision.withdrawn', 'thread.resolved', 'project.paused', 'project.resumed', 'limit.hit', 'limit.reset', 'policy.changed', 'notice', 'coordinator.rotated', 'thread.post', 'pr.updated', 'thread.suggested', 'suggestion.answered', 'budget.reached']);
+    const chatTypes = new Set(['user.message', 'chat.post', 'thread.started', 'decision.requested', 'decision.answered', 'decision.withdrawn', 'thread.resolved', 'project.paused', 'project.resumed', 'limit.hit', 'limit.reset', 'policy.changed', 'notice', 'coordinator.rotated', 'thread.post', 'pr.updated', 'thread.suggested', 'suggestion.answered']);
     const feed = this.events.filter((e) => chatTypes.has(e.type) && (e.type !== 'user.message' || e.body.where === 'chat') && (e.type !== 'thread.post' || e.body.kind !== 'progress')).slice(-limit);
     const coord = this.session(this.state.coordinator);
     return {
@@ -1989,9 +1972,7 @@ export class ProjectEngine {
           }
         }
         const tt = await this.startThread(p, { title: a.title, brief: a.brief, cites: a.cite_ids, model: a.model, effort: a.effort, dependsOn: a.depends_on });
-        // Its first wake is still being delivered here, so "queued" only means the cap when the cap is actually full.
-        const capFull = p.runningThreadTurns() >= p.settings.policy.maxRunning && p.statusOf(tt.id) === 'queued';
-        return { ok: true, thread_id: tt.id, status: capFull ? STATUS_LABEL.queued : STATUS_LABEL.working, branch: tt.meta.worktree?.branch || null, note: capFull ? `Queued: ${p.settings.policy.maxRunning} thread turns are already running (the cap). It starts when a slot frees up.` : 'Started. Its results, blockers and questions reach you as events; no need to poll.' };
+        return { ok: true, thread_id: tt.id, status: STATUS_LABEL.working, branch: tt.meta.worktree?.branch || null, note: 'Started. Its results, blockers and questions reach you as events; no need to poll.' };
       }
       case 'suggest_thread': {
         const title = clipText(String(a.title || '').trim().split('\n')[0], 80);
@@ -2022,7 +2003,7 @@ export class ProjectEngine {
       case 'list_threads': {
         const all = Object.values(p.state.threads).map((t) => p.threadSummary(t));
         const list = a.include_resolved ? all : all.filter((t) => t.status !== 'resolved');
-        return { threads: list.map((t) => ({ thread_id: t.id, title: t.title, status: t.statusLabel, checklist: t.progress ? `${t.progress.done}/${t.progress.total}` : null, last_post: t.lastPost ? { kind: t.lastPost.kind, text: clipText(t.lastPost.text, 400) } : null, branch: t.branch, pr: t.pr?.url || null, waiting_on_user: t.status === 'waiting' })), running_turns: p.runningThreadTurns(), cap: p.settings.policy.maxRunning };
+        return { threads: list.map((t) => ({ thread_id: t.id, title: t.title, status: t.statusLabel, checklist: t.progress ? `${t.progress.done}/${t.progress.total}` : null, last_post: t.lastPost ? { kind: t.lastPost.kind, text: clipText(t.lastPost.text, 400) } : null, branch: t.branch, pr: t.pr?.url || null, waiting_on_user: t.status === 'waiting' })), running_turns: p.runningThreadTurns() };
       }
       case 'read_thread': {
         const id = threadArg(a.thread_id ?? a.id);
@@ -2071,7 +2052,7 @@ export class ProjectEngine {
         return { hits, note: hits.length ? 'Snippets from memory, notes, reports and other threads\' conversations. read_thread or memory_read for more.' : 'Nothing found. If you are stuck, ask the coordinator with message_coordinator.' };
       }
       case 'board':
-        return { board: p.board(), running_turns: p.runningThreadTurns(), cap: p.settings.policy.maxRunning };
+        return { board: p.board(), running_turns: p.runningThreadTurns() };
       case 'set_reminder': {
         const at = a.at ? Date.parse(a.at) : Date.now() + (Number(a.minutes) || (Number(a.hours) || 0) * 60 || (Number(a.days) || 0) * 1440) * 60_000;
         if (!Number.isFinite(at) || at <= Date.now() + 30_000) throw new Error('Give minutes, hours, days or an ISO time at least a minute away.');
@@ -2094,12 +2075,11 @@ export class ProjectEngine {
       }
       case 'set_policy': {
         const policy = {};
-        if (a.max_running != null) policy.maxRunning = a.max_running;
         if (a.proactivity) policy.proactivity = a.proactivity;
         if (a.check_in_minutes != null) policy.checkInMinutes = a.check_in_minutes;
-        if (!Object.keys(policy).length) throw new Error('Give max_running, proactivity or check_in_minutes');
+        if (!Object.keys(policy).length) throw new Error('Give proactivity or check_in_minutes');
         this.update(p, { policy }, { by: 'coordinator' });
-        p.append({ type: 'policy.changed', from: me, trust: 'relay', body: { policy: { maxRunning: p.settings.policy.maxRunning, proactivity: p.settings.policy.proactivity, checkInMinutes: p.settings.policy.checkInMinutes }, reason: clipText(a.reason || '', 300) } });
+        p.append({ type: 'policy.changed', from: me, trust: 'relay', body: { policy: { proactivity: p.settings.policy.proactivity, checkInMinutes: p.settings.policy.checkInMinutes }, reason: clipText(a.reason || '', 300) } });
         return { ok: true, policy: p.settings.policy };
       }
       case 'memory_list':

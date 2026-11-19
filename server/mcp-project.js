@@ -64,7 +64,7 @@ const COORDINATOR = [
   {
     name: 'start_thread',
     description:
-      'Start a thread: a parallel Claude Code session in its own git worktree and branch that does the work. Give a complete, self-contained brief (goal, what is known, what done looks like) and cite the user\'s message ids. The engine enforces the running cap: over it, the thread waits as Queued. Returns the thread_id.',
+      'Start a thread: a parallel Claude Code session in its own git worktree and branch that does the work. Give a complete, self-contained brief (goal, what is known, what done looks like) and cite the user\'s message ids. Returns the thread_id.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -108,8 +108,8 @@ const COORDINATOR = [
   },
   {
     name: 'set_policy',
-    description: 'Save a limit the user stated, so it is enforced: max_running (thread turns at once), proactivity (quiet: wake you only for user messages, blockers and errors; normal: also results; chatty: also periodic check-ins), check_in_minutes.',
-    inputSchema: { type: 'object', properties: { max_running: { type: 'number' }, proactivity: { type: 'string', enum: ['quiet', 'normal', 'chatty'] }, check_in_minutes: { type: 'number' }, reason: { type: 'string' } } },
+    description: 'Save a preference the user stated, so it is enforced: proactivity (quiet: wake you only for user messages, blockers and errors; normal: also results; chatty: also periodic check-ins), check_in_minutes.',
+    inputSchema: { type: 'object', properties: { proactivity: { type: 'string', enum: ['quiet', 'normal', 'chatty'] }, check_in_minutes: { type: 'number' }, reason: { type: 'string' } } },
   },
   { name: 'set_reminder', description: 'Snooze a thread until a time; the reminder wakes it.', inputSchema: { type: 'object', properties: { thread_id: { type: 'string' }, minutes: { type: 'number' }, hours: { type: 'number' }, at: { type: 'string', description: 'ISO time.' }, note: { type: 'string' } }, required: ['thread_id'] } },
   ...memory,

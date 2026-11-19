@@ -209,7 +209,7 @@ function ProjectChat({ project, openThread, onError }) {
         </div>
         <div className="pj-composer-foot">
           <span className="muted small">
-            {project.running}/{project.settings.policy.maxRunning} threads running · ${project.usage.total.toFixed(2)}
+            {project.running} thread{project.running === 1 ? '' : 's'} running · ${project.usage.total.toFixed(2)}
           </span>
           <span className="spacer" />
           <span className="muted small">
@@ -269,8 +269,6 @@ function FeedItem({ e, project, threads, decisions, onSelect, onError }) {
     }
     case 'suggestion.answered':
       return null;
-    case 'budget.reached':
-      return <div className="pj-notice warn">Budget reached: ${Number(b.total).toFixed(2)} of ${Number(b.budget).toFixed(2)}</div>;
     case 'decision.requested':
       return <DecisionCard projectId={project.id} decision={decisions[b.id]} threadTitle={threads[e.thread]?.title} onError={onError} onOpenThread={onSelect} />;
     case 'thread.post':
@@ -299,7 +297,7 @@ function FeedItem({ e, project, threads, decisions, onSelect, onError }) {
     case 'policy.changed':
       return (
         <div className="pj-notice">
-          Settings changed by the coordinator: at most {b.policy.maxRunning} running, {b.policy.proactivity} updates{b.reason ? ` (${b.reason})` : ''}
+          Settings changed by the coordinator: {b.policy.proactivity} updates{b.reason ? ` (${b.reason})` : ''}
         </div>
       );
     case 'coordinator.rotated':

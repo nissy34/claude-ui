@@ -88,10 +88,10 @@ async function stop() {
 async function main() {
   await start();
   console.log('Create a project');
-  let { project } = await api('/api/cprojects', { method: 'POST', body: { name: 'Demo', goal: 'Test the engine', folders: [repo], models: { coordinator: { model: 'haiku', effort: 'low' }, thread: { model: 'sonnet', effort: 'medium' } }, policy: { maxRunning: 1 } } });
+  let { project } = await api('/api/cprojects', { method: 'POST', body: { name: 'Demo', goal: 'Test the engine', folders: [repo], models: { coordinator: { model: 'haiku', effort: 'low' }, thread: { model: 'sonnet', effort: 'medium' } } } });
   const id = project.id;
   check(project.coordinatorId, 'coordinator session exists');
-  check(project.settings.policy.maxRunning === 1, 'cap saved');
+  check(project.settings.policy.maxRunning === undefined && project.settings.policy.budgetUsd === undefined, 'no running cap or budget settings');
   const sessions = (await api('/api/sessions')).sessions;
   const coord = sessions.find((s) => s.id === project.coordinatorId);
   check(coord?.model === 'haiku' && coord?.effort === 'low' && coord?.cproject === id, 'coordinator uses the coordinator model and effort', coord);
@@ -105,7 +105,7 @@ async function main() {
   const post = project.feed.find((e) => e.type === 'chat.post');
   check(post.body.auto && /ok: <project-digest>|ok: <project-wake/.test(post.body.text), 'auto post from final text', post.body);
 
-  console.log('Coordinator starts two threads; cap 1 queues the second');
+  console.log('Coordinator starts two threads');
   const briefA = [call('update_checklist', { title: 'A', steps: [{ step: 'one', status: 'completed' }, { step: 'two', status: 'in_progress' }] }), '@@sleep 1500', call('post_message', { kind: 'result', text: 'A is done' })].join('\n');
   const briefB = [call('post_message', { kind: 'result', text: 'B is done' }), call('resolve', { learned: [] })].join('\n');
   const msg = [call('start_thread', { title: 'Thread A', brief: briefA }), call('start_thread', { title: 'Thread B', brief: briefB }), call('start_thread', { title: 'Thread B', brief: briefB }), call('post_message', { text: 'Started A and B' })].join('\n');
@@ -124,16 +124,15 @@ async function main() {
     const d = await detail(id);
     const a = d.threads.find((t) => t.id === A.id);
     const b = d.threads.find((t) => t.id === B.id);
-    return a.status === 'working' && d;
-  }, 5000, 'A working');
-  check(project.threads.find((t) => t.id === B.id).status === 'queued', 'B is queued while A runs (cap 1)', project.threads.map((t) => [t.title, t.status]));
+    return a.status === 'working' && a.progress && d;
+  }, 5000, 'A working with its checklist');
   check(project.threads.find((t) => t.id === A.id).progress?.total === 2, 'checklist shows on the thread', project.threads.find((t) => t.id === A.id).checklist);
 
   project = await until(async () => {
     const d = await detail(id);
     return d.threads.find((t) => t.id === B.id).status === 'resolved' && d.threads.find((t) => t.id === A.id).status === 'idle' && d;
   }, 15_000, 'both threads done');
-  check(true, 'A finished, then B ran and resolved itself');
+  check(true, 'both threads ran in parallel; B resolved itself');
   const ev = await until(async () => {
     const log = fs.readFileSync(path.join(env.CW_DATA_DIR, 'cprojects', id, 'events.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
     const coordWakes = log.filter((e) => e.type === 'wake.sent' && e.body.session === project.coordinatorId);
@@ -144,8 +143,9 @@ async function main() {
   const delivered = ev.filter((e) => e.type === 'wake.delivered').length;
   const sent = ev.filter((e) => e.type === 'wake.sent').length;
   check(delivered === sent, `every wake was acknowledged by the CLI echo (${delivered}/${sent})`);
-  const prompts = fs.readFileSync(env.FAKE_CLAUDE_LOG, 'utf8').trim().split('\n').map((l) => JSON.parse(l)).filter((x) => x.prompt);
-  const coordPrompt = prompts.find((x) => x.prompt.includes('[result] status now') && x.prompt.includes('A is done'));
+  const readPrompts = () => fs.readFileSync(env.FAKE_CLAUDE_LOG, 'utf8').trim().split('\n').map((l) => JSON.parse(l)).filter((x) => x.prompt);
+  const coordPrompt = await until(() => readPrompts().find((x) => x.prompt.includes('[result] status now') && x.prompt.includes('A is done')), 8000, 'coordinator prompt with results').catch(() => null);
+  const prompts = readPrompts();
   check(coordPrompt && /trust: relay/.test(coordPrompt.prompt), 'coordinator sees thread results with trust relay', coordPrompt?.prompt);
   const userPrompt = prompts.find((x) => x.prompt.includes('hello there'));
   check(/trust: principal/.test(userPrompt.prompt) && /<project-digest>/.test(userPrompt.prompt), 'first coordinator wake has a digest and the user message as principal');
@@ -196,8 +196,8 @@ async function main() {
   check(sent2.ok, 'project_send');
   await until(() => fs.readFileSync(env.FAKE_CLAUDE_LOG, 'utf8').includes('Claude Desktop, on behalf of the user · trust: relay'), 8000, 'desktop message labelled relay');
   check(true, 'desktop message reaches the coordinator labelled relay');
-  const created = await mcp('project_create', { name: 'From MCP', folders: ['demo'], thread_model: 'haiku', max_running: 2 });
-  check(created.project_id && created.settings.models.thread.model === 'haiku' && created.settings.policy.maxRunning === 2, 'project_create', created);
+  const created = await mcp('project_create', { name: 'From MCP', folders: ['demo'], thread_model: 'haiku' });
+  check(created.project_id && created.settings.models.thread.model === 'haiku', 'project_create', created);
 
   console.log('Memory');
   const memBrief = [call('memory_write', { name: 'Build Steps', description: 'How to build', content: 'npm run build' }), call('memory_write', { name: 'build-steps', description: 'How to build', content: 'other' })].join('\n');
@@ -217,25 +217,26 @@ async function main() {
   check(typed.type === 'feedback' && typed.modified, 'memory files keep a type and modified time', typed);
 
   console.log('Restart: state and queued wakes survive');
-  await api(`/api/cprojects/${id}`, { method: 'PATCH', body: { policy: { maxRunning: 1 } } });
   const slow = ['@@sleep 4000', call('post_message', { kind: 'result', text: 'slow done' })].join('\n');
-  await api(`/api/cprojects/${id}/threads`, { method: 'POST', body: { title: 'Slow', brief: slow } });
-  await api(`/api/cprojects/${id}/threads`, { method: 'POST', body: { title: 'After restart', brief: call('post_message', { kind: 'result', text: 'after restart done' }) } });
-  await sleep(1000);
+  const slowT = (await api(`/api/cprojects/${id}/threads`, { method: 'POST', body: { title: 'Slow', brief: slow } })).thread;
+  await until(async () => (await detail(id)).threads.find((t) => t.id === slowT.id)?.status === 'working', 8000, 'slow working');
+  // A message for a busy thread waits in its queue.
+  await api(`/api/cprojects/${id}/threads/${slowT.id}/message`, { method: 'POST', body: { text: call('post_message', { kind: 'result', text: 'after restart done' }) } });
+  await sleep(300);
   const before = await detail(id);
-  check(before.threads.find((t) => t.title === 'After restart').status === 'queued', 'second thread queued before restart', before.threads.map((t) => [t.title, t.status]));
+  check(before.threads.find((t) => t.id === slowT.id).queuedWakes > 0, 'a message for a busy thread is queued before the restart', before.threads.map((t) => [t.title, t.status, t.queuedWakes]));
   await stop();
   await start();
   await until(async () => {
     const d = await detail(id);
-    return d.threads.find((t) => t.title === 'After restart').lastPost?.text === 'after restart done';
+    return d.threads.find((t) => t.id === slowT.id).lastPost?.text === 'after restart done';
   }, 20_000, 'queued thread runs after restart');
   check(true, 'queued wake delivered after a restart');
   const got = await until(() => fs.readFileSync(env.FAKE_CLAUDE_LOG, 'utf8').includes('Your last turn was interrupted'), 10_000, 'interrupted wake').catch(() => false);
   check(got, 'interrupted thread got the "check before repeating" wake');
 
-  console.log('Suggested threads, side questions, moving a chat in, budget');
-  const { project: q } = await api('/api/cprojects', { method: 'POST', body: { name: 'Extras', folders: [repo], policy: { maxRunning: 3 } } });
+  console.log('Suggested threads, side questions, moving a chat in');
+  const { project: q } = await api('/api/cprojects', { method: 'POST', body: { name: 'Extras', folders: [repo] } });
   const sugBrief = call('post_message', { kind: 'result', text: 'suggested done' });
   await api(`/api/cprojects/${q.id}/messages`, { method: 'POST', body: { text: [call('suggest_thread', { title: 'Suggested one', brief: sugBrief, reason: 'worth it' }), call('suggest_thread', { title: 'Suggested two', brief: 'never' }), call('post_message', { text: 'suggested two' })].join('\n') } });
   let qd = await until(async () => {
@@ -277,14 +278,6 @@ async function main() {
   check(plainNow.cproject === q.id && plainNow.role === 'thread', 'the moved chat is now a project thread', plainNow);
   const twice = await api(`/api/cprojects/${q.id}/adopt`, { method: 'POST', body: { session: plain.id }, allowError: true });
   check(/already in this project/.test(twice.error || ''), 'a chat moves in only once', twice);
-  const spent = (await detail(q.id)).usage.total;
-  await api(`/api/cprojects/${q.id}`, { method: 'PATCH', body: { policy: { budgetUsd: Math.round((spent + 0.0005) * 10_000) / 10_000 } } });
-  await api(`/api/cprojects/${q.id}/messages`, { method: 'POST', body: { text: 'one more' } });
-  qd = await until(async () => {
-    const d = await detail(q.id);
-    return d.paused && d;
-  }, 10_000, 'budget pause');
-  check(/budget/.test(qd.paused.reason) && qd.feed.some((e) => e.type === 'budget.reached'), 'reaching the budget pauses the project', qd.paused);
 
   console.log('Coordination: notes, search, warm briefs, board, signals');
   await coordination();
@@ -310,7 +303,7 @@ const fakeLog = () =>
     });
 
 async function coordination() {
-  const { project: r } = await api('/api/cprojects', { method: 'POST', body: { name: 'Coord', folders: [repo], policy: { maxRunning: 5 } } });
+  const { project: r } = await api('/api/cprojects', { method: 'POST', body: { name: 'Coord', folders: [repo] } });
   const startT = async (title, brief, extra = {}) => (await api(`/api/cprojects/${r.id}/threads`, { method: 'POST', body: { title, brief, ...extra } })).thread;
   // A running thread whose brief names lib/util.js gets a matching note mid-turn (PostToolUse hook).
   const U = await startT('Util helpers', ['Improve the parsing helpers in lib/util.js', '@@write lib/util.js export const a = 1', '@@sleep 2500', call('board', {})].join('\n'));

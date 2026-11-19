@@ -104,14 +104,6 @@ function SettingsFields({ s, set, projects, full }) {
       </div>
       <div className="pj-grid">
         <label>
-          Threads running at once
-          <Input type="number" min={1} max={20} value={p.maxRunning} onChange={(e) => setP({ maxRunning: e.target.value })} />
-        </label>
-        <label>
-          Budget, USD <span className="muted small">(pauses at this total; 0 = none)</span>
-          <Input type="number" min={0} step={1} value={p.budgetUsd || 0} onChange={(e) => setP({ budgetUsd: e.target.value })} />
-        </label>
-        <label>
           Thread permission mode
           <Select value={p.threadPermissionMode} onChange={(e) => setP({ threadPermissionMode: e.target.value })}>
             {MODES.map(([v, l]) => (
@@ -183,7 +175,7 @@ const DEFAULTS = {
   instructions: '',
   folders: [{ path: '' }],
   models: { coordinator: { model: 'sonnet', effort: 'low' }, thread: { model: 'opus', effort: 'high' } },
-  policy: { maxRunning: 3, budgetUsd: 0, proactivity: 'normal', threadPermissionMode: 'auto', worktrees: true, checkInMinutes: 30, rotateTokens: 60000, quietHours: null, askRules: [] },
+  policy: { proactivity: 'normal', threadPermissionMode: 'auto', worktrees: true, checkInMinutes: 30, rotateTokens: 60000, quietHours: null, askRules: [] },
 };
 
 const clean = (s) => ({ ...s, folders: s.folders.filter((f) => f.path.trim()), policy: { ...s.policy, askRules: (s.policy.askRules || []).map((r) => r.trim()).filter(Boolean) } });
@@ -365,9 +357,6 @@ export function ProjectSettingsModal({ project, section, setSection, onClose, on
                 <b>${project.usage.total.toFixed(2)}</b>
                 <span className="muted small"> · coordinator ${project.usage.coordinator.toFixed(2)}{project.coordinator ? ` · context ${Math.round(project.coordinator.contextTokens / 1000)}k tokens` : ''}</span>
               </Row>
-              <Row label="Budget" hint="Pauses the project at this total; 0 means no budget">
-                <Input type="number" min={0} step={1} value={p.budgetUsd || 0} onChange={(e) => setP({ budgetUsd: e.target.value })} />
-              </Row>
               <SaveBar />
               <h4>By thread</h4>
               <div className="pj-usage">
@@ -386,9 +375,6 @@ export function ProjectSettingsModal({ project, section, setSection, onClose, on
           {section === 'advanced' && (
             <>
               <h3>Advanced</h3>
-              <Row label="Threads running at once">
-                <Input type="number" min={1} max={20} value={p.maxRunning} onChange={(e) => setP({ maxRunning: e.target.value })} />
-              </Row>
               <Row label="Updates" hint={p.proactivity === 'quiet' ? 'The coordinator wakes only for your messages, blockers, questions and errors.' : p.proactivity === 'normal' ? 'Also when threads finish.' : `Also a check-in every ${p.checkInMinutes} minutes when threads changed.`}>
                 <Segmented value={p.proactivity} onChange={(v) => setP({ proactivity: v })} options={[['quiet', 'Quiet'], ['normal', 'Normal'], ['chatty', 'Chatty']]} />
               </Row>

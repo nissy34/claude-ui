@@ -163,7 +163,7 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
   if (m.type === 'user') {
     const c = m.message?.content;
     const text = typeof c === 'string' ? c : (c || []).filter((x) => x.type === 'text').map((x) => x.text).join('\n');
-    note({ prompt: text.slice(0, 4000) });
+    note({ prompt: text.slice(0, 20000) });
     out({ type: 'user', message: m.message, uuid: crypto.randomUUID(), session_id: sessionId, parent_tool_use_id: null });
     queue.push(text);
     drain();
