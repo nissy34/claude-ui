@@ -42,6 +42,7 @@ const MCP_NOTES = path.join(path.dirname(fileURLToPath(import.meta.url)), 'mcp-n
 const MCP_SCHEDULE = path.join(path.dirname(fileURLToPath(import.meta.url)), 'mcp-schedule.js');
 
 /** How a message from another session is introduced to Claude. */
+const INTERRUPT_GRACE_MS = Number(process.env.CW_INTERRUPT_GRACE_MS) || 5000;
 const queueId = () => Math.random().toString(36).slice(2, 10);
 
 function fromLabel(f) {
@@ -547,6 +548,7 @@ export class ChatSession {
       }
       case 'result':
         this.turns = Math.max(0, this.turns - 1);
+        if (this.turns === 0) clearTimeout(this.interruptTimer);
         // Effort changed mid-turn: restart once idle so the next message launches with it.
         // Then deliver messages other sessions sent while this turn ran.
         if (this.turns === 0) this.cancelWait('its turn ended');
@@ -915,14 +917,32 @@ export class ChatSession {
     this.cancelWait('interrupted by the user');
     // Deny anything waiting first, then ask Claude to stop the turn.
     for (const id of [...this.pending.keys()]) this.answerPermission({ reqId: id, behavior: 'deny', message: 'Interrupted by user' });
+    // The CLI can take a long time to honour an interrupt (or never), e.g. while a tool call
+    // (a long Bash command, a hung MCP call) is running. If the turn hasn't ended soon, stop the
+    // process: the conversation is kept and the next message resumes it.
+    const proc = this.proc;
+    clearTimeout(this.interruptTimer);
+    this.interruptTimer = setTimeout(() => this.forceStop(proc), INTERRUPT_GRACE_MS);
+    this.interruptTimer.unref?.();
     try {
-      await this.control({ subtype: 'interrupt' });
+      await this.control({ subtype: 'interrupt' }, INTERRUPT_GRACE_MS);
     } catch {
       // Fall back to a signal if the CLI didn't answer.
       try {
         this.proc?.kill('SIGINT');
       } catch {}
     }
+  }
+
+  /** Stop didn't end the turn in time: end the process and show the turn as interrupted. */
+  forceStop(proc) {
+    if (this.proc !== proc || this.turns === 0) return;
+    this.interrupted = false;
+    this.quietExit = true;
+    this.record({ k: 'result', subtype: 'error_during_execution', isError: true, text: 'Interrupted', cost: 0 });
+    // Send now (or queued messages) were waiting for this turn to end: send them on a fresh process.
+    proc.once('exit', () => setTimeout(() => this.flushInbox(), 200));
+    this.stop();
   }
 
   // ---------- MCP sign-in (OAuth): shared methods in mcp-admin.js (mcpAuthMethods) ----------
