@@ -9,6 +9,7 @@ import Composer from './Composer.jsx';
 import QuoteReply from './QuoteReply.jsx';
 import { splitQuote } from './quote.js';
 import Linkify from './Linkify.jsx';
+import { MentionText, chatToken } from './mentions.jsx';
 import { getPrefs } from '../prefs.js';
 import SidePanel from './SidePanel.jsx';
 import { isLive as taskLive, BackgroundPill } from './BackgroundTasks.jsx';
@@ -96,7 +97,12 @@ const ROLE_NAME = { child: 'child chat', parent: 'parent chat' };
 const KIND_NAME = { question: 'Question from', reply: 'Reply from' };
 
 /** A message waiting for the current turn to end, shown in the chat like Claude Desktop does. */
-function QueuedMessage({ item, busy, onNow, onEdit, onRemove, onOpen }) {
+// Chats a message mentioned: its refs (id + name as sent) first, then the chats that exist now.
+const withRefs = (chats, refs) => (refs?.length ? [...refs, ...(chats || [])] : chats);
+// Refs whose @chat: token isn't in the text (shown as a row under the bubble instead of inline).
+const offText = (refs, text) => (refs || []).filter((r) => !r.name || !String(text || '').includes('@' + chatToken(r)));
+
+function QueuedMessage({ item, busy, onNow, onEdit, onRemove, onOpen, chats }) {
   const [quoted, body] = splitQuote(splitAttachments(item.text)[0]);
   const [open, setOpen] = useState(false);
   const long = item.text.length > 600 || item.text.split('\n').length > 8;
@@ -120,10 +126,10 @@ function QueuedMessage({ item, busy, onNow, onEdit, onRemove, onOpen }) {
       <div className={`bubble ${long && !open ? 'clamped' : ''}`} onClick={long && !open ? () => setOpen(true) : undefined}>
         {quoted && <div className="bubble-quote">{quoted}</div>}
         {item.images > 0 && <div className="img-note">🖼 {item.images} image{item.images > 1 ? 's' : ''}</div>}
-        <Linkify text={body} />
-        {item.refs?.length > 0 && (
+        <MentionText text={body} chats={withRefs(chats, item.refs)} onOpenChat={onOpen} />
+        {offText(item.refs, body).length > 0 && (
           <div className="attach-row in-bubble">
-            {item.refs.map((r) => (
+            {offText(item.refs, body).map((r) => (
               <span key={r.id} className="attach">
                 💬 {r.name}
               </span>
@@ -153,7 +159,7 @@ function QueuedMessage({ item, busy, onNow, onEdit, onRemove, onOpen }) {
   );
 }
 
-function UserMessage({ item, canEdit, onEdit, onOpen, onFork }) {
+function UserMessage({ item, canEdit, onEdit, onOpen, onFork, chats }) {
   const [full, attached] = splitAttachments(item.text);
   const [quoted, body] = splitQuote(full);
   const [editing, setEditing] = useState(false);
@@ -205,10 +211,10 @@ function UserMessage({ item, canEdit, onEdit, onOpen, onFork }) {
       <div className="bubble">
         {quoted && <div className="bubble-quote">{quoted}</div>}
         {item.images > 0 && <div className="img-note">🖼 {item.images} image{item.images > 1 ? 's' : ''}</div>}
-        <Linkify text={body} />
-        {item.refs?.length > 0 && (
+        <MentionText text={body} chats={withRefs(chats, item.refs)} onOpenChat={onOpen} />
+        {offText(item.refs, body).length > 0 && (
           <div className="attach-row in-bubble">
-            {item.refs.map((r) => (
+            {offText(item.refs, body).map((r) => (
               <span key={r.id} className="attach" title="Claude got this chat's conversation as context">
                 💬 {r.name}
               </span>
@@ -540,6 +546,7 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
     // Handled here: opens the side chat.
     return [{ name: 'btw', description: 'Ask a side question without adding it to the conversation (Ctrl/⌘ ;)', argumentHint: '<question>' }, ...list];
   }, [meta.commandInfo, meta.commands]);
+  const chatList = useMemo(() => sessions.filter((x) => x.kind === 'chat'), [sessions]);
   const mentionable = useMemo(() => sessions.filter((x) => x.kind === 'chat' && x.id !== session.id && !x.archived).sort((a, b) => b.lastActivity - a.lastActivity), [sessions, session.id]);
   const lastError = [...items].reverse().find((i) => i.type === 'error' || i.type === 'result');
   const authProblem = lastError && (lastError.type === 'error' || lastError.isError) && AUTH_RE.test(lastError.text || '');
@@ -806,7 +813,7 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
                   case 'group':
                     return <ToolGroup key={it.key} tools={it.tools} cwd={meta.cwd} />;
                   case 'user':
-                    return <UserMessage key={`u${it.index}`} item={it} canEdit={!busy && conn === 'open' && !it.from} onEdit={(index, text) => send({ t: 'edit', index, text })} onFork={busy ? null : fork} onOpen={(id) => sessions?.some((x) => x.id === id) && onSelect?.(id)} />;
+                    return <UserMessage key={`u${it.index}`} item={it} canEdit={!busy && conn === 'open' && !it.from} onEdit={(index, text) => send({ t: 'edit', index, text })} onFork={busy ? null : fork} onOpen={(id) => sessions?.some((x) => x.id === id) && onSelect?.(id)} chats={chatList} />;
                   case 'text':
                     return (
                       <div key={it.key || n} className="msg assistant">
@@ -912,6 +919,7 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
                     setInsert({ text: q.text, key: q.id });
                   }}
                   onOpen={(id) => sessions?.some((x) => x.id === id) && onSelect?.(id)}
+                  chats={chatList}
                 />
               ))}
             </div>

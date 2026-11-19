@@ -273,6 +273,18 @@
 .composer:focus-within { border-color: var(--line-strong); }
 .composer textarea { width: 100%; resize: none; border: 0; outline: none; background: transparent; font-size: var(--fs-lg); line-height: 1.5; max-height: 260px; padding: var(--sp-0) 0; }
 .composer textarea::placeholder { color: var(--muted); }
+/* @-mentions: chips in the composer and in sent messages (web/src/chat/mentions.jsx) */
+.mention-input { width: 100%; border: 0; outline: none; background: transparent; font-size: var(--fs-lg); line-height: 1.5; max-height: 260px; min-height: calc(1.5em + 4px); overflow-y: auto; padding: var(--sp-0) 0; white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere; color: var(--text); cursor: text; }
+.mention-input.empty::before { content: attr(data-placeholder); color: var(--muted); pointer-events: none; position: absolute; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: calc(100% - 2 * var(--sp-4)); }
+.mention { display: inline-flex; align-items: center; gap: 4px; max-width: min(280px, 100%); vertical-align: -3px; margin: 0 1px; padding: 0 7px 0 5px; height: 1.45em; line-height: 1.45em; font-size: .9em; font-weight: var(--fw-medium); color: var(--text-2); background: var(--panel-2); border: 1px solid var(--line); border-radius: var(--r-sm); white-space: nowrap; user-select: all; -webkit-user-select: all; font-family: inherit; cursor: default; }
+.mention .mention-label { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.mention .mention-ico { flex: none; color: var(--muted); }
+.mention.chat .mention-ico { color: var(--accent); }
+.mention.folder .mention-ico { color: var(--blue); }
+.mention-input .mention::selection, .mention-input .mention *::selection { background: transparent; }
+.msg.user .bubble .mention { background: var(--panel); vertical-align: -2px; }
+button.mention { cursor: pointer; }
+button.mention:hover { border-color: var(--line-strong); background: var(--hover); }
 .composer-bar { display: flex; align-items: center; gap: var(--sp-1h); margin-top: 8px; }
 .chip { background: transparent; border: 1px solid var(--line); border-radius: var(--r-md); height: 30px; padding: 0 var(--sp-2h); font-size: var(--fs-sm); color: var(--text-2); white-space: nowrap; display: inline-flex; align-items: center; gap: 5px; }
 .chip:hover { background: var(--hover); }
@@ -334,7 +346,7 @@
   .messages-inner { padding: var(--sp-2h) var(--sp-3h) var(--sp-5); }
   .composer-wrap { padding: 0 var(--sp-2) var(--sp-2); padding-bottom: max(8px, env(safe-area-inset-bottom)); }
   .composer { border-radius: var(--r-3xl); padding: var(--sp-2h) var(--sp-2h) var(--sp-2) var(--sp-3h); }
-  .composer textarea { font-size: 16px; }
+  .composer textarea, .mention-input { font-size: 16px; }
   .footer-info { font-size: var(--fs-2xs); }
   .welcome { margin-top: 8vh; }
   .welcome h2 { font-size: 25px; }
