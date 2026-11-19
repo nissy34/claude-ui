@@ -888,3 +888,17 @@ kbd { display: inline-block; font: 11.5px var(--mono); background: var(--panel-2
 @media (max-width: 600px) {
   .env-folder .ef-git { display: none; }
 }
+
+/* Opening a chat: placeholder transcript until its history arrives. */
+.chat-loading { display: flex; flex-direction: column; gap: 18px; padding-top: 8px; }
+.chat-loading-label { display: flex; align-items: center; gap: 8px; justify-content: center; color: var(--muted); font-size: 13px; }
+.chat-loading .sk-user { align-self: flex-end; width: min(60%, 420px); background: var(--panel-2); border-radius: 16px; padding: 14px 15px; display: flex; justify-content: flex-end; }
+.chat-loading .sk-assistant { display: flex; flex-direction: column; gap: 10px; }
+.chat-loading .sk-tool { height: 38px; width: min(70%, 460px); border: 1px solid var(--line); border-radius: 10px; }
+.chat-loading .sk-bar { display: block; height: 12px; border-radius: 6px; background: var(--line); }
+.chat-loading .sk-user .sk-bar { background: var(--line-strong); opacity: .6; }
+.chat-loading .sk-bar, .chat-loading .sk-tool { animation: pulse 1.4s ease-in-out infinite; }
+.chat-loading .sk-user + .sk-assistant .sk-bar { animation-delay: .15s; }
+@media (prefers-reduced-motion: reduce) { .chat-loading .sk-bar, .chat-loading .sk-tool { animation: none; } }
+.show-earlier { align-self: center; background: none; border: 1px solid var(--line); border-radius: 999px; padding: 4px 12px; font-size: 12px; color: var(--muted); }
+.show-earlier:hover { color: var(--text); border-color: var(--line-strong); }

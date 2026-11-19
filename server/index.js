@@ -1071,7 +1071,13 @@ if (fs.existsSync(distDir)) {
 
 // ---------- websocket ----------
 const server = http.createServer(app);
-const wss = new WebSocketServer({ noServer: true, maxPayload: 32 << 20 }); // room for pasted images
+// Compress big messages only (the history sent when a chat opens can be megabytes of JSON, which
+// shrinks ~10x); streaming deltas stay uncompressed. Level 1 keeps CPU low on small hosts.
+const wss = new WebSocketServer({
+  noServer: true,
+  maxPayload: 32 << 20, // room for pasted images
+  perMessageDeflate: { threshold: 16 * 1024, zlibDeflateOptions: { level: 1 }, serverNoContextTakeover: true, clientNoContextTakeover: true },
+});
 
 function originOk(req) {
   const origin = req.headers.origin;
