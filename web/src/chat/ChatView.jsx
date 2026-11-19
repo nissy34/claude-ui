@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { api, wsUrl } from '../api.js';
+import ArtifactsGallery from '../ArtifactsGallery.jsx';
 import { buildItems, lastTodos, isPublishTool, publishedPath, publishedTitle } from './model.js';
 import { renderMarkdown } from './markdown.js';
 import ToolCard, { Todos, ToolGroup } from './ToolCard.jsx';
@@ -357,6 +358,7 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
   const moreRef = useRef(null);
   useDismiss(menu, () => setMenu(false), moreRef);
   const [info, setInfo] = useState(false);
+  const [gallery, setGallery] = useState(false);
   const [terminal, setTerminal] = useState(false);
   const [inbox, setInbox] = useState([]);
   const [waitingOn, setWaitingOn] = useState(null);
@@ -764,6 +766,7 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
                     <button onClick={() => (setMenu(false), openPanel('tasks'))}>
                       Background tasks{liveTasks.length > 0 && <span className="count menu-count">{liveTasks.length}</span>}
                     </button>
+                    <button onClick={() => (setMenu(false), setGallery(true))}>Artifacts in this chat</button>
                     <button onClick={() => (setMenu(false), setInfo(true))}>Session info and usage</button>
                     <button onClick={openTui}>Open in Claude's terminal</button>
                     <button onClick={rename}>Rename</button>
@@ -1041,6 +1044,23 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
           />
         )}
         {info && <InfoDialog meta={meta} onClose={() => setInfo(false)} onSignIn={signIn} />}
+        {gallery && (
+          <ArtifactsGallery
+            sessionId={session.id}
+            sessionName={meta.name}
+            onClose={() => setGallery(false)}
+            onError={onError}
+            onOpen={(a) => {
+              setGallery(false);
+              if (a.sessionId === session.id) ctx.openArtifact(a.path, a.title);
+              else location.hash = `s=${a.sessionId}&a=${encodeURIComponent(a.path)}`;
+            }}
+            onOpenChat={(a) => {
+              setGallery(false);
+              onSelect(a.sessionId);
+            }}
+          />
+        )}
       </div>
     </ChatCtx.Provider>
   );

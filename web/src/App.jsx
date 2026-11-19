@@ -244,6 +244,10 @@ export default function App() {
             location.hash = `s=${a.sessionId}&a=${encodeURIComponent(a.path)}`;
             setActiveId(a.sessionId);
           }}
+          onOpenChat={(a) => {
+            setDialog(null);
+            select(a.sessionId);
+          }}
         />
       )}
       {dialog?.type === 'scheduled' && (

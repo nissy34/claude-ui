@@ -480,6 +480,16 @@
 .art-thumb iframe { position: absolute; top: 0; left: 0; width: 400%; height: 400%; transform: scale(.25); transform-origin: 0 0; border: 0; pointer-events: none; background: #fff; }
 .art-tile-meta { padding: 9px 11px; display: flex; flex-direction: column; gap: var(--sp-0); font-size: var(--fs-md); min-width: 0; }
 .art-tile-meta b { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.art-tile-meta .art-chat { font-size: var(--fs-xs); text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; text-align: left; }
+.art-tile-meta .art-chat:hover { color: var(--accent); text-decoration: underline; }
+.modal-head .art-scope { flex: none; }
+@media (max-width: 640px) {
+  .art-head { flex-wrap: wrap; }
+  .art-head .mtitle { flex: 1; }
+  .art-head .art-scope { order: 2; }
+  .art-head > button:last-child { order: 3; }
+  .art-head .search-in { order: 4; flex: 1 1 100%; min-width: 0; }
+}
 .art-tile-meta .muted { font-size: var(--fs-xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* composer + menu, usage popover */
