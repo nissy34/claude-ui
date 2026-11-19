@@ -130,3 +130,10 @@
   .pj .topbar .title { display: none; }
   .pj-tabs { margin-left: auto; }
 }
+.pj-memrow { display: flex; align-items: center; gap: var(--sp-3); padding: var(--sp-2h) var(--sp-3); }
+.pj-memrow .pj-thread-title { flex: none; max-width: 45%; text-decoration: none; color: var(--text); }
+.pj-memrow .pj-memdesc { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pj-memrow > :last-child { margin-left: auto; }
+.pj-memfile { padding: var(--sp-3) var(--sp-4); display: flex; flex-direction: column; gap: var(--sp-2); }
+.pj-overview-bar .spacer { flex: 1; }
+@media (max-width: 860px) { .pj-tabs button { padding: 5px var(--sp-2); } .pj-memrow .pj-memdesc { display: none; } }

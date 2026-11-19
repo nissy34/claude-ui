@@ -3,12 +3,15 @@ import { api, timeAgo } from '../api.js';
 import { Button, IconButton, Input, Modal, ModalBody, ModalFoot, ModalHead, Pill, Segmented, Spinner, Textarea } from '../ui/index.jsx';
 import { DecisionCard, Md, StatusPill, ThreadCard } from './ProjectCards.jsx';
 import ProjectSettings from './ProjectSettings.jsx';
+import { ProjectLibrary, ProjectMemory } from './ProjectFiles.jsx';
 import { STATUS_LABEL, STATUS_ORDER, useProject } from './useProject.js';
 import './project.css';
 
 const TABS = [
   ['chat', 'Chat'],
   ['overview', 'Overview'],
+  ['memory', 'Memory'],
+  ['library', 'Library'],
   ['settings', 'Settings'],
 ];
 
@@ -67,6 +70,8 @@ export default function ProjectView({ projectId, tab: initialTab, onSelect, onMe
       {project.limit && <div className="pj-banner">Usage limit reached. Work continues automatically at {new Date(project.limit.until).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}.</div>}
       {tab === 'chat' && <ProjectChat project={project} onSelect={onSelect} onError={onError} reload={reload} />}
       {tab === 'overview' && <Overview project={project} onSelect={onSelect} onError={onError} reload={reload} />}
+      {tab === 'memory' && <ProjectMemory project={project} onError={onError} />}
+      {tab === 'library' && <ProjectLibrary project={project} onError={onError} />}
       {tab === 'settings' && <ProjectSettings project={project} onSelect={onSelect} onError={onError} reload={reload} onDeleted={onDeleted} projects={projects} />}
     </div>
   );
