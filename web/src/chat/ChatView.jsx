@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { api, wsUrl } from '../api.js';
-import { buildItems, lastTodos } from './model.js';
+import { buildItems, lastTodos, isPublishTool, publishedPath, publishedTitle } from './model.js';
 import { renderMarkdown } from './markdown.js';
 import ToolCard, { Todos, ToolGroup } from './ToolCard.jsx';
 import Permission from './Permission.jsx';
@@ -351,6 +351,8 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
   const [wide, setWide] = useState(false);
   const [changesKey, setChangesKey] = useState(0);
   const pendingArtifacts = useRef(new Map());
+  // Published artifacts' titles, for their side panel tabs (three report.html tabs look alike).
+  const [artTitles, setArtTitles] = useState({});
   const [menu, setMenu] = useState(false);
   const moreRef = useRef(null);
   useDismiss(menu, () => setMenu(false), moreRef);
@@ -426,11 +428,13 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
             if (/^mcp__browser__(navigate|click|type)$/.test(name)) ctxRef.current?.openBrowser();
             // Opened once the file is written: before that (e.g. while asking permission) the page doesn't exist yet.
             else if (name === 'Write' && /\.(html?|svg)$/i.test(input?.file_path || '')) pendingArtifacts.current.set(e.block.id, input.file_path);
+            // publish_artifact: the path is in its result (content is saved to a file by the server).
+            else if (isPublishTool(name)) pendingArtifacts.current.set(e.block.id, null);
           }
           if (e.k === 'tool_result' && pendingArtifacts.current.has(e.toolUseId)) {
-            const file = pendingArtifacts.current.get(e.toolUseId);
+            const file = pendingArtifacts.current.get(e.toolUseId) || publishedPath(e.text);
             pendingArtifacts.current.delete(e.toolUseId);
-            if (!e.isError) setTimeout(() => ctxRef.current?.openArtifact(file), 200);
+            if (!e.isError && file) setTimeout(() => ctxRef.current?.openArtifact(file, publishedTitle(e.text)), 200);
           }
           if (e.k === 'block' || e.k === 'result') {
             setDeltas((d) => {
@@ -593,9 +597,10 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
         setFiles((f) => (f.includes(rel) ? f : [...f, rel].slice(-6)));
         openPanel(rel);
       },
-      openArtifact: (p) => {
+      openArtifact: (p, title) => {
         const abs = /^([a-zA-Z]:)?[\\/]/.test(p) ? p : `${meta.cwd}/${p}`;
         const key = 'art:' + abs;
+        if (title) setArtTitles((t) => (t[key] === title ? t : { ...t, [key]: title }));
         setFiles((f) => (f.includes(key) ? f : [...f, key].slice(-6)));
         openPanel(key);
       },
@@ -1012,6 +1017,7 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
             sessionId={session.id}
             tab={panel}
             files={files}
+            titles={artTitles}
             onTab={setPanel}
             onCloseFile={(f) => {
               setFiles((list) => list.filter((x) => x !== f));

@@ -6,7 +6,7 @@ import { IconButton, Modal } from './ui/index.jsx';
 const LABEL = { html: 'Web page', image: 'Image', markdown: 'Document', pdf: 'PDF', csv: 'Table' };
 const ICON = { html: '◰', image: '▣', markdown: '¶', pdf: '▤', csv: '▦' };
 
-// Every page, dashboard, image and document Claude has written, across all chats.
+// Every page, dashboard, image and document Claude has written or published, across all chats.
 export default function ArtifactsGallery({ onClose, onOpen, onError }) {
   const [list, setList] = useState(null);
   const [q, setQ] = useState('');
@@ -17,7 +17,7 @@ export default function ArtifactsGallery({ onClose, onOpen, onError }) {
       .catch((e) => (setList([]), onError(e)));
   }, [onError]);
   const shown = useMemo(
-    () => (list || []).filter((a) => (!kind || artifactKind(a.path) === kind) && (!q || `${a.name} ${a.sessionName} ${a.path}`.toLowerCase().includes(q.toLowerCase()))),
+    () => (list || []).filter((a) => (!kind || artifactKind(a.path) === kind) && (!q || `${a.title || ''} ${a.name} ${a.sessionName} ${a.path}`.toLowerCase().includes(q.toLowerCase()))),
     [list, q, kind]
   );
   return (
@@ -39,7 +39,7 @@ export default function ArtifactsGallery({ onClose, onOpen, onError }) {
       </div>
       <div className="modal-body">
         {!list && <div className="muted">Loading…</div>}
-        {list && shown.length === 0 && <div className="empty-box">{list.length ? 'No matches.' : 'Nothing yet. When Claude writes a web page, dashboard, image, Markdown document, PDF or CSV, it shows up here.'}</div>}
+        {list && shown.length === 0 && <div className="empty-box">{list.length ? 'No matches.' : 'Nothing yet. When Claude writes or publishes a web page, dashboard, image, Markdown document, PDF or CSV, it shows up here.'}</div>}
         <div className="art-grid">
           {shown.map((a) => {
             const k = artifactKind(a.path);
@@ -49,7 +49,7 @@ export default function ArtifactsGallery({ onClose, onOpen, onError }) {
                   {k === 'image' ? <img src={a.url} alt="" loading="lazy" /> : k === 'html' ? <iframe src={a.url} title={a.name} sandbox="" loading="lazy" tabIndex={-1} /> : <span>{ICON[k]}</span>}
                 </div>
                 <div className="art-tile-meta">
-                  <b>{a.name}</b>
+                  <b>{a.title || a.name}</b>
                   <span className="muted">
                     {LABEL[k]} · {a.sessionName} · {timeAgo(a.mtime)}
                   </span>

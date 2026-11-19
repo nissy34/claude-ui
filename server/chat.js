@@ -38,6 +38,14 @@ import { firstExchange, generateTitle, queueTitle, transcriptTitle } from './cha
 import { bgTaskMethods, isTaskMessage } from './bg-tasks.js';
 const MCP_BROWSER = path.join(path.dirname(fileURLToPath(import.meta.url)), 'mcp-browser.js');
 const MCP_UI = path.join(path.dirname(fileURLToPath(import.meta.url)), 'mcp-ui.js');
+// Chats run inside this web UI, which shows artifacts; skills and habits from other apps
+// expect an "Artifact" tool, so say which tool that is here. (Some CLI logins also have a
+// claude.ai Artifact tool, which publishes to claude.ai instead of this UI.)
+const ARTIFACTS_PROMPT =
+  'You are running inside a self-hosted web UI that shows artifacts next to the chat. To publish a report, page or document for the user, ' +
+  'use mcp__ui__publish_artifact: path for an existing file, or content for new HTML or Markdown. It opens in a side panel next to this chat and on the Artifacts page. ' +
+  'This is the Artifact tool here: use it instead of any claude.ai Artifact tool, unless the user asks for a claude.ai link. ' +
+  'HTML and SVG files you create with the Write tool open there automatically too.';
 const MCP_NOTES = path.join(path.dirname(fileURLToPath(import.meta.url)), 'mcp-notes.js');
 const MCP_SCHEDULE = path.join(path.dirname(fileURLToPath(import.meta.url)), 'mcp-schedule.js');
 
@@ -340,7 +348,7 @@ export class ChatSession {
     if (config.desktopMcp) builtin.notes = { type: 'stdio', command: process.execPath, args: [MCP_NOTES] };
     if (browserAvailable()) builtin.browser = { type: 'stdio', command: process.execPath, args: [MCP_BROWSER] };
     if (Object.keys(builtin).length) args.push('--mcp-config', JSON.stringify({ mcpServers: builtin }));
-    const extra = [builtin.sessions ? this.sessionsPrompt() : '', builtin.notes ? globalNotesPrompt() : ''].filter(Boolean).join('\n\n');
+    const extra = [ARTIFACTS_PROMPT, builtin.sessions ? this.sessionsPrompt() : '', builtin.notes ? globalNotesPrompt() : ''].filter(Boolean).join('\n\n');
     if (extra) args.push('--append-system-prompt', extra);
     // Talking to other chats and looking at the browser page never need a prompt; starting
     // sessions, changing their options, and navigating, clicking and typing still ask.
@@ -348,7 +356,7 @@ export class ChatSession {
     if (builtin.sessions) allowed.push(...['send_to_session', 'read_session', 'list_sessions', 'rename_session'].map((t) => `mcp__sessions__${t}`));
     if (builtin.browser) allowed.push(...['snapshot', 'screenshot', 'console', 'scroll', 'wait_for', 'back', 'reload', 'resize'].map((t) => `mcp__browser__${t}`));
     if (builtin.schedule) allowed.push('mcp__schedule__list_scheduled_tasks');
-    allowed.push('mcp__ui__update_plan');
+    allowed.push('mcp__ui__update_plan', 'mcp__ui__publish_artifact');
     if (builtin.notes) allowed.push(...['list_notes', 'read_note', 'write_note'].map((t) => `mcp__notes__${t}`));
     if (allowed.length) args.push('--allowedTools', allowed.join(','));
     // 'default' is the CLI's normal ask-first mode; newer CLIs call it 'manual', so just omit the flag.
