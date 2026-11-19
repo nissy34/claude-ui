@@ -983,12 +983,14 @@ app.post(
   wrap(async (req, res) => {
     const b = req.body || {};
     const cwd = optCwd(b.cwd);
-    const fn = { add: admin.mcpAdd, remove: admin.mcpRemove, toggle: admin.mcpToggle }[req.params.action];
+    const fn = { add: admin.mcpAdd, update: admin.mcpUpdate, remove: admin.mcpRemove, toggle: admin.mcpToggle }[req.params.action];
     if (!fn) throw new Error('Unknown action');
     res.json(await fn(cwd || config.projectsRoot, b));
   })
 );
 app.get('/api/claude/plugins-full', wrap(async (req, res) => res.json(await admin.plugins())));
+app.post('/api/claude/plugins/config', wrap(async (req, res) => res.json(await admin.pluginConfigGet(req.body || {}))));
+app.post('/api/claude/plugins/config/save', wrap(async (req, res) => res.json(await admin.pluginConfigSet(req.body || {}))));
 app.post('/api/claude/plugins/action', wrap(async (req, res) => res.json(await admin.pluginAction(req.body || {}))));
 app.post('/api/claude/marketplaces/action', wrap(async (req, res) => res.json(await admin.marketplaceAction(req.body || {}))));
 app.get('/api/claude/skills', wrap(async (req, res) => res.json({ skills: admin.skills(optCwd(req.query.cwd)) })));

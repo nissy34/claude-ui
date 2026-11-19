@@ -46,37 +46,139 @@ function serverSummary(c) {
   return [c.command, ...(c.args || [])].join(' ');
 }
 
-function AddServer({ cwd, onDone, onError }) {
-  const [f, setF] = useState({ name: '', transport: 'stdio', command: '', url: '', env: '', headers: '', scope: cwd ? 'local' : 'user' });
+const SECRET_KEY = /pass|secret|token|key|auth|cred|pwd|pin/i;
+const toRows = (obj) => Object.entries(obj || {}).map(([k, v]) => ({ k, v: String(v ?? '') }));
+const fromRows = (rows) => Object.fromEntries(rows.filter((r) => r.k.trim()).map((r) => [r.k.trim(), r.v]));
+const quoteArg = (a) => (/[\s"']/.test(a) ? (a.includes('"') ? `'${a}'` : `"${a}"`) : a);
+const b64 = (txt) => btoa(String.fromCharCode(...new TextEncoder().encode(txt)));
+const unb64 = (txt) => {
+  try {
+    return new TextDecoder().decode(Uint8Array.from(atob(txt), (c) => c.charCodeAt(0)));
+  } catch {
+    return null;
+  }
+};
+
+// Pull a "Authorization: Basic/Bearer" header out into the sign-in fields so it can be edited as a username + password.
+function splitAuth(headers) {
+  const rows = toRows(headers);
+  const i = rows.findIndex((r) => r.k.toLowerCase() === 'authorization');
+  if (i < 0) return { rows, auth: { kind: 'none', user: '', pass: '', token: '' } };
+  const v = rows[i].v.trim();
+  const basic = /^basic\s+(.+)$/i.exec(v);
+  const bearer = /^bearer\s+(.+)$/i.exec(v);
+  const dec = basic && unb64(basic[1]);
+  if (dec != null && dec.includes(':')) {
+    rows.splice(i, 1);
+    return {
+      rows,
+      auth: {
+        kind: 'basic',
+        user: dec.slice(0, dec.indexOf(':')),
+        pass: dec.slice(dec.indexOf(':') + 1),
+        token: '',
+      },
+    };
+  }
+  if (bearer) {
+    rows.splice(i, 1);
+    return {
+      rows,
+      auth: { kind: 'bearer', user: '', pass: '', token: bearer[1] },
+    };
+  }
+  return { rows, auth: { kind: 'none', user: '', pass: '', token: '' } };
+}
+
+function SecretInput({ value, onChange, placeholder, secret = true, autoComplete }) {
+  const [show, setShow] = useState(false);
+  return (
+    <span className="secret-in">
+      <input type={secret && !show ? 'password' : 'text'} value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} autoComplete={autoComplete || 'off'} spellCheck={false} />
+      <button type="button" className="icon-btn" title={show ? 'Hide' : 'Show'} onClick={() => setShow(!show)} style={secret ? undefined : { visibility: 'hidden' }} tabIndex={secret ? 0 : -1}>
+        {show ? '🙈' : '👁'}
+      </button>
+    </span>
+  );
+}
+
+function KeyValueRows({ rows, onChange, keyPlaceholder, addLabel }) {
+  const upd = (i, patch) => onChange(rows.map((r, j) => (j === i ? { ...r, ...patch } : r)));
+  return (
+    <div className="kv-rows">
+      {rows.map((r, i) => (
+        <div className="kv-row" key={i}>
+          <input value={r.k} onChange={(e) => upd(i, { k: e.target.value })} placeholder={keyPlaceholder} spellCheck={false} />
+          <SecretInput value={r.v} onChange={(v) => upd(i, { v })} placeholder="value" secret={SECRET_KEY.test(r.k)} />
+          <button type="button" className="icon-btn danger" title="Remove" onClick={() => onChange(rows.filter((_, j) => j !== i))}>
+            ✕
+          </button>
+        </div>
+      ))}
+      <button type="button" className="btn small kv-add" onClick={() => onChange([...rows, { k: '', v: '' }])}>
+        + {addLabel}
+      </button>
+    </div>
+  );
+}
+
+function initForm(cwd, edit) {
+  const c = edit?.config || {};
+  const remote = !!c.url;
+  const { rows, auth } = splitAuth(c.headers);
+  return {
+    name: edit?.name || '',
+    transport: remote ? c.type || 'http' : 'stdio',
+    command: remote ? '' : [c.command, ...(c.args || [])].filter(Boolean).map(quoteArg).join(' '),
+    url: c.url || '',
+    env: toRows(c.env),
+    headers: rows,
+    auth,
+    scope: edit?.scope || (cwd ? 'local' : 'user'),
+  };
+}
+
+function ServerForm({ cwd, edit, onDone, onError }) {
+  const [f, setF] = useState(() => initForm(cwd, edit));
   const [busy, setBusy] = useState(false);
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
-  const pairs = (txt, sep) =>
-    Object.fromEntries(
-      txt
-        .split('\n')
-        .map((l) => l.trim())
-        .filter(Boolean)
-        .map((l) => {
-          const i = l.indexOf(sep);
-          return i < 0 ? [l, ''] : [l.slice(0, i).trim(), l.slice(i + 1).trim()];
-        })
-    );
+  const put = (k, v) => setF({ ...f, [k]: v });
+  const setAuth = (patch) => setF({ ...f, auth: { ...f.auth, ...patch } });
   const submit = async (e) => {
     e.preventDefault();
+    // Keep settings this form doesn't show (timeouts, oauth, …) when editing.
+    const { command, args, env, url, headers, type, ...rest } = edit?.config || {};
     let server;
     if (f.transport === 'stdio') {
       const parts = f.command.match(/"[^"]*"|'[^']*'|\S+/g) || [];
       if (!parts.length) return onError(new Error('Enter the command to run'));
-      server = { type: 'stdio', command: parts[0].replace(/^["']|["']$/g, ''), args: parts.slice(1).map((a) => a.replace(/^["']|["']$/g, '')) };
-      if (f.env.trim()) server.env = pairs(f.env, '=');
+      server = {
+        ...rest,
+        type: 'stdio',
+        command: parts[0].replace(/^["']|["']$/g, ''),
+        args: parts.slice(1).map((a) => a.replace(/^["']|["']$/g, '')),
+      };
+      const envObj = fromRows(f.env);
+      if (Object.keys(envObj).length) server.env = envObj;
     } else {
       if (!f.url.trim()) return onError(new Error('Enter the server URL'));
-      server = { type: f.transport, url: f.url.trim() };
-      if (f.headers.trim()) server.headers = pairs(f.headers, ':');
+      server = { ...rest, type: f.transport, url: f.url.trim() };
+      const h = fromRows(f.headers.filter((r) => !(f.auth.kind !== 'none' && r.k.trim().toLowerCase() === 'authorization')));
+      if (f.auth.kind === 'basic') {
+        if (!f.auth.user) return onError(new Error('Enter the username'));
+        h.Authorization = `Basic ${b64(`${f.auth.user}:${f.auth.pass}`)}`;
+      } else if (f.auth.kind === 'bearer') {
+        if (!f.auth.token.trim()) return onError(new Error('Enter the token'));
+        h.Authorization = `Bearer ${f.auth.token.trim()}`;
+      }
+      if (Object.keys(h).length) server.headers = h;
     }
     setBusy(true);
     try {
-      await api('/api/claude/mcp-servers/add', { method: 'POST', body: { cwd, name: f.name.trim(), scope: f.scope, server } });
+      await api(`/api/claude/mcp-servers/${edit ? 'update' : 'add'}`, {
+        method: 'POST',
+        body: { cwd, name: f.name.trim(), scope: f.scope, server },
+      });
       onDone();
     } catch (err) {
       onError(err);
@@ -85,10 +187,11 @@ function AddServer({ cwd, onDone, onError }) {
     }
   };
   return (
-    <form className="add-form" onSubmit={submit}>
+    <form className="add-form" onSubmit={submit} autoComplete="off">
+      {edit && <div className="item-title">Edit {edit.name}</div>}
       <div className="form-grid">
         <label>Name</label>
-        <input value={f.name} onChange={set('name')} placeholder="github" required />
+        <input value={f.name} onChange={set('name')} placeholder="github" required disabled={!!edit} />
         <label>Type</label>
         <select value={f.transport} onChange={set('transport')}>
           <option value="stdio">Local command (stdio)</option>
@@ -98,20 +201,43 @@ function AddServer({ cwd, onDone, onError }) {
         {f.transport === 'stdio' ? (
           <>
             <label>Command</label>
-            <input value={f.command} onChange={set('command')} placeholder="npx -y @modelcontextprotocol/server-filesystem /path" />
-            <label>Environment</label>
-            <textarea rows={2} value={f.env} onChange={set('env')} placeholder={'API_KEY=…\nOne per line'} />
+            <input value={f.command} onChange={set('command')} placeholder="npx -y @modelcontextprotocol/server-filesystem /path" spellCheck={false} />
+            <label className="top">Environment</label>
+            <div>
+              <KeyValueRows rows={f.env} onChange={(v) => put('env', v)} keyPlaceholder="USERNAME" addLabel="Add variable" />
+              <div className="muted form-hint">Usernames, passwords and API keys the server reads from its environment. Values for names like PASSWORD or TOKEN are hidden.</div>
+            </div>
           </>
         ) : (
           <>
             <label>URL</label>
-            <input value={f.url} onChange={set('url')} placeholder="https://mcp.example.com/mcp" />
-            <label>Headers</label>
-            <textarea rows={2} value={f.headers} onChange={set('headers')} placeholder={'Authorization: Bearer …\nOne per line'} />
+            <input value={f.url} onChange={set('url')} placeholder="https://mcp.example.com/mcp" spellCheck={false} />
+            <label>Sign-in</label>
+            <select value={f.auth.kind} onChange={(e) => setAuth({ kind: e.target.value })}>
+              <option value="none">None, or OAuth in a browser</option>
+              <option value="basic">Username and password</option>
+              <option value="bearer">API key / bearer token</option>
+            </select>
+            {f.auth.kind === 'basic' && (
+              <>
+                <label>Username</label>
+                <input value={f.auth.user} onChange={(e) => setAuth({ user: e.target.value })} autoComplete="off" spellCheck={false} />
+                <label>Password</label>
+                <SecretInput value={f.auth.pass} onChange={(pass) => setAuth({ pass })} autoComplete="new-password" />
+              </>
+            )}
+            {f.auth.kind === 'bearer' && (
+              <>
+                <label>Token</label>
+                <SecretInput value={f.auth.token} onChange={(token) => setAuth({ token })} />
+              </>
+            )}
+            <label className="top">Headers</label>
+            <KeyValueRows rows={f.headers} onChange={(v) => put('headers', v)} keyPlaceholder="X-Api-Key" addLabel="Add header" />
           </>
         )}
         <label>Available in</label>
-        <select value={f.scope} onChange={set('scope')}>
+        <select value={f.scope} onChange={set('scope')} disabled={!!edit}>
           <option value="user">All projects (user)</option>
           <option value="local" disabled={!cwd}>
             This project, just me (local)
@@ -126,10 +252,13 @@ function AddServer({ cwd, onDone, onError }) {
           Cancel
         </button>
         <button className="btn small primary" disabled={busy}>
-          {busy ? 'Adding…' : 'Add server'}
+          {busy ? 'Saving…' : edit ? 'Save' : 'Add server'}
         </button>
       </div>
-      <p className="muted set-note">Servers that need a browser sign-in (OAuth) can be signed in under Logins below, or from a chat’s + menu under Connectors.</p>
+      <p className="muted set-note">
+        Saved in Claude Code’s own config ({f.scope === 'project' ? '.mcp.json in the project, which may be committed' : '~/.claude.json'}
+        ), the same place `claude mcp add` writes. Servers that need a browser sign-in (OAuth) can be signed in under Logins below, or from a chat’s + menu under Connectors.
+      </p>
     </form>
   );
 }
@@ -138,6 +267,7 @@ export function McpTab({ projects, activeCwd, onError }) {
   const [cwd, setCwd] = useState(activeCwd || '');
   const [data, setData] = useState(null);
   const [adding, setAdding] = useState(false);
+  const [editing, setEditing] = useState(null);
   const load = () =>
     api(`/api/claude/mcp-servers${cwd ? `?cwd=${encodeURIComponent(cwd)}` : ''}`)
       .then(setData)
@@ -147,23 +277,30 @@ export function McpTab({ projects, activeCwd, onError }) {
     load();
   }, [cwd]); // eslint-disable-line react-hooks/exhaustive-deps
   const [busy, run] = useAction(onError, load);
-  const post = (action, body) => api(`/api/claude/mcp-servers/${action}`, { method: 'POST', body: { cwd, ...body } });
+  const post = (action, body) =>
+    api(`/api/claude/mcp-servers/${action}`, {
+      method: 'POST',
+      body: { cwd, ...body },
+    });
   return (
     <>
       <div className="tab-top">
         <ProjectPicker projects={projects} value={cwd} onChange={setCwd} />
-        {!adding && (
+        {!adding && !editing && (
           <button className="btn small primary" onClick={() => setAdding(true)}>
             + Add server
           </button>
         )}
       </div>
-      {adding && (
-        <AddServer
+      {(adding || editing) && (
+        <ServerForm
+          key={editing ? editing.scope + editing.name : 'new'}
           cwd={cwd}
+          edit={editing}
           onError={onError}
           onDone={() => {
             setAdding(false);
+            setEditing(null);
             load();
           }}
         />
@@ -187,10 +324,17 @@ export function McpTab({ projects, activeCwd, onError }) {
             <Toggle value={s.enabled} disabled={!cwd || busy === s.name} onChange={(v) => run(s.name, () => post('toggle', { name: s.name, enabled: v }))} />
             <button
               className="icon-btn"
-              title="Remove"
-              disabled={busy === s.name}
-              onClick={() => window.confirm(`Remove the MCP server "${s.name}" (${s.scope})?`) && run(s.name, () => post('remove', { name: s.name, scope: s.scope }))}
+              title="Edit: command, URL, username and password, environment, headers"
+              disabled={busy === s.name || (s.scope !== 'user' && !cwd)}
+              onClick={() => {
+                setAdding(false);
+                setEditing(s);
+                window.scrollTo?.({ top: 0, behavior: 'smooth' });
+              }}
             >
+              ✎
+            </button>
+            <button className="icon-btn" title="Remove" disabled={busy === s.name} onClick={() => window.confirm(`Remove the MCP server "${s.name}" (${s.scope})?`) && run(s.name, () => post('remove', { name: s.name, scope: s.scope }))}>
               🗑
             </button>
           </div>
@@ -203,12 +347,108 @@ export function McpTab({ projects, activeCwd, onError }) {
   );
 }
 
+// ---------- plugin options (userConfig: usernames, passwords, … a plugin's MCP servers use) ----------
+function PluginConfig({ id, onDone, onError }) {
+  const [cfg, setCfg] = useState(null);
+  const [vals, setVals] = useState({});
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    api('/api/claude/plugins/config', { method: 'POST', body: { id } })
+      .then((c) => (setCfg(c), setVals({ ...(c.inputs || {}) })))
+      .catch((e) => (onError(e), onDone()));
+  }, [id]); // eslint-disable-line react-hooks/exhaustive-deps
+  if (!cfg) return <div className="muted set-note">Loading options…</div>;
+  const configured = new Set(cfg.configured || []);
+  const save = async (e) => {
+    e.preventDefault();
+    const changed = {};
+    for (const [k, def] of Object.entries(cfg.schema || {})) {
+      const v = vals[k] ?? '';
+      // Saved secrets are never shown, so an empty secret box means "keep it".
+      if (def.sensitive ? v !== '' : v !== (cfg.inputs?.[k] ?? '')) changed[k] = v;
+    }
+    setBusy(true);
+    try {
+      await api('/api/claude/plugins/config/save', {
+        method: 'POST',
+        body: { id, values: changed },
+      });
+      onDone(true);
+    } catch (err) {
+      onError(err);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <form className="add-form plugin-config" onSubmit={save} autoComplete="off">
+      <div className="item-title">Options for {cfg.displayName || id}</div>
+      <div className="form-grid">
+        {Object.entries(cfg.schema || {}).map(([k, def]) => {
+          const v = vals[k] ?? '';
+          const set = (x) => setVals({ ...vals, [k]: x });
+          const choices = cfg.choices?.[k];
+          let input;
+          if (def.type === 'boolean') input = <input type="checkbox" checked={v === 'true' || v === true} onChange={(e) => set(String(e.target.checked))} style={{ justifySelf: 'start' }} />;
+          else if (Array.isArray(choices) && choices.length)
+            input = (
+              <select value={v} onChange={(e) => set(e.target.value)}>
+                <option value="">{def.default != null ? `Default (${def.default})` : 'Not set'}</option>
+                {choices.map((c) => {
+                  const val = typeof c === 'object' ? c.value : c;
+                  return (
+                    <option key={val} value={val}>
+                      {typeof c === 'object' ? c.label || val : c}
+                    </option>
+                  );
+                })}
+              </select>
+            );
+          else if (def.sensitive) input = <SecretInput value={v} onChange={set} autoComplete="new-password" placeholder={configured.has(k) ? 'Saved. Type to replace' : 'Not set'} />;
+          else
+            input = (
+              <input
+                type={def.type === 'number' ? 'number' : 'text'}
+                value={v}
+                onChange={(e) => set(e.target.value)}
+                placeholder={def.default != null ? `Default: ${def.default}` : def.type === 'directory' ? 'Folder path' : def.type === 'file' ? 'File path' : ''}
+                spellCheck={false}
+              />
+            );
+          return (
+            <React.Fragment key={k}>
+              <label className="top" title={k}>
+                {def.title || k}
+                {def.required && !configured.has(k) && <span className="req"> *</span>}
+              </label>
+              <div>
+                {input}
+                {def.description && <div className="muted form-hint">{def.description}</div>}
+              </div>
+            </React.Fragment>
+          );
+        })}
+      </div>
+      <div className="row end">
+        <button type="button" className="btn small" onClick={() => onDone()}>
+          Cancel
+        </button>
+        <button className="btn small primary" disabled={busy}>
+          {busy ? 'Saving…' : 'Save'}
+        </button>
+      </div>
+      <p className="muted set-note">Saved by Claude Code itself: passwords and other secret options go to its secure storage, the rest to your user settings. The plugin’s MCP servers pick them up in new chats, or after a chat restarts.</p>
+    </form>
+  );
+}
+
 // ---------- plugins ----------
 export function PluginsTab({ onError }) {
   const [data, setData] = useState(null);
   const [q, setQ] = useState('');
   const [view, setView] = useState('installed');
   const [mkt, setMkt] = useState('');
+  const [configuring, setConfiguring] = useState('');
   const load = () =>
     api('/api/claude/plugins-full')
       .then(setData)
@@ -217,7 +457,13 @@ export function PluginsTab({ onError }) {
     load();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const [busy, run] = useAction(onError, load);
-  const act = (action, id, scope) => run(id, () => api('/api/claude/plugins/action', { method: 'POST', body: { action, id, scope } }));
+  const act = (action, id, scope) =>
+    run(id, () =>
+      api('/api/claude/plugins/action', {
+        method: 'POST',
+        body: { action, id, scope },
+      })
+    );
   const installedIds = new Set((data?.installed || []).map((p) => p.pluginId || p.id || p.name));
   const shown = useMemo(() => {
     const list = view === 'installed' ? data?.installed || [] : (data?.available || []).filter((p) => !installedIds.has(p.pluginId));
@@ -250,7 +496,12 @@ export function PluginsTab({ onError }) {
             className="row"
             onSubmit={(e) => {
               e.preventDefault();
-              run('mkt', () => api('/api/claude/marketplaces/action', { method: 'POST', body: { action: 'add', source: mkt } })).then((ok) => ok && setMkt(''));
+              run('mkt', () =>
+                api('/api/claude/marketplaces/action', {
+                  method: 'POST',
+                  body: { action: 'add', source: mkt },
+                })
+              ).then((ok) => ok && setMkt(''));
             }}
           >
             <input className="search-in" style={{ flex: 1 }} value={mkt} onChange={(e) => setMkt(e.target.value)} placeholder="owner/repo, git URL or local path" />
@@ -267,10 +518,33 @@ export function PluginsTab({ onError }) {
                     <div className="item-title">{name}</div>
                     <div className="item-sub">{m.source ? JSON.stringify(m.source) : m.url || m.path || ''}</div>
                   </div>
-                  <button className="btn small" disabled={!!busy} onClick={() => run(name, () => api('/api/claude/marketplaces/action', { method: 'POST', body: { action: 'update', name } }))}>
+                  <button
+                    className="btn small"
+                    disabled={!!busy}
+                    onClick={() =>
+                      run(name, () =>
+                        api('/api/claude/marketplaces/action', {
+                          method: 'POST',
+                          body: { action: 'update', name },
+                        })
+                      )
+                    }
+                  >
                     Update
                   </button>
-                  <button className="icon-btn" title="Remove" onClick={() => window.confirm(`Remove marketplace ${name}?`) && run(name, () => api('/api/claude/marketplaces/action', { method: 'POST', body: { action: 'remove', name } }))}>
+                  <button
+                    className="icon-btn"
+                    title="Remove"
+                    onClick={() =>
+                      window.confirm(`Remove marketplace ${name}?`) &&
+                      run(name, () =>
+                        api('/api/claude/marketplaces/action', {
+                          method: 'POST',
+                          body: { action: 'remove', name },
+                        })
+                      )
+                    }
+                  >
                     🗑
                   </button>
                 </div>
@@ -285,30 +559,49 @@ export function PluginsTab({ onError }) {
           {shown.map((p) => {
             const id = p.pluginId || p.id || p.name;
             const enabled = p.enabled !== false;
+            const unset = p.unconfigured?.length || 0;
             return (
-              <div key={id + (p.scope || '')} className="item">
-                <div className="item-main">
-                  <div className="item-title">
-                    {p.name || id} {p.version && <span className="tag">v{p.version}</span>} {p.scope && <span className="tag">{p.scope}</span>}
+              <React.Fragment key={id + (p.scope || '')}>
+                <div className="item">
+                  <div className="item-main">
+                    <div className="item-title">
+                      {p.name || id} {p.version && <span className="tag">v{p.version}</span>} {p.scope && <span className="tag">{p.scope}</span>}
+                      {view === 'installed' && unset > 0 && <span className="tag warn">{unset === 1 ? '1 option not set' : `${unset} options not set`}</span>}
+                    </div>
+                    <div className="item-sub wrap">{p.description || id}</div>
                   </div>
-                  <div className="item-sub wrap">{p.description || id}</div>
+                  {view === 'installed' ? (
+                    <>
+                      {p.hasUserConfig && (
+                        <button className={`btn small ${unset ? 'primary' : ''}`} disabled={busy === id} onClick={() => setConfiguring(configuring === id ? '' : id)}>
+                          Configure
+                        </button>
+                      )}
+                      <Toggle value={enabled} disabled={busy === id} onChange={(v) => act(v ? 'enable' : 'disable', id, p.scope)} />
+                      <button className="btn small" disabled={busy === id} onClick={() => act('update', id)}>
+                        Update
+                      </button>
+                      <button className="icon-btn" title="Uninstall" disabled={busy === id} onClick={() => window.confirm(`Uninstall ${p.name || id}?`) && act('uninstall', id, p.scope)}>
+                        🗑
+                      </button>
+                    </>
+                  ) : (
+                    <button className="btn small primary" disabled={busy === id} onClick={() => act('install', id, 'user')}>
+                      {busy === id ? 'Installing…' : 'Install'}
+                    </button>
+                  )}
                 </div>
-                {view === 'installed' ? (
-                  <>
-                    <Toggle value={enabled} disabled={busy === id} onChange={(v) => act(v ? 'enable' : 'disable', id, p.scope)} />
-                    <button className="btn small" disabled={busy === id} onClick={() => act('update', id)}>
-                      Update
-                    </button>
-                    <button className="icon-btn" title="Uninstall" disabled={busy === id} onClick={() => window.confirm(`Uninstall ${p.name || id}?`) && act('uninstall', id, p.scope)}>
-                      🗑
-                    </button>
-                  </>
-                ) : (
-                  <button className="btn small primary" disabled={busy === id} onClick={() => act('install', id, 'user')}>
-                    {busy === id ? 'Installing…' : 'Install'}
-                  </button>
+                {view === 'installed' && configuring === id && (
+                  <PluginConfig
+                    id={id}
+                    onError={onError}
+                    onDone={(saved) => {
+                      setConfiguring('');
+                      if (saved) load();
+                    }}
+                  />
                 )}
-              </div>
+              </React.Fragment>
             );
           })}
         </div>
@@ -340,7 +633,11 @@ export function SkillsTab({ projects, activeCwd, onError }) {
     load();
   }, [cwd]); // eslint-disable-line react-hooks/exhaustive-deps
   const [busy, run] = useAction(onError, load);
-  const post = (action, body) => api(`/api/claude/skills/${action}`, { method: 'POST', body: { cwd, ...body } });
+  const post = (action, body) =>
+    api(`/api/claude/skills/${action}`, {
+      method: 'POST',
+      body: { cwd, ...body },
+    });
 
   if (edit)
     return (
@@ -348,7 +645,17 @@ export function SkillsTab({ projects, activeCwd, onError }) {
         <div className="tab-top">
           {edit.create ? (
             <>
-              <input className="search-in" value={edit.id} placeholder="skill-name" onChange={(e) => setEdit({ ...edit, id: e.target.value.replace(/[^\w.-]/g, '-') })} />
+              <input
+                className="search-in"
+                value={edit.id}
+                placeholder="skill-name"
+                onChange={(e) =>
+                  setEdit({
+                    ...edit,
+                    id: e.target.value.replace(/[^\w.-]/g, '-'),
+                  })
+                }
+              />
               <select className="proj-pick" value={edit.scope} onChange={(e) => setEdit({ ...edit, scope: e.target.value })}>
                 <option value="user">All projects</option>
                 <option value="project" disabled={!cwd}>
@@ -367,11 +674,7 @@ export function SkillsTab({ projects, activeCwd, onError }) {
           <button className="btn small" onClick={() => setEdit(null)}>
             Cancel
           </button>
-          <button
-            className="btn small primary"
-            disabled={!edit.id || busy === 'save'}
-            onClick={() => run('save', () => post('save', edit)).then((ok) => ok && setEdit(null))}
-          >
+          <button className="btn small primary" disabled={!edit.id || busy === 'save'} onClick={() => run('save', () => post('save', edit)).then((ok) => ok && setEdit(null))}>
             Save skill
           </button>
         </div>
@@ -382,7 +685,17 @@ export function SkillsTab({ projects, activeCwd, onError }) {
     <>
       <div className="tab-top">
         <ProjectPicker projects={projects} value={cwd} onChange={setCwd} />
-        <button className="btn small primary" onClick={() => setEdit({ scope: 'user', id: '', content: TEMPLATE('my-skill'), create: true })}>
+        <button
+          className="btn small primary"
+          onClick={() =>
+            setEdit({
+              scope: 'user',
+              id: '',
+              content: TEMPLATE('my-skill'),
+              create: true,
+            })
+          }
+        >
           + New skill
         </button>
       </div>
@@ -399,7 +712,14 @@ export function SkillsTab({ projects, activeCwd, onError }) {
               <div className="item-sub wrap">{s.description}</div>
             </div>
             <Toggle value={s.enabled} disabled={busy === s.id} onChange={(v) => run(s.id, () => post('toggle', { scope: s.scope, id: s.id, enabled: v }))} />
-            <button className="btn small" onClick={() => post('get', { scope: s.scope, id: s.id }).then((r) => setEdit({ scope: s.scope, id: s.id, content: r.content })).catch(onError)}>
+            <button
+              className="btn small"
+              onClick={() =>
+                post('get', { scope: s.scope, id: s.id })
+                  .then((r) => setEdit({ scope: s.scope, id: s.id, content: r.content }))
+                  .catch(onError)
+              }
+            >
               Edit
             </button>
             <button className="icon-btn" title="Delete" onClick={() => window.confirm(`Delete the skill "${s.name}"? It's moved to a .trash folder next to it.`) && run(s.id, () => post('delete', { scope: s.scope, id: s.id }))}>

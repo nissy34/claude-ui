@@ -6,14 +6,15 @@ import { execFile } from 'node:child_process';
 import { config, PRIVATE_ENV } from './config.js';
 import { resolveCommand } from './launch.js';
 
-function runClaude(args, cwd, timeout = 30_000) {
+function runClaude(args, cwd, timeout = 30_000, input) {
   const env = { ...process.env };
   for (const k of PRIVATE_ENV) delete env[k];
   const cmd = resolveCommand(config.claudeBin, args);
   return new Promise((resolve) => {
-    execFile(cmd.file, cmd.args, { cwd: cwd || process.cwd(), env, timeout, windowsHide: true, maxBuffer: 4 << 20 }, (err, stdout, stderr) => {
+    const child = execFile(cmd.file, cmd.args, { cwd: cwd || process.cwd(), env, timeout, windowsHide: true, maxBuffer: 4 << 20 }, (err, stdout, stderr) => {
       resolve({ ok: !err, out: String(stdout || '').trim(), err: String(stderr || (err && err.message) || '').trim() });
     });
+    if (input != null) child.stdin?.end(input);
   });
 }
 
@@ -93,7 +94,7 @@ function statusMap(text) {
   return out;
 }
 
-export async function mcpServers(cwd) {
+export async function mcpServers(cwd, { status = true } = {}) {
   const home = readJson(homeConfigPath()) || {};
   const proj = (cwd && home.projects?.[cwd]) || {};
   const disabled = new Set(proj.disabledMcpServers || []);
@@ -104,9 +105,10 @@ export async function mcpServers(cwd) {
   add('user', home.mcpServers);
   add('local', proj.mcpServers);
   if (cwd) add('project', readJson(path.join(cwd, '.mcp.json'))?.mcpServers);
+  if (!status) return { servers: list };
   const r = await runClaude(['mcp', 'list'], cwd, 60_000);
-  const status = statusMap(r.out);
-  for (const s of list) s.status = s.enabled ? status[s.name] || 'unknown' : 'disabled';
+  const st = statusMap(r.out);
+  for (const s of list) s.status = s.enabled ? st[s.name] || 'unknown' : 'disabled';
   return { servers: list, raw: r.out || r.err };
 }
 
@@ -117,8 +119,8 @@ function checkName(name) {
 const SCOPES = ['user', 'local', 'project'];
 const scopeOf = (s) => (SCOPES.includes(s) ? s : 'user');
 
-async function mustRun(args, cwd, timeout) {
-  const r = await runClaude(args, cwd, timeout);
+async function mustRun(args, cwd, timeout, input) {
+  const r = await runClaude(args, cwd, timeout, input);
   if (!r.ok) throw new Error(r.err || r.out || 'Command failed');
   return r.out;
 }
@@ -127,6 +129,23 @@ export async function mcpAdd(cwd, { name, scope, server }) {
   checkName(name);
   if (!server || typeof server !== 'object') throw new Error('Server config is required');
   return { out: await mustRun(['mcp', 'add-json', name, JSON.stringify(server), '-s', scopeOf(scope)], cwd) };
+}
+
+// Edit = remove + add-json (the CLI has no update). If the new config is refused, put the old one back.
+export async function mcpUpdate(cwd, { name, scope, server }) {
+  checkName(name);
+  if (!server || typeof server !== 'object') throw new Error('Server config is required');
+  const s = scopeOf(scope);
+  const { servers } = await mcpServers(cwd, { status: false });
+  const old = servers.find((x) => x.name === name && x.scope === s);
+  if (!old) throw new Error(`No ${s} MCP server named "${name}"`);
+  await mustRun(['mcp', 'remove', name, '-s', s], cwd);
+  const r = await runClaude(['mcp', 'add-json', name, JSON.stringify(server), '-s', s], cwd);
+  if (!r.ok) {
+    await runClaude(['mcp', 'add-json', name, JSON.stringify(old.config), '-s', s], cwd);
+    throw new Error(r.err || r.out || 'Could not save the server');
+  }
+  return { out: r.out };
 }
 
 export async function mcpRemove(cwd, { name, scope }) {
@@ -161,8 +180,18 @@ function parseJson(text, fallback) {
 export async function plugins() {
   const [a, m] = await Promise.all([runClaude(['plugin', 'list', '--available', '--json'], null, 60_000), runClaude(['plugin', 'marketplace', 'list', '--json'], null, 30_000)]);
   const data = parseJson(a.out, null);
+  const installed = data?.installed || (Array.isArray(data) ? data : []);
+  // Flag plugins whose options (usernames, passwords, …) are not all set yet.
+  await Promise.all(
+    installed
+      .filter((p) => p.hasUserConfig && PLUGIN_ID.test(p.id || p.pluginId || ''))
+      .map(async (p) => {
+        const c = await pluginConfigGet({ id: p.id || p.pluginId }).catch(() => null);
+        if (c) p.unconfigured = (c.unconfigured || []).filter((k) => c.schema?.[k]?.default == null); // unset and no default
+      })
+  );
   return {
-    installed: data?.installed || (Array.isArray(data) ? data : []),
+    installed,
     available: data?.available || [],
     marketplaces: parseJson(m.out, []),
     error: data ? undefined : a.err || a.out,
@@ -182,6 +211,30 @@ export async function pluginAction({ action, id, scope }) {
   }[action];
   if (!args) throw new Error('Unknown action');
   return { out: await mustRun(args, null, 180_000) };
+}
+
+// Plugin options declared in the plugin's manifest (userConfig), used as ${user_config.KEY} in its MCP servers.
+// Sensitive values live in Claude Code's secure storage and are never read back: inputs come back empty for them.
+export async function pluginConfigGet({ id }) {
+  if (!PLUGIN_ID.test(id || '')) throw new Error('Bad plugin id');
+  const r = await runClaude(['plugin', 'configure', id, '--json'], null, 60_000);
+  const j = parseJson(r.out, null);
+  if (!j) throw new Error(r.err || r.out || 'Could not read the plugin options');
+  return j;
+}
+
+export async function pluginConfigSet({ id, values }) {
+  if (!PLUGIN_ID.test(id || '')) throw new Error('Bad plugin id');
+  if (!values || typeof values !== 'object' || Array.isArray(values)) throw new Error('Values are required');
+  const clean = {};
+  for (const [k, v] of Object.entries(values)) {
+    if (!/^[A-Za-z_]\w*$/.test(k)) throw new Error(`Bad option name: ${k}`);
+    const str = String(v ?? '');
+    if (/[\r\n]/.test(str)) throw new Error(`${k} must be a single line`);
+    clean[k] = str;
+  }
+  if (!Object.keys(clean).length) return { out: 'No changes' };
+  return { out: await mustRun(['plugin', 'configure', id, '--values-stdin'], null, 60_000, JSON.stringify(clean)) };
 }
 
 export async function marketplaceAction({ action, source, name }) {
