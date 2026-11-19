@@ -1422,8 +1422,12 @@ export class Project {
     for (const f of this.settings.folders.slice(isCoord ? 0 : 1)) if (f.path && f.path !== m.cwd && fs.existsSync(f.path)) addDirs.push(f.path);
     const cfg = { prompt, addDirs, role: isCoord ? 'coordinator' : 'thread' };
     if (isCoord) {
-      cfg.disallowed = ['Bash', 'Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'Task', 'Agent', 'KillShell', 'mcp__sessions'];
-      cfg.allowed = ['mcp__project', 'Read', 'Grep', 'Glob', 'LS', 'WebSearch', 'WebFetch', 'mcp__ui__publish_artifact'];
+      // The coordinator directs work and does none itself: no built-in tools at all (no files,
+      // shell or web), only the project tools. Work on the code goes to threads.
+      cfg.tools = '';
+      cfg.addDirs = [];
+      cfg.disallowed = ['mcp__sessions'];
+      cfg.allowed = ['mcp__project', 'mcp__ui__publish_artifact'];
     } else {
       cfg.allowed = ['mcp__project'];
       cfg.disallowed = ['mcp__sessions'];
@@ -1531,8 +1535,9 @@ export class ProjectEngine {
   }
 
   createCoordinator(p) {
-    const folder = p.settings.folders[0]?.path;
-    const cwd = folder && fs.existsSync(folder) ? folder : p.libraryDir;
+    // Its own empty folder: no checkout, so the repo's files and CLAUDE.md are a thread's job.
+    const cwd = p.file('coordinator');
+    fs.mkdirSync(cwd, { recursive: true });
     const m = p.settings.models.coordinator;
     const s = this.store.create({ cwd, kind: 'chat', name: `${p.settings.name} · coordinator`, model: m.model || undefined, effort: m.effort || undefined });
     Object.assign(s.meta, { cproject: p.id, role: 'coordinator', customName: true, project: cwd, permissionMode: 'dontAsk', hidden: true });

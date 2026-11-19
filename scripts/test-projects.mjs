@@ -102,6 +102,9 @@ async function main() {
     const d = await detail(id);
     return d.feed.some((e) => e.type === 'chat.post') && d;
   }, 10_000, 'coordinator reply');
+  const coordArgv = fs.readFileSync(env.FAKE_CLAUDE_LOG, 'utf8').trim().split('\n').map((l) => JSON.parse(l)).find((x) => x.argv && x.sessionId && x.argv.includes('coordinator') === false && x.argv.join(' ').includes('mcp-project.js","coordinator'))?.argv;
+  const ti = coordArgv ? coordArgv.indexOf('--tools') : -1;
+  check(ti >= 0 && coordArgv[ti + 1] === '' && !coordArgv.some((a) => String(a).endsWith('/demo')), 'the coordinator runs with no built-in tools and no checkout of the repo', coordArgv);
   const post = project.feed.find((e) => e.type === 'chat.post');
   check(post.body.auto && /ok: <project-digest>|ok: <project-wake/.test(post.body.text), 'auto post from final text', post.body);
 

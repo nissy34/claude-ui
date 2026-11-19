@@ -383,6 +383,7 @@ export class ChatSession {
     if (allowed.length) args.push('--allowedTools', allowed.join(','));
     if (proj?.disallowed?.length) args.push('--disallowedTools', proj.disallowed.join(','));
     if (proj?.settings) args.push('--settings', JSON.stringify(proj.settings));
+    if (proj && typeof proj.tools === 'string') args.push('--tools', proj.tools);
     for (const d of proj?.addDirs || []) args.push('--add-dir', d);
     // 'default' is the CLI's normal ask-first mode; newer CLIs call it 'manual', so just omit the flag.
     if (m.permissionMode && m.permissionMode !== 'default') args.push('--permission-mode', m.permissionMode);
