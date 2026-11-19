@@ -7,6 +7,8 @@ import { withQuote } from './quote.js';
 import { QuoteMark } from './QuoteReply.jsx';
 import { Button, Menu, useDismiss } from '../ui/index.jsx';
 import { promptDialog } from '../ui/dialogs.jsx';
+import MentionInput from './MentionInput.jsx';
+import { chatToken } from './mentions.jsx';
 
 const isTouch = typeof window !== 'undefined' && window.matchMedia('(pointer: coarse)').matches;
 
@@ -35,8 +37,6 @@ function readFile(file) {
     r.readAsDataURL(file);
   });
 }
-
-const chatToken = (c) => 'chat:' + c.name.trim().replace(/\s+/g, '-').replace(/[^\w.\-\u0590-\u05ff]/g, '').slice(0, 30);
 
 function MenuIcon({ type }) {
   const common = { width: 16, height: 16, viewBox: '0 0 16 16', fill: 'none', stroke: 'currentColor', strokeWidth: 1.3, className: 'cm-ico', 'aria-hidden': true };
@@ -212,6 +212,7 @@ export default function Composer({ sessionId, disabled, busy, onSend, onStop, mo
   };
   useLayoutEffect(placeTip, [sel, suggest]); // eslint-disable-line react-hooks/exhaustive-deps
   const refsRef = useRef({}); // "@chat:name" -> session id
+  const knownRef = useRef(new Set()); // mention tokens picked from suggestions, shown as chips even without a / or .
   const caretRef = useRef(null);
   // Put the caret after an inserted suggestion before the next keystroke lands.
   useLayoutEffect(() => {
@@ -230,13 +231,6 @@ export default function Composer({ sessionId, disabled, busy, onSend, onStop, mo
       text ? localStorage.setItem(draftKey, text) : localStorage.removeItem(draftKey);
     } catch {}
   }, [text, draftKey]);
-
-  useEffect(() => {
-    const ta = taRef.current;
-    if (!ta) return;
-    ta.style.height = 'auto';
-    ta.style.height = Math.min(ta.scrollHeight, 260) + 'px';
-  }, [text]);
 
   useEffect(() => {
     if (!isTouch) taRef.current?.focus();
@@ -298,6 +292,7 @@ export default function Composer({ sessionId, disabled, busy, onSend, onStop, mo
   const applySuggestion = (item) => {
     const s = suggest;
     if (item.type === 'chat') refsRef.current[item.insert.trim()] = item.id;
+    if (item.type !== 'cmd') knownRef.current.add(item.insert.trim());
     const next = text.slice(0, s.start) + item.insert + text.slice(s.end);
     setText(next);
     setSuggest(null);
@@ -506,14 +501,15 @@ export default function Composer({ sessionId, disabled, busy, onSend, onStop, mo
           </div>
         )}
         {/^!\s*\S/.test(text) && <div className="shell-hint">Shell command: runs in the chat's folder, and Claude sees the output with your next message.</div>}
-        <textarea
+        <MentionInput
           ref={taRef}
-          rows={1}
           value={text}
+          chats={chats}
+          known={knownRef.current}
           placeholder={placeholder || (busy ? 'Queue a follow-up…' : isTouch ? 'Reply to Claude…' : 'Reply to Claude…  (@ to mention, / for commands, ! for shell)')}
-          onChange={(e) => {
-            setText(e.target.value);
-            updateSuggest(e.target.value, e.target.selectionStart);
+          onChange={(value, caret) => {
+            setText(value);
+            updateSuggest(value, caret);
           }}
           onKeyDown={onKeyDown}
           onBlur={() => setTimeout(() => setSuggest(null), 150)}
