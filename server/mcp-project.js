@@ -155,7 +155,7 @@ const THREAD = [
     inputSchema: {
       type: 'object',
       properties: {
-        summary: { type: 'string', description: 'Your result, if you have not posted one (what changed, where, how you checked).' },
+        summary: { type: 'string', description: 'Your result, if you have not posted one: what changed, where, how you checked; for a question, the complete answer written for the user, not a status line.' },
         learned: { type: 'array', items: { anyOf: [{ type: 'string' }, { type: 'object', properties: { note: { type: 'string' }, kind: { type: 'string', enum: ['fix', 'gotcha', 'reusable', 'fact', 'warning'] }, files: { type: 'array', items: { type: 'string' } } }, required: ['note'] }] } },
       },
       required: ['learned'],

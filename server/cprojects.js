@@ -1630,6 +1630,23 @@ export class ProjectEngine {
     return p.append({ type: 'reminder.set', thread: sid, from: { kind: by, ...(by === 'thread' ? { id: sid } : {}) }, trust: by === 'user' ? 'principal' : 'relay', body: { at, note: clipText(note || '', 500) } });
   }
 
+  pause(p) {
+    if (!p.state.paused) p.append({ type: 'project.paused', from: { kind: 'user' }, trust: 'principal', body: { reason: 'Paused by you. Nothing new starts until you resume.' } });
+  }
+
+  /** Stops the coordinator and starts it over from a digest (its queued wakes stay queued). */
+  async restartCoordinator(p) {
+    const s = p.session(p.state.coordinator);
+    if (!s) return;
+    if (p.state.inflight[s.id]) p.append({ type: 'wake.requeued', body: { session: s.id, wake: p.state.inflight[s.id].wake, reason: 'coordinator restarted' } });
+    await s.stopAndWait();
+    s.meta.claudeSessionId = null;
+    s.meta.contextTokens = 0;
+    s.record({ k: 'notice', text: 'Restarted by you; starting over from a digest' });
+    p.append({ type: 'coordinator.rotated', body: { coordinator: s.id, manual: true } });
+    p.schedulePump();
+  }
+
   resume(p) {
     if (p.state.paused) p.append({ type: 'project.resumed', from: { kind: 'user' }, trust: 'principal', body: {} });
     p.wakeTimes?.clear();
@@ -1758,8 +1775,11 @@ export class ProjectEngine {
     if (!pr && !t.pr) return;
     if (pr && pr.head && t.branch && pr.head !== t.branch) return; // a PR for some other branch
     const before = t.pr;
-    const slim = pr && { number: pr.number, url: pr.url, title: pr.title, state: pr.state, review: pr.review, autoMerge: pr.autoMerge, summary: pr.summary, failing: pr.checks.filter((c) => c.state === 'fail').map((c) => c.name).slice(0, 10) };
+    const slim = pr && { number: pr.number, url: pr.url, title: pr.title, state: pr.state, review: pr.review, autoMerge: pr.autoMerge, head: pr.head, additions: pr.additions, deletions: pr.deletions, summary: pr.summary, failing: pr.checks.filter((c) => c.state === 'fail').map((c) => c.name).slice(0, 10) };
     if (JSON.stringify(slim) === JSON.stringify(before)) return;
+    // Only the size or branch changed (a new push): update the PR bar without a chat row.
+    const core = (x) => x && JSON.stringify({ ...x, head: 0, additions: 0, deletions: 0 });
+    if (slim && before && core(slim) === core(before)) return void p.append({ type: 'pr.updated', thread: sid, body: { pr: slim, summary: '', quiet: true, wake: false } });
     const newFail = slim && slim.summary.fail > 0 && (!before || slim.failing.some((n) => !(before.failing || []).includes(n)));
     const changesRequested = slim && slim.review === 'CHANGES_REQUESTED' && before?.review !== 'CHANGES_REQUESTED';
     const merged = slim?.state === 'MERGED' && before?.state !== 'MERGED';
@@ -1881,8 +1901,27 @@ export class ProjectEngine {
   hookNotes(s) {
     const p = this.projectOf(s);
     if (!p || !p.state.threads[s.id]) return {};
-    const text = p.takeNotes(s.id, { via: 'tool' });
+    // Messages for a busy thread (a follow-up the coordinator forwarded, the user typing in the
+    // thread) reach it after its next tool call instead of after its turn, like steering.
+    const text = this.takeMessages(p, s) || p.takeNotes(s.id, { via: 'tool' });
     return text ? { hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: text } } : {};
+  }
+
+  /** Hands a running thread the messages waiting in its queue, mid-turn. Returns the wake text or ''. */
+  takeMessages(p, s) {
+    const sid = s.id;
+    if (p.state.inflight[sid]) return '';
+    const items = (p.state.queue[sid] || []).filter((q) => !q.batch && ['session.message', 'user.message', 'decision.answered'].includes(p.byId.get(q.e)?.type));
+    if (!items.length) return '';
+    const evs = items.map((q) => p.byId.get(q.e));
+    if (p.state.threads[sid]?.resolved) p.append({ type: 'thread.reopened', thread: sid, body: {} }); // as a wake after the turn would
+    const wake = newId('wk');
+    const envelope = p.renderWake(sid, wake, evs, s);
+    p.append({ type: 'wake.sent', body: { session: sid, wake, events: evs.map((e) => e.id), midTurn: true } });
+    p.append({ type: 'wake.delivered', body: { session: sid, wake } });
+    const info = p.turnInfo.get(sid);
+    if (info && evs.some((e) => e.trust === 'principal')) info.user = true;
+    return `New messages arrived while you were working. Take them into account in this turn (finish or adjust what you are doing; don't resolve before handling them):\n${envelope}`;
   }
 
   // ------------------------------------------------------------------ tools (built-in project MCP)
@@ -2028,6 +2067,9 @@ export class ProjectEngine {
           .map((x) => (typeof x === 'string' ? { note: x } : { note: x?.note ?? x?.text, kind: x?.kind, files: x?.files }))
           .filter((x) => String(x.note || '').trim())
           .slice(0, 10);
+        // A message waiting for this thread (a follow-up the user sent meanwhile) comes first.
+        const waiting = this.takeMessages(p, s);
+        if (waiting) return { ok: false, resolved: false, note: `Not resolved: ${waiting}` };
         const summary = String(a.summary || '').trim();
         const t = p.state.threads[s.id];
         const postedResult = t.lastPost?.kind === 'result' && t.lastPost.ts >= (p.state.working[s.id] || 0);

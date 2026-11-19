@@ -2,7 +2,7 @@
 // (instructions, memory, files). The project chat stays on the left.
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { api, timeAgo } from '../api.js';
-import { Button, IconButton, Menu, Modal, ModalBody, ModalHead, Spinner, Textarea } from '../ui/index.jsx';
+import { Button, IconButton, Menu, MenuSeparator, Modal, ModalBody, ModalHead, Spinner, Textarea } from '../ui/index.jsx';
 import { confirmDialog, promptDialog } from '../ui/dialogs.jsx';
 import { DecisionCard, Md } from './ProjectCards.jsx';
 import { ProjectMemory } from './ProjectFiles.jsx';
@@ -231,6 +231,11 @@ function ThreadPane({ project, threadId, onBack, onSelect, openThread, onError }
   const decisions = Object.fromEntries(project.decisions.map((d) => [d.id, d]));
   const lastChecklist = feed ? [...feed].reverse().find((e) => e.type === 'checklist.updated')?.id : null;
   const threadTitle = (id) => project.threads.find((x) => x.id === id)?.title;
+  // Previous / next in the order the Threads list shows (most recent activity first).
+  const order = [...project.threads].sort((a, b) => (b.lastActivity || 0) - (a.lastActivity || 0)).map((x) => x.id);
+  const at = order.indexOf(threadId);
+  const prevId = at > 0 ? order[at - 1] : null;
+  const nextId = at >= 0 && at < order.length - 1 ? order[at + 1] : null;
   return (
     <div className="pjp">
       <div className="pjp-head">
@@ -257,6 +262,9 @@ function ThreadPane({ project, threadId, onBack, onSelect, openThread, onError }
           </IconButton>
           {menu && (
             <Menu place="down">
+              <button disabled={!prevId} onClick={() => (setMenu(false), openThread(prevId))}>Previous thread</button>
+              <button disabled={!nextId} onClick={() => (setMenu(false), openThread(nextId))}>Next thread</button>
+              <MenuSeparator />
               <button onClick={side}>Side question…</button>
               <button onClick={remind}>{t.reminder ? 'Change reminder…' : 'Remind me…'}</button>
               {t.reminder && <button onClick={() => (setMenu(false), act('remind', {}))}>Clear reminder</button>}
@@ -324,6 +332,7 @@ function ThreadPane({ project, threadId, onBack, onSelect, openThread, onError }
             case 'decision.requested':
               return <DecisionCard key={e.id} projectId={project.id} decision={decisions[b.id]} threadTitle={t.title} onError={onError} />;
             case 'pr.updated':
+              if (b.quiet) return null;
               return (
                 <div key={e.id} className="pjp-note">
                   {b.summary}
@@ -376,6 +385,12 @@ function ThreadPane({ project, threadId, onBack, onSelect, openThread, onError }
                   ))}
                 </div>
               );
+            case 'memory.changed':
+              return (
+                <div key={e.id} className="pjp-note pjp-act">
+                  <span className="pjp-act-k">{b.action === 'delete' ? 'Removed from project memory' : 'Updated project memory'}</span> {(b.names || [b.name]).join(', ')}
+                </div>
+              );
             case 'signal':
               return (
                 <div key={e.id} className="pjp-note pjp-act warn">
@@ -402,8 +417,14 @@ function ThreadPane({ project, threadId, onBack, onSelect, openThread, onError }
       </div>
       {t.pr?.url && (
         <a className={`pjp-prbar ${t.pr.state === 'MERGED' ? 'merged' : t.pr.state === 'CLOSED' ? 'closed' : 'open'}`} href={t.pr.url} target="_blank" rel="noreferrer">
-          <PrIcon merged={t.pr.state === 'MERGED'} /> <b>#{t.pr.number}</b> <span className="mono">{t.branch}</span>
+          <PrIcon merged={t.pr.state === 'MERGED'} /> <b>#{t.pr.number}</b> <span className="mono pjp-prbar-branch">{t.pr.head || t.branch}</span>
+          {t.pr.additions != null && (
+            <span className="pjp-diffstat">
+              <span className="add">+{t.pr.additions}</span> <span className="del">−{t.pr.deletions}</span>
+            </span>
+          )}
           <span className="spacer" />
+          {t.pr.summary && t.pr.summary.pass + t.pr.summary.fail + t.pr.summary.pending > 0 && !t.pr.summary.fail && <span className="muted small">{t.pr.summary.pending ? `${t.pr.summary.pending} checks running · ` : 'Checks pass · '}</span>}
           {t.pr.state === 'MERGED' ? 'Merged' : t.pr.state === 'CLOSED' ? 'Closed' : t.pr.summary?.fail ? `${t.pr.summary.fail} failing` : t.pr.review === 'APPROVED' ? 'Approved' : 'Open'}
         </a>
       )}

@@ -284,6 +284,7 @@ async function main() {
 
   console.log('Coordination: notes, search, warm briefs, board, signals');
   await coordination();
+  await steering();
 
   await stop();
   console.log(`\n${passes} passed, ${failures} failed`);
@@ -304,6 +305,34 @@ const fakeLog = () =>
         return {};
       }
     });
+
+async function steering() {
+  console.log('Follow-ups reach a busy thread mid-turn; pause, restart');
+  const { project: r } = await api('/api/cprojects', { method: 'POST', body: { name: 'Steer', folders: [repo] } });
+  const startT = async (title, brief) => (await api(`/api/cprojects/${r.id}/threads`, { method: 'POST', body: { title, brief } })).thread;
+  const A = await startT('Guide', ['Write the guide', '@@sleep 1500', call('board', {}), '@@say guide written'].join('\n'));
+  await until(async () => (await detail(r.id)).threads.find((t) => t.id === A.id)?.status === 'working', 8000, 'A working');
+  await api(`/api/cprojects/${r.id}/threads/${A.id}/message`, { method: 'POST', body: { text: 'STEER-ONE also cover the tests' } });
+  await until(() => fakeLog().some((l) => l.hookContext?.includes('STEER-ONE')), 8000, 'mid-turn message');
+  check(true, 'a message for a busy thread reaches it at its next tool call, not after its turn');
+  await until(async () => (await detail(r.id)).threads.find((t) => t.id === A.id)?.status !== 'working', 8000, 'A done');
+  await sleep(800);
+  check(!fakeLog().some((l) => l.prompt?.includes('STEER-ONE') && l.prompt.includes('user.message')), 'it is not delivered a second time as a new turn', fakeLog().filter((l) => l.prompt?.includes('STEER-ONE')).map((l) => l.prompt.slice(0, 1500)));
+  // resolve waits for a message that arrived meanwhile
+  const B = await startT('Resolver', ['Do it', '@@sleep 1500', call('resolve', { summary: 'done', learned: [] })].join('\n'));
+  await until(async () => (await detail(r.id)).threads.find((t) => t.id === B.id)?.status === 'working', 8000, 'B working');
+  await api(`/api/cprojects/${r.id}/threads/${B.id}/message`, { method: 'POST', body: { text: 'STEER-TWO one more thing' } });
+  const res = await until(() => fakeLog().find((l) => l.call === 'project__resolve' && l.result?.includes('STEER-TWO')), 8000, 'resolve refused');
+  check(JSON.parse(res.result).resolved === false, 'resolve hands over a waiting message instead of resolving', res.result.slice(0, 200));
+  check((await detail(r.id)).threads.find((t) => t.id === B.id).status !== 'resolved', 'the thread stays open');
+  // pause / restart the coordinator
+  await api(`/api/cprojects/${r.id}/pause`, { method: 'POST' });
+  check((await detail(r.id)).paused, 'Pause pauses the project');
+  await api(`/api/cprojects/${r.id}/resume`, { method: 'POST' });
+  await api(`/api/cprojects/${r.id}/restart-coordinator`, { method: 'POST' });
+  const d = await detail(r.id);
+  check(!d.paused && d.feed.some((e) => e.type === 'coordinator.rotated' && e.body.manual), 'Resume, then Restart starts the coordinator over', d.feed.slice(-3).map((e) => e.type));
+}
 
 async function coordination() {
   const { project: r } = await api('/api/cprojects', { method: 'POST', body: { name: 'Coord', folders: [repo] } });

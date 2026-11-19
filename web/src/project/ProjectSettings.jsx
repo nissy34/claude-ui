@@ -267,6 +267,13 @@ export function ProjectSettingsModal({ project, section, setSection, onClose, on
     if (!project.archived) onClose();
   };
   const byCost = [...project.threads].sort((a, b) => b.cost - a.cost);
+  const done = project.threads.filter((t) => t.status === 'resolved').length;
+  const prs = project.threads.filter((t) => t.pr?.url);
+  const added = prs.reduce((n, t) => n + (t.pr.additions || 0), 0);
+  const removed = prs.reduce((n, t) => n + (t.pr.deletions || 0), 0);
+  const total = project.usage.total || 0;
+  const share = (c) => (total > 0 ? `${Math.round((c / total) * 100)}%` : '');
+  const post = (what) => api(`/api/cprojects/${project.id}/${what}`, { method: 'POST' }).then(reload).catch(onError);
   const SaveBar = () => (
     <div className="pjs-save">
       {saved && <span className="muted small">Saved. Model changes apply to the coordinator now and to threads started from now on.</span>}
@@ -353,6 +360,22 @@ export function ProjectSettingsModal({ project, section, setSection, onClose, on
           {section === 'usage' && (
             <>
               <h3>Usage</h3>
+              <div className="pj-activity-stats">
+                <div>
+                  <b>{done}</b>
+                  <span className="muted small">Threads done</span>
+                </div>
+                <div>
+                  <b>{prs.length}</b>
+                  <span className="muted small">Pull requests</span>
+                </div>
+                <div>
+                  <b>
+                    <span className="add">+{added}</span> <span className="del">−{removed}</span>
+                  </b>
+                  <span className="muted small">Code changes</span>
+                </div>
+              </div>
               <Row label="Total">
                 <b>${project.usage.total.toFixed(2)}</b>
                 <span className="muted small"> · coordinator ${project.usage.coordinator.toFixed(2)}{project.coordinator ? ` · context ${Math.round(project.coordinator.contextTokens / 1000)}k tokens` : ''}</span>
@@ -367,6 +390,7 @@ export function ProjectSettingsModal({ project, section, setSection, onClose, on
                       {t.title}
                     </button>
                     <span className="muted">${t.cost.toFixed(2)}</span>
+                    <span className="muted share">{share(t.cost)}</span>
                   </div>
                 ))}
               </div>
@@ -392,6 +416,12 @@ export function ProjectSettingsModal({ project, section, setSection, onClose, on
                 </div>
               </Row>
               <SaveBar />
+              <Row label={project.paused ? 'Resume project' : 'Pause project'} hint={project.paused ? 'Threads and the coordinator pick up their queued messages.' : 'Take a break or save usage. Nothing new starts until you resume; running turns finish.'}>
+                <Button onClick={() => post(project.paused ? 'resume' : 'pause')}>{project.paused ? 'Resume' : 'Pause'}</Button>
+              </Row>
+              <Row label="Restart the coordinator" hint="Try this if Claude stops responding in the project chat. A reply in progress is interrupted; it starts over from a digest of the project.">
+                <Button onClick={() => post('restart-coordinator')}>Restart</Button>
+              </Row>
               <Row label="Coordinator work log" hint="Everything the coordinator did, tool by tool">
                 <Button onClick={() => (onClose(), onSelect(project.coordinatorId))}>Open</Button>
               </Row>

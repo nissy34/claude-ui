@@ -160,7 +160,10 @@ function ProjectChat({ project, openThread, onError }) {
     }
     setSending(false);
   };
-  const items = project.feed.filter((e) => !(e.type === 'decision.answered' || e.type === 'decision.withdrawn'));
+  // A thread's result shows once: when Claude relays it in the chat afterwards, the raw post is hidden.
+  const relayed = new Map();
+  for (const e of project.feed) if (e.type === 'chat.post' && e.body?.about) relayed.set(e.body.about, e.ts);
+  const items = project.feed.filter((e) => !(e.type === 'decision.answered' || e.type === 'decision.withdrawn') && !(e.type === 'thread.post' && e.body?.kind === 'result' && relayed.get(e.thread) >= e.ts));
   const cm = project.settings.models.coordinator;
   return (
     <div className="pj-chat">
@@ -176,7 +179,14 @@ function ProjectChat({ project, openThread, onError }) {
           {items.length === 0 && (
             <div className="pj-intro">
               <div className="pj-intro-title">{project.name}</div>
-              <p className="muted">{project.goal || 'Tell the coordinator what you want done. It answers quick questions itself and hands real work to threads that run in parallel, each in its own worktree.'}</p>
+              <p className="muted">{project.goal || 'Tell Claude what you want done. Each piece of work gets its own thread, running in parallel in its own worktree; follow-ups go to the thread that did the work.'}</p>
+              <div className="pj-starters">
+                {STARTERS.map(([label, prompt]) => (
+                  <button key={label} className="pj-starter" onClick={() => (saveDraft(prompt), listRef.current?.closest('.pj-chat')?.querySelector('textarea')?.focus())}>
+                    {label}
+                  </button>
+                ))}
+              </div>
             </div>
           )}
           {items.map((e) => (
@@ -221,6 +231,12 @@ function ProjectChat({ project, openThread, onError }) {
     </div>
   );
 }
+
+const STARTERS = [
+  ['Explain this repo', 'What does this repo do?'],
+  ['Make a plan', 'Make a plan for '],
+  ['Pick up recent work', 'Look at the recent commits and open branches and tell me what is in progress.'],
+];
 
 const modelName = (m) => (!m ? 'Default model' : m.length < 10 ? m[0].toUpperCase() + m.slice(1) : m);
 
@@ -301,10 +317,11 @@ function FeedItem({ e, project, threads, decisions, onSelect, onError }) {
         </div>
       );
     case 'coordinator.rotated':
-      return <div className="pj-notice">Coordinator context reset to a digest</div>;
+      return <div className="pj-notice">{b.manual ? 'Coordinator restarted' : 'Coordinator context reset to a digest'}</div>;
     case 'notice':
       return <div className="pj-notice">{b.text}</div>;
     case 'pr.updated':
+      if (b.quiet) return null;
       return (
         <div className={`pj-notice ${b.wake ? 'warn' : ''}`}>
           <button className="linklike" onClick={() => onSelect(e.thread)}>

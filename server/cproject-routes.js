@@ -79,6 +79,22 @@ export function mountProjectRoutes(app, { engine, store, resolveDir, wrap }) {
   );
 
   app.post(
+    '/api/cprojects/:id/pause',
+    wrap(async (req, res) => {
+      engine.pause(project(req));
+      res.json({ ok: true });
+    })
+  );
+
+  app.post(
+    '/api/cprojects/:id/restart-coordinator',
+    wrap(async (req, res) => {
+      await engine.restartCoordinator(project(req));
+      res.json({ ok: true });
+    })
+  );
+
+  app.post(
     '/api/cprojects/:id/resume',
     wrap(async (req, res) => {
       engine.resume(project(req));
@@ -137,6 +153,12 @@ export function mountProjectRoutes(app, { engine, store, resolveDir, wrap }) {
         // What passed between threads shows as activity rows: notes it shared, notes handed to it, signals about it.
         else if (e.type === 'note.shared' && e.thread === tid && e.body.kind !== 'decision') feed.push(e);
         else if (e.type === 'signal' && (e.thread === tid || (e.body.threads || []).includes(tid))) feed.push(e);
+        else if (e.type === 'memory.changed' && e.from?.id === tid) {
+          // Consecutive memory writes collapse into one "Updated project memory" row.
+          const last = feed[feed.length - 1];
+          if (last?.type === 'memory.changed') last.body = { ...last.body, names: [...new Set([...(last.body.names || [last.body.name]), e.body.name])] };
+          else feed.push({ ...e, body: { ...e.body, names: [e.body.name] } });
+        }
         else if (e.type === 'notes.delivered' && e.body.session === tid && !e.body.dropped) {
           const notes = e.body.ids.map((id) => p.state.notes?.[id]).filter(Boolean).map((n) => ({ id: n.id, kind: n.kind, text: n.text, files: n.files, from: n.by ? p.state.threads[n.by]?.title || n.by : 'the user' }));
           if (notes.length) feed.push({ ...e, body: { ...e.body, notes } });

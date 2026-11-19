@@ -322,3 +322,14 @@
 .pj-membody { border-top: 1px solid var(--border); padding-top: var(--sp-2); margin-top: var(--sp-1); }
 .pj-memask { display: flex; gap: var(--sp-2); align-items: flex-end; margin-top: var(--sp-3); }
 .pj-memask textarea { flex: 1; }
+.pjp-diffstat { font-family: var(--font-mono, monospace); font-size: var(--fs-xs, 12px); }
+.pjp-diffstat .add { color: var(--green); }
+.pjp-diffstat .del { color: var(--red, #d33); }
+.pjp-prbar-branch { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 14em; opacity: .85; }
+.pj-starters { display: flex; flex-wrap: wrap; gap: var(--sp-2); margin-top: var(--sp-3); }
+.pj-starter { border: 1px solid var(--border); background: var(--bg-raised, transparent); color: var(--text); border-radius: var(--r-md, 8px); padding: 6px 10px; font-size: var(--fs-sm); cursor: pointer; }
+.pj-starter:hover { background: var(--bg-hover, rgba(127,127,127,.12)); }
+.pj-activity-stats { display: flex; gap: var(--sp-6, 24px); margin: var(--sp-2) 0 var(--sp-4); }
+.pj-activity-stats b { display: block; font-size: 22px; font-weight: 600; }
+.pj-activity-stats .add { color: var(--green); } .pj-activity-stats .del { color: var(--red, #d33); }
+.pj-usage-row .share { width: 3.5em; text-align: right; }
