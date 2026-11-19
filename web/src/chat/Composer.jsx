@@ -3,6 +3,8 @@ import { api } from '../api.js';
 import { getPrefs } from '../prefs.js';
 import { needsSignIn } from './McpAuth.jsx';
 import { findModel, modelLabel, useModels } from '../models.js';
+import { withQuote } from './quote.js';
+import { QuoteMark } from './QuoteReply.jsx';
 
 const isTouch = typeof window !== 'undefined' && window.matchMedia('(pointer: coarse)').matches;
 
@@ -166,7 +168,7 @@ function ModelItem({ m, on, onPick }) {
   );
 }
 
-export default function Composer({ sessionId, disabled, busy, onSend, onStop, mode, onMode, model, activeModel, onModel, effort, onEffort, commands, footer, onError, placeholder, context, onCompact, queued, usage, mcpServers, onMcpSignIn, onMcpRefresh, onSettings, onBrowser, chats, initialDraft }) {
+export default function Composer({ sessionId, disabled, busy, onSend, onStop, mode, onMode, model, activeModel, onModel, effort, onEffort, commands, footer, onError, placeholder, context, onCompact, queued, usage, mcpServers, onMcpSignIn, onMcpRefresh, onSettings, onBrowser, chats, initialDraft, quote, onClearQuote }) {
   const draftKey = `cw.draft.${sessionId}`;
   const [text, setText] = useState(() => {
     try {
@@ -237,6 +239,9 @@ export default function Composer({ sessionId, disabled, busy, onSend, onStop, mo
   useEffect(() => {
     if (!isTouch) taRef.current?.focus();
   }, []);
+  useEffect(() => {
+    if (quote && !isTouch) taRef.current?.focus();
+  }, [quote]);
 
   // Close an open menu on an outside click.
   const barRef = useRef(null);
@@ -366,8 +371,9 @@ export default function Composer({ sessionId, disabled, busy, onSend, onStop, mo
     recRef.current?.stop();
     const files = ready.length ? `${text.trim() ? '\n\n' : ''}Attached files:\n${ready.map((a) => `- ${a.path}`).join('\n')}` : '';
     const refs = [...new Set(Object.entries(refsRef.current).filter(([tok]) => text.includes(tok)).map(([, id]) => id))];
-    if (onSend(text + files, images.map(({ media_type, data }) => ({ media_type, data })), refs)) {
+    if (onSend(withQuote(quote, text + files), images.map(({ media_type, data }) => ({ media_type, data })), refs)) {
       refsRef.current = {};
+      onClearQuote?.();
       setText('');
       setImages([]);
       setAttachments([]);
@@ -487,6 +493,15 @@ export default function Composer({ sessionId, disabled, busy, onSend, onStop, mo
                 </button>
               </div>
             ))}
+          </div>
+        )}
+        {quote && (
+          <div className="quote-chip">
+            <QuoteMark />
+            <span className="qc-text">{quote}</span>
+            <button onClick={onClearQuote} aria-label="Remove quote" title="Remove quote">
+              ✕
+            </button>
           </div>
         )}
         {/^!\s*\S/.test(text) && <div className="shell-hint">Shell command: runs in the chat's folder, and Claude sees the output with your next message.</div>}
