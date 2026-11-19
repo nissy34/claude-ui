@@ -79,11 +79,22 @@ function fmtSize(n) {
 }
 
 // A small ring that fills as the context window is used. Click for details and /compact.
-function ContextRing({ used, window: win, onCompact }) {
+// Window: what the CLI reported for the chat's model. Before it has (older CLIs, or a chat from
+// before this was tracked) guess from the model name, and never claim a window smaller than the
+// tokens already in it.
+function contextWindowFor({ used, window: win, compactWindow, model }) {
+  if (win) return win;
+  const guess = /\[1m\]/i.test(model || '') ? 1_000_000 : 200_000;
+  const known = compactWindow ? Math.max(compactWindow, guess) : guess;
+  return used > known ? 1_000_000 : known;
+}
+
+function ContextRing({ used, window: winIn, compactWindow, model, onCompact }) {
   const [open, setOpen] = useState(false);
   const ref = useOutsideClose(open, () => setOpen(false));
   if (!used) return null;
-  const pct = Math.min(1, used / (win || 200000));
+  const win = contextWindowFor({ used, window: winIn, compactWindow, model });
+  const pct = Math.min(1, used / win);
   const r = 7;
   const c = 2 * Math.PI * r;
   return (
@@ -99,7 +110,7 @@ function ContextRing({ used, window: win, onCompact }) {
           <div className="pad">
             <b>{Math.round(pct * 100)}% of context used</b>
             <div className="muted text-sm" style={{ marginTop: 4 }}>
-              {used.toLocaleString()} of {(win || 200000).toLocaleString()} tokens. Claude compacts automatically when it gets full.
+              {used.toLocaleString()} of {win.toLocaleString()} tokens. Claude compacts automatically when it gets full.
             </div>
           </div>
           <div className="sep" />
@@ -134,7 +145,7 @@ function UsageButton({ usage }) {
   return (
     <div className="menu-wrap" ref={ref}>
       <button className="footer-info usage-btn" onClick={() => setOpen(!open)} title="Plan usage limits">
-        {Math.round(main * 100)}% used
+        {Math.round(main * 100)}% of plan used
       </button>
       {open && (
         <Menu place="up" align="right" className="usage-pop">
@@ -670,7 +681,7 @@ export default function Composer({ sessionId, disabled, busy, onSend, onStop, mo
           </div>
           <span className="footer-info">{footer}</span>
           <UsageButton usage={usage} />
-          <ContextRing used={context?.used} window={context?.window} onCompact={onCompact} />
+          <ContextRing used={context?.used} window={context?.window} compactWindow={context?.compactWindow} model={context?.model} onCompact={onCompact} />
           {SpeechRec && (
             <button className={`chip icon ${listening ? 'rec' : ''}`} title={listening ? 'Stop dictation' : 'Dictate'} onClick={toggleDictation}>
               {listening ? '●' : '🎙'}

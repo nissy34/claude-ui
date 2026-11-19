@@ -1006,7 +1006,7 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
             onSettings={onSettings}
             onBrowser={() => openPanel('browser')}
             chats={mentionable}
-            context={{ used: meta.contextTokens, window: meta.contextWindow }}
+            context={{ used: meta.contextTokens, window: meta.contextWindow, compactWindow: meta.compactWindow, model: meta.model }}
             onCompact={() => submit('/compact', [])}
             insert={insert}
             onError={onError}
