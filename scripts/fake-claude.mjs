@@ -1,0 +1,137 @@
+#!/usr/bin/env node
+// A stand-in for the `claude` CLI in stream-JSON mode, for tests (CW_CLAUDE_BIN=scripts/fake-claude.mjs).
+// It starts the MCP servers from --mcp-config and follows directives found in each prompt:
+//   @@call <server>__<tool> <json>   call that MCP tool (shown as a tool_use + tool_result)
+//   @@say <text>                     reply with text
+//   @@sleep <ms>                     wait (keeps the turn running)
+//   @@fail                           end the turn with an error
+// Directives inside a JSON argument are passed along verbatim, so a test can make one session
+// tell another what to do. With no directive it replies "ok: <first line of the prompt>".
+import { spawn } from 'node:child_process';
+import readline from 'node:readline';
+import crypto from 'node:crypto';
+import fs from 'node:fs';
+
+const argv = process.argv.slice(2);
+const arg = (name) => {
+  const i = argv.indexOf(name);
+  return i >= 0 ? argv[i + 1] : undefined;
+};
+const sessionId = arg('--session-id') || arg('--resume') || crypto.randomUUID();
+const out = (o) => process.stdout.write(JSON.stringify(o) + '\n');
+const log = process.env.FAKE_CLAUDE_LOG;
+const note = (o) => log && fs.appendFileSync(log, JSON.stringify({ pid: process.pid, sessionId, ...o }) + '\n');
+note({ argv });
+
+// ---- MCP clients ----
+const servers = {};
+let mcpCfg = {};
+try {
+  mcpCfg = JSON.parse(arg('--mcp-config') || '{}').mcpServers || {};
+} catch {}
+for (const [name, cfg] of Object.entries(mcpCfg)) {
+  if (cfg.type && cfg.type !== 'stdio') continue;
+  const p = spawn(cfg.command, cfg.args || [], { env: { ...process.env, ...(cfg.env || {}) }, stdio: ['pipe', 'pipe', 'inherit'] });
+  const waiters = new Map();
+  let id = 0;
+  readline.createInterface({ input: p.stdout }).on('line', (l) => {
+    try {
+      const m = JSON.parse(l);
+      waiters.get(m.id)?.(m);
+      waiters.delete(m.id);
+    } catch {}
+  });
+  const rpc = (method, params) =>
+    new Promise((resolve) => {
+      const i = ++id;
+      waiters.set(i, resolve);
+      p.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: i, method, params }) + '\n');
+    });
+  servers[name] = { rpc, proc: p, ready: rpc('initialize', { protocolVersion: '2024-11-05' }) };
+}
+
+out({ type: 'system', subtype: 'init', session_id: sessionId, model: arg('--model') || 'fake-model', permissionMode: arg('--permission-mode') || 'default', tools: [], mcp_servers: Object.keys(servers).map((n) => ({ name: n, status: 'connected' })), slash_commands: [], claude_code_version: 'fake' });
+
+let msgN = 0;
+const queue = [];
+let running = false;
+
+async function runTurn(text) {
+  const t0 = Date.now();
+  const lines = text.split('\n');
+  let said = false;
+  let failed = false;
+  // Only top-level directives of the prompt (not ones nested inside JSON strings).
+  for (const line of lines) {
+    const m = /^@@(call|say|sleep|fail)\b\s*(.*)$/.exec(line.trim());
+    if (!m) continue;
+    const [, cmd, rest] = m;
+    if (cmd === 'say') {
+      out({ type: 'assistant', message: { id: `msg_${++msgN}`, role: 'assistant', content: [{ type: 'text', text: rest }], usage: { input_tokens: 100, output_tokens: 10 } }, parent_tool_use_id: null, session_id: sessionId });
+      said = true;
+    } else if (cmd === 'sleep') {
+      await new Promise((r) => setTimeout(r, Number(rest) || 100));
+    } else if (cmd === 'fail') {
+      failed = true;
+    } else if (cmd === 'call') {
+      const sp = rest.indexOf(' ');
+      const full = sp < 0 ? rest : rest.slice(0, sp);
+      let input = {};
+      try {
+        input = sp < 0 ? {} : JSON.parse(rest.slice(sp + 1));
+      } catch (e) {
+        input = { _parseError: e.message };
+      }
+      const [server, tool] = full.split('__');
+      const useId = `toolu_${crypto.randomBytes(6).toString('hex')}`;
+      out({ type: 'assistant', message: { id: `msg_${++msgN}`, role: 'assistant', content: [{ type: 'tool_use', id: useId, name: `mcp__${server}__${tool}`, input }] }, parent_tool_use_id: null, session_id: sessionId });
+      let result = 'no such server';
+      const s = servers[server];
+      if (s) {
+        await s.ready;
+        const r = await s.rpc('tools/call', { name: tool, arguments: input });
+        result = r.result?.content?.map((c) => c.text).join('\n') || JSON.stringify(r.error || r);
+      }
+      note({ call: full, input, result: result.slice(0, 500) });
+      out({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: useId, content: result }] }, parent_tool_use_id: null, session_id: sessionId, uuid: crypto.randomUUID() });
+    }
+  }
+  if (!said && !failed && !lines.some((l) => /^@@call/.test(l.trim()))) {
+    out({ type: 'assistant', message: { id: `msg_${++msgN}`, role: 'assistant', content: [{ type: 'text', text: `ok: ${lines.find((l) => l.trim()) || ''}`.slice(0, 200) }] }, parent_tool_use_id: null, session_id: sessionId });
+  }
+  out({ type: 'result', subtype: failed ? 'error_during_execution' : 'success', is_error: failed, result: failed ? 'fake failure' : 'done', duration_ms: Date.now() - t0, num_turns: 1, total_cost_usd: 0.001, session_id: sessionId });
+}
+
+async function drain() {
+  if (running) return;
+  running = true;
+  while (queue.length) await runTurn(queue.shift());
+  running = false;
+}
+
+readline.createInterface({ input: process.stdin }).on('line', (line) => {
+  let m;
+  try {
+    m = JSON.parse(line);
+  } catch {
+    return;
+  }
+  if (m.type === 'control_request') {
+    const sub = m.request?.subtype;
+    out({ type: 'control_response', response: { subtype: 'success', request_id: m.request_id, response: sub === 'initialize' ? { commands: [], models: [] } : {} } });
+    if (sub === 'interrupt') queue.length = 0;
+    return;
+  }
+  if (m.type === 'user') {
+    const c = m.message?.content;
+    const text = typeof c === 'string' ? c : (c || []).filter((x) => x.type === 'text').map((x) => x.text).join('\n');
+    note({ prompt: text.slice(0, 4000) });
+    out({ type: 'user', message: m.message, uuid: crypto.randomUUID(), session_id: sessionId, parent_tool_use_id: null });
+    queue.push(text);
+    drain();
+  }
+});
+process.stdin.on('end', () => {
+  for (const s of Object.values(servers)) s.proc.kill();
+  setTimeout(() => process.exit(0), 50);
+});
