@@ -61,6 +61,10 @@ services:
       # MCP servers start fast and survive rebuilds of the container.
       - uv-cache:${HOME}/.cache/uv
       - uv-data:${HOME}/.local/share/uv
+      # Playwright's default browser folder, for chats, MCP servers and scripts.
+      # Each project's Playwright downloads the build it wants once and keeps
+      # it through rebuilds. (The UI's own browser is in the image.)
+      - ms-playwright:${HOME}/.cache/ms-playwright
 
       # Optional extras (uncomment what you use):
       # GitHub CLI login, for the pull request card:
@@ -75,3 +79,4 @@ services:
 volumes:
   uv-cache:
   uv-data:
+  ms-playwright:
