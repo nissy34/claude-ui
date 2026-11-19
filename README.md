@@ -246,6 +246,8 @@ All settings are environment variables; see [`.env.example`](.env.example).
 | `CW_CHAT_IDLE_MINUTES` | `30` | Stop idle chat processes (they resume on the next message); `0` keeps them |
 | `CW_ALLOW_ANY_DIR` | `0` | `1` allows sessions outside the projects root |
 | `CW_SCRATCH_DIR` | `~/.claude-web/scratch` | Folder that "No folder" chats run in (shared, so Past conversations works there) |
+| `CW_AUTO_TITLES` | `1` | Give chats a short title after the first reply, from one quick no-tools call to `CW_TITLE_MODEL` (about $0.001 per chat). A rename always wins; `0` keeps the first line of the first message |
+| `CW_TITLE_MODEL` | `haiku` | Model for chat titles |
 | `CW_CHILD_SESSIONS` | `1` | `0` turns off the built-in sessions tools (child sessions) |
 | `CW_DESKTOP_MCP` | `1` | `0` turns off the Claude Desktop handoff server (`/mcp`) and the shared notes tools |
 | `CW_PUBLIC_URL` | | Address other computers use to reach the server (e.g. `http://myserver:8787` or your Tailscale URL), used in the Claude Desktop setup snippets. Set it when running in Docker, where the hostname is the container id |

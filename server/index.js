@@ -33,6 +33,7 @@ import { prStatus, mergeWhenReady } from './pr-status.js';
 import * as schedules from './schedules.js';
 import * as notes from './notes.js';
 import { controlSession } from './session-control.js';
+import { transcriptTitle } from './chat-title.js';
 import { createDesktopMcp, getToken as getMcpToken, rotateToken as rotateMcpToken } from './desktop-mcp.js';
 import { authStatus, mcpList, pluginList, cliVersion, permissionRules, removePermissionRule } from './claude-admin.js';
 
@@ -660,7 +661,8 @@ app.get(
     const top = stats.slice(0, 30);
     const conversations = [];
     for (const s of top) {
-      const title = await summarize(s.file).catch(() => '');
+      const stored = await transcriptTitle(s.file).catch(() => null);
+      const title = stored?.title || (await summarize(s.file).catch(() => ''));
       if (!title && s.size < 2000) continue;
       conversations.push({ id: s.id, title: title || '(untitled)', mtime: s.mtime, size: s.size });
     }
@@ -688,7 +690,10 @@ app.post(
     const dir = wt ? wt.path : project;
     if (resume && resume !== 'continue' && !/^[0-9a-f-]{36}$/i.test(resume)) throw new Error('Bad resume id');
     const s = store.create({ cwd: dir, kind, name: name ? String(name).slice(0, 80) : isScratch(project) ? 'New chat' : undefined, resume, model, permissionMode, effort, initialInput: req.body?.login && kind === 'claude' ? '/login\r' : undefined });
-    if (name) s.meta.customName = true;
+    // A resumed conversation starts with its Past conversations title, which may be just its first
+    // message, so it can still get a short title (or the one Claude Code stored) after a reply.
+    if (name && resume) s.meta.namedFromPrompt = true;
+    else if (name) s.meta.customName = true;
     s.meta.project = project;
     if (isScratch(project)) s.meta.noFolder = true;
     if (wt) s.meta.worktree = wt;
@@ -1228,6 +1233,11 @@ server.listen(config.port, config.host, () => {
   console.log(`projects root: ${config.projectsRoot}`);
   if (rootCaseWarning()) console.warn(`warning: CW_PROJECTS_ROOT differs in letter case from your home folder. Use ${rootCaseWarning()} so Claude here and Claude on the host file sessions under the same folder.`);
   console.log(`data dir:      ${config.dataDir}`);
+  // Give recent chats that only have their first message as a name a short title, one at a time.
+  if (config.autoTitles)
+    setTimeout(() => {
+      for (const j of store.list().filter((x) => !x.archived).slice(0, 40)) store.get(j.id)?.autoTitle?.();
+    }, 5000).unref();
 });
 
 let shuttingDown = false;
