@@ -212,6 +212,10 @@ export function mountProjectRoutes(app, { engine, store, resolveDir, wrap }) {
   );
 
   // ---- memory ----
+  app.put(
+    '/api/cprojects/:id/memory-pinned',
+    wrap(async (req, res) => res.json(project(req).memory.setPinned(req.body?.text, { by: { kind: 'user' } })))
+  );
   app.get(
     '/api/cprojects/:id/memory',
     wrap(async (req, res) => res.json(project(req).memory.list()))
@@ -223,7 +227,7 @@ export function mountProjectRoutes(app, { engine, store, resolveDir, wrap }) {
   app.put(
     '/api/cprojects/:id/memory/:name',
     wrap(async (req, res) => {
-      const r = project(req).memory.write({ name: req.params.name, description: req.body?.description, content: req.body?.content, baseVersion: req.body?.version, by: { kind: 'user' } });
+      const r = project(req).memory.write({ name: req.params.name, description: req.body?.description, content: req.body?.content, type: req.body?.type, baseVersion: req.body?.version, by: { kind: 'user' } });
       if (r.conflict) return res.status(409).json({ error: r.note, current: r.current });
       res.json(r);
     })

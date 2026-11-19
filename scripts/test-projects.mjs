@@ -207,6 +207,14 @@ async function main() {
   check(mem.content === 'npm run build', 'second write without base_version was refused (no lost update)', mem);
   const idx = fs.readFileSync(path.join(env.CW_DATA_DIR, 'cprojects', id, 'memory', 'MEMORY.md'), 'utf8');
   check(idx.includes('[build-steps](build-steps.md): How to build'), 'MEMORY.md generated from frontmatter', idx);
+  const pin = await api(`/api/cprojects/${id}/memory-pinned`, { method: 'PUT', body: { text: '- Staging: https://staging.example.com' } });
+  const idx2 = fs.readFileSync(path.join(env.CW_DATA_DIR, 'cprojects', id, 'memory', 'MEMORY.md'), 'utf8');
+  check(pin.cap === 16384 && idx2.includes('## Pinned\n- Staging') && idx2.includes('[build-steps]'), 'MEMORY.md keeps a pinned part next to the file lines', idx2);
+  const big = await api(`/api/cprojects/${id}/memory-pinned`, { method: 'PUT', body: { text: 'x'.repeat(17000) }, allowError: true });
+  check(/16 KB/.test(big.error || ''), 'MEMORY.md is capped at 16 KB', big);
+  await api(`/api/cprojects/${id}/memory/team-prefs`, { method: 'PUT', body: { description: 'How the team likes work done', content: 'Small PRs. See [[build-steps]].', type: 'feedback' } });
+  const typed = await api(`/api/cprojects/${id}/memory/team-prefs`);
+  check(typed.type === 'feedback' && typed.modified, 'memory files keep a type and modified time', typed);
 
   console.log('Restart: state and queued wakes survive');
   await api(`/api/cprojects/${id}`, { method: 'PATCH', body: { policy: { maxRunning: 1 } } });

@@ -354,6 +354,34 @@ function ThreadPane({ project, threadId, onBack, onSelect, openThread, onError }
                   {b.text}
                 </div>
               );
+            // What passed between threads: notes this thread shared, notes handed to it, signals about it.
+            case 'note.shared':
+              return (
+                <div key={e.id} className="pjp-note pjp-act" title={b.files?.length ? b.files.join(', ') : undefined}>
+                  <span className="pjp-act-k">↗ Shared {NOTE_LABEL[b.kind] || b.kind}</span> {b.text}
+                  <span className="muted">
+                    {' '}
+                    · {(b.pushTo || []).filter((x) => x !== project.coordinatorId).length ? `handed to ${(b.pushTo || []).filter((x) => x !== project.coordinatorId).map((x) => threadTitle(x) || 'a thread').join(', ')}` : 'searchable'}
+                  </span>
+                </div>
+              );
+            case 'notes.delivered':
+              return (
+                <div key={e.id} className="pjp-note pjp-act">
+                  <span className="pjp-act-k">↘ {b.via === 'tool' ? 'Handed notes mid-turn' : 'Handed notes'}</span>
+                  {b.notes.map((n) => (
+                    <div key={n.id} className="pjp-act-line">
+                      {NOTE_LABEL[n.kind] || n.kind} from {n.from}: {n.text}
+                    </div>
+                  ))}
+                </div>
+              );
+            case 'signal':
+              return (
+                <div key={e.id} className="pjp-note pjp-act warn">
+                  <span className="pjp-act-k">⚑ {SIGNAL_LABEL[b.kind] || b.kind}</span> {b.text}
+                </div>
+              );
             default:
               return null;
           }
@@ -428,8 +456,55 @@ function ClampText({ text }) {
 }
 
 // ---------------------------------------------------------------- context
+const NOTE_LABEL = { fix: 'fix', gotcha: 'gotcha', reusable: 'reusable helper', fact: 'fact', warning: 'warning', decision: 'your decision' };
+const SIGNAL_LABEL = { overlap: 'File overlap', stuck: 'Possibly stuck', dependency_landed: 'Dependency landed' };
+
+function ActivityRow({ a, project, onRetract }) {
+  const title = (id) => project.threads.find((t) => t.id === id)?.title || (id === 'user' ? 'You' : id);
+  const when = short(a.ts);
+  if (a.type === 'note')
+    return (
+      <div className="pjp-ctx-row pjp-act-row" title={a.files?.length ? a.files.join(', ') : undefined}>
+        <span className={`pjp-kind k-${a.kind}`}>{NOTE_LABEL[a.kind] || a.kind}</span>
+        <span className="pjp-act-text">
+          {a.text}
+          <span className="muted">
+            {' '}
+            · {a.from === 'user' ? 'you' : title(a.from)}
+            {a.to?.length ? ` → ${a.to.map(title).join(', ')}` : a.kind === 'decision' ? '' : ' · searchable'}
+          </span>
+        </span>
+        {a.kind !== 'decision' && (
+          <button className="pjp-ctx-del" title="Retract this note" onClick={() => onRetract(a.noteId)}>
+            ✕
+          </button>
+        )}
+        <span className="pjp-row-time">{when}</span>
+      </div>
+    );
+  if (a.type === 'signal')
+    return (
+      <div className="pjp-ctx-row pjp-act-row">
+        <span className="pjp-kind k-signal">{SIGNAL_LABEL[a.kind] || a.kind}</span>
+        <span className="pjp-act-text">{a.text}</span>
+        <span className="pjp-row-time">{when}</span>
+      </div>
+    );
+  if (a.type === 'delivered')
+    return (
+      <div className="pjp-ctx-row pjp-act-row muted">
+        <span className="pjp-kind">handed</span>
+        <span className="pjp-act-text">
+          {a.notes.length} note{a.notes.length > 1 ? 's' : ''} to {a.to === project.coordinatorId ? 'the coordinator' : title(a.to)} {a.via === 'tool' ? 'mid-turn' : 'with its wake'}
+        </span>
+        <span className="pjp-row-time">{when}</span>
+      </div>
+    );
+  return null;
+}
+
 function ContextTab({ project, onError, reload }) {
-  const [open, setOpen] = useState({ instructions: true, memory: false, files: true, artifacts: true });
+  const [open, setOpen] = useState({ instructions: true, memory: false, files: true, artifacts: true, activity: false });
   const [arts, setArts] = useState(null);
   const [mem, setMem] = useState(null);
   const [lib, setLib] = useState(null);
@@ -617,6 +692,20 @@ function ContextTab({ project, onError, reload }) {
               <span className="pjp-row-time">{short(a.mtime)}</span>
             </div>
           ))}
+        </>
+      )}
+      <button className="pjp-ctx-sec" onClick={() => toggle('activity')}>
+        <span className="chev">{open.activity ? '⌄' : '›'}</span> Activity <span className="muted">{project.notes?.length || ''}</span>
+      </button>
+      {open.activity && (
+        <>
+          {!project.activity?.length && <div className="pjp-ctx-row muted">Nothing passed between threads yet. Notes threads share, what was handed to whom, and signals show up here.</div>}
+          {(project.activity || [])
+            .filter((a) => a.type !== 'retracted')
+            .slice(0, 40)
+            .map((a) => (
+              <ActivityRow key={a.id} a={a} project={project} onRetract={(nid) => api(`/api/cprojects/${project.id}/notes/${nid}`, { method: 'DELETE' }).then(reload).catch(onError)} />
+            ))}
         </>
       )}
       <div className="pjp-storage">

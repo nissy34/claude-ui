@@ -299,3 +299,26 @@
   .pjs-control .pj-model { min-width: 0; width: 100%; }
   .pj-composer2 { padding: var(--sp-2) var(--sp-3) calc(var(--sp-2) + env(safe-area-inset-bottom)); }
 }
+
+/* ---- coordination activity: notes and signals ---- */
+.pjp-act { text-align: left; }
+.pjp-act-k { font-weight: 600; color: var(--text-2, inherit); margin-right: 4px; }
+.pjp-act-line { margin-top: 2px; padding-left: 14px; }
+.pjp-act-row { align-items: flex-start; }
+.pjp-act-text { flex: 1; min-width: 0; line-height: 1.4; overflow-wrap: anywhere; }
+.pjp-kind { flex: none; font-size: 11px; padding: 1px 6px; border-radius: 999px; background: var(--surface-2, rgba(0,0,0,.06)); color: var(--text-2, inherit); margin-top: 1px; white-space: nowrap; }
+.pjp-kind.k-warning, .pjp-kind.k-signal { background: color-mix(in srgb, var(--warn, #c77700) 18%, transparent); }
+.pjp-kind.k-decision { background: color-mix(in srgb, var(--accent, #c96442) 18%, transparent); }
+
+/* ---- memory screen: MEMORY.md, pinned part, file fields ---- */
+.pj-mem-sec { font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: var(--sp-2) 0 var(--sp-1); }
+.pj-memindex { padding: var(--sp-3) var(--sp-4); display: flex; flex-direction: column; gap: var(--sp-2); margin-bottom: var(--sp-3); }
+.pj-memindex-head { display: flex; align-items: center; gap: var(--sp-2); }
+.pj-membar { height: 4px; border-radius: 2px; background: var(--surface-2, rgba(0,0,0,.08)); overflow: hidden; }
+.pj-membar > span { display: block; height: 100%; background: var(--accent); }
+.pj-membar > span.warn { background: var(--warn); }
+.pj-pinned { display: flex; flex-direction: column; gap: 2px; padding: var(--sp-2); border: 1px dashed var(--border); border-radius: var(--r-sm, 6px); cursor: pointer; }
+.pj-memfield { display: grid; grid-template-columns: 96px 1fr; gap: var(--sp-2); align-items: baseline; }
+.pj-membody { border-top: 1px solid var(--border); padding-top: var(--sp-2); margin-top: var(--sp-1); }
+.pj-memask { display: flex; gap: var(--sp-2); align-items: flex-end; margin-top: var(--sp-3); }
+.pj-memask textarea { flex: 1; }

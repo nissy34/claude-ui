@@ -348,7 +348,7 @@ export function reduce(st, ev) {
       break;
     case 'note.shared': {
       const b = ev.body;
-      (st.notes ||= {})[b.id] = { id: b.id, kind: b.kind, text: b.text, files: b.files || [], by: ev.from?.kind === 'thread' ? ev.from.id : null, ts: ev.ts, durable: !!b.durable, forCoordinator: !!b.forCoordinator, scope: b.scope || null, replaces: b.replaces || null };
+      (st.notes ||= {})[b.id] = { id: b.id, kind: b.kind, text: b.text, files: b.files || [], by: ev.from?.kind === 'thread' ? ev.from.id : null, ts: ev.ts, durable: !!b.durable, forCoordinator: !!b.forCoordinator, scope: b.scope || null, replaces: b.replaces || null, memory: b.memory || null };
       if (b.replaces && st.notes[b.replaces]) st.notes[b.replaces].replacedBy = b.id;
       st.inbox ||= {};
       for (const sid of b.pushTo || []) {
@@ -559,6 +559,7 @@ export class Project {
     if (ev.type === 'user.message' && ev.thread && ev.trust === 'principal' && (ev.body.where === 'thread' || ev.body.where === 'steer')) this.correctionNote(ev);
     if (ev.type === 'thread.resolved') this.dependencyLanded(ev.thread);
     if (ev.type === 'files.changed') this.overlapCheck(ev.thread);
+    if (ev.type === 'memory.changed') this.memoryNotice(ev);
     if (ev.type === 'thread.resolved') setTimeout(() => this.engine.cleanupWorktree(this, ev.thread).catch((e) => console.warn('worktree cleanup:', e.message)), 2000).unref?.();
     // Follow-ups: the coordinator asked to hear when these threads change state.
     if (['turn.ended', 'thread.post', 'thread.resolved', 'decision.requested', 'session.error'].includes(ev.type)) this.checkFollowUps();
@@ -708,6 +709,18 @@ export class Project {
     const id = newId('note');
     const c = this.state.coordinator;
     this.append({ type: 'note.shared', from: { kind: 'user' }, trust: 'principal', thread: ev.thread, body: { id, kind: 'decision', scope: 'thread', text: clipText(ev.body.text, 600), files: [], durable: false, pushTo: c ? [c] : [], said: ev.id } });
+  }
+
+  /** A thread or the coordinator changed memory: a one-line notice to the other running threads. */
+  memoryNotice(ev) {
+    const by = ev.from || {};
+    if (!['thread', 'coordinator', 'user'].includes(by.kind) || !['created', 'updated'].includes(ev.body.action)) return;
+    const entry = this.memory.entries().find((e) => e.name === ev.body.name);
+    const pushTo = this.openThreads().filter((t) => t.id !== by.id && this.isRunning(t.id)).map((t) => t.id);
+    if (!pushTo.length) return;
+    const prev = liveNotes(this.state.notes).find((n) => n.scope === 'memory' && n.memory === ev.body.name);
+    const id = newId('note');
+    this.append({ type: 'note.shared', from: by.kind === 'thread' ? { kind: 'thread', id: by.id } : { kind: by.kind }, trust: by.kind === 'user' ? 'principal' : 'relay', body: { id, kind: 'fact', scope: 'memory', memory: ev.body.name, text: `Project memory "${ev.body.name}" was ${ev.body.action}${entry?.description ? `: ${entry.description}` : ''} (memory_read it if it matters to you).`, files: [], pushTo, ...(prev ? { replaces: prev.id } : {}) } });
   }
 
   /** Notes waiting for a session, packed for one delivery; marks them delivered. */
@@ -2094,7 +2107,7 @@ export class ProjectEngine {
       case 'memory_read':
         return p.memory.read(a.name);
       case 'memory_write':
-        return p.memory.write({ name: a.name, description: a.description, content: a.content, baseVersion: a.base_version, by: me });
+        return p.memory.write({ name: a.name, description: a.description, content: a.content, type: a.type, baseVersion: a.base_version, by: me });
       case 'memory_delete':
         return p.memory.remove(a.name, { baseVersion: a.base_version, by: me });
       default:

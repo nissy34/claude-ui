@@ -24,7 +24,8 @@ const memory = [
       properties: {
         name: { type: 'string', description: 'Short kebab-case subject, e.g. "deploy-process".' },
         description: { type: 'string', description: 'One line on what the file covers (shown in the index).' },
-        content: { type: 'string', description: 'The whole file body (Markdown). For a decision or rule, add **Why:** and **How to apply:** lines.' },
+        content: { type: 'string', description: 'The whole file body (Markdown). For a decision or rule, add **Why:** and **How to apply:** lines. Link related files with [[their-name]].' },
+        type: { type: 'string', enum: ['user', 'feedback', 'project', 'reference'], description: 'user: about the user; feedback: how they want work done; project: goals, decisions, constraints; reference: pointers to outside resources.' },
         base_version: { type: 'string', description: 'Version from memory_read, required when the file exists.' },
       },
       required: ['name', 'description', 'content'],

@@ -60,7 +60,7 @@ export function liveNotes(notes, now = Date.now()) {
 /** One note as a line: kind, source thread, time, text, files. */
 export function noteLine(n, threadTitle) {
   const when = new Date(n.ts).toISOString().slice(0, 16).replace('T', ' ');
-  const src = n.kind === 'decision' ? 'the user' : threadTitle ? `thread "${threadTitle}"` : 'a thread';
+  const src = n.kind === 'decision' ? 'the user' : threadTitle ? `thread "${threadTitle}"` : 'the project';
   return `- [${n.kind}] ${n.id} from ${src}, ${when} UTC: ${n.text}${n.files?.length ? ` (files: ${n.files.join(', ')})` : ''}`;
 }
 
