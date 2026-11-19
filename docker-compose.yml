@@ -52,6 +52,10 @@ services:
         target: ${HOME}/.gitconfig
         read_only: true
         bind: { create_host_path: false }
+      # Optional: let "Clone from git" in New chat reach private repositories with your
+      # SSH key (git@github.com:...) or saved HTTPS logins. Uncomment what you use.
+      # - ${HOME}/.ssh:${HOME}/.ssh:ro
+      # - ${HOME}/.git-credentials:${HOME}/.git-credentials:ro
 
       # uv's cache, the Pythons it downloads and `uv tool` installs, so uvx
       # MCP servers start fast and survive rebuilds of the container.

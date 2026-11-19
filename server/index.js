@@ -7,6 +7,8 @@ import readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { WebSocketServer } from 'ws';
+import { listEnvironments, createEnvironment, updateEnvironment, deleteEnvironment, getEnvironment } from './environments.js';
+import { checkClone, cloneRepo } from './clone.js';
 import { config, rootCaseWarning } from './config.js';
 import {
   isAuthed,
@@ -557,6 +559,50 @@ app.post(
   })
 );
 
+// Clone a git repository into the projects root. Streams NDJSON lines: {progress}, then {path} or {error}.
+// Closing the request (Cancel in the dialog) stops git and removes the half-cloned folder.
+app.post('/api/projects/clone', (req, res) => {
+  let job;
+  try {
+    job = checkClone(req.body?.url, req.body?.name);
+  } catch (e) {
+    return res.status(400).json({ error: e.message });
+  }
+  res.setHeader('Content-Type', 'application/x-ndjson');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('X-Accel-Buffering', 'no');
+  const send = (o) => res.writableEnded || res.write(JSON.stringify(o) + '\n');
+  send({ progress: { line: `Cloning into ${job.dest}` } });
+  let last = 0;
+  const { promise, cancel } = cloneRepo(job, (p) => {
+    const now = Date.now();
+    if (p.percent === 100 || now - last > 150) {
+      last = now;
+      send({ progress: p });
+    }
+  });
+  res.on('close', () => !res.writableFinished && cancel());
+  promise.then(
+    (p) => (send({ path: p }), res.end()),
+    (e) => (send({ error: e.message }), res.end())
+  );
+});
+
+// ---------- environments ----------
+app.get('/api/environments', (req, res) => res.json({ environments: listEnvironments() }));
+app.post(
+  '/api/environments',
+  wrap(async (req, res) => res.json({ environment: createEnvironment(req.body, resolveDir) }))
+);
+app.put(
+  '/api/environments/:id',
+  wrap(async (req, res) => res.json({ environment: updateEnvironment(req.params.id, req.body, resolveDir) }))
+);
+app.delete(
+  '/api/environments/:id',
+  wrap(async (req, res) => (deleteEnvironment(req.params.id), res.json({ ok: true })))
+);
+
 // Past Claude Code conversations for a directory (read from Claude's own transcript files).
 async function summarize(file) {
   const stream = fs.createReadStream(file, { encoding: 'utf8' });
@@ -624,7 +670,15 @@ app.get('/api/sessions', (req, res) => res.json({ sessions: store.list() }));
 app.post(
   '/api/sessions',
   wrap(async (req, res) => {
-    const { cwd, kind, name, resume, model, permissionMode, effort, worktree, parentId, noFolder } = req.body || {};
+    const { kind, name, resume, model, permissionMode, effort, worktree, parentId, envId } = req.body || {};
+    let { cwd, noFolder } = req.body || {};
+    // An environment's first folder is the working folder; with no folders it runs like "No folder".
+    const environment = envId ? getEnvironment(envId) : null;
+    if (envId && !environment) throw new Error('That environment no longer exists');
+    if (environment) {
+      cwd = environment.folders[0];
+      noFolder = !cwd;
+    }
     const project = noFolder ? fs.realpathSync(config.scratchDir) : resolveDir(cwd);
     const wt = worktree && !noFolder ? await createWorktree(project, name || 'chat') : null;
     const dir = wt ? wt.path : project;
@@ -634,6 +688,10 @@ app.post(
     s.meta.project = project;
     if (isScratch(project)) s.meta.noFolder = true;
     if (wt) s.meta.worktree = wt;
+    if (environment) {
+      s.meta.envId = environment.id;
+      s.meta.envName = environment.name;
+    }
     if (parentId && store.get(parentId)) s.meta.parentId = parentId;
     store.save();
     res.json({ session: s.toJSON() });
@@ -678,6 +736,8 @@ app.post(
     const t = store.create({ cwd: m.cwd, kind: 'chat', name: `${m.name} (fork)`.slice(0, 80), model: m.model, permissionMode: m.permissionMode, effort: m.effort });
     t.meta.project = m.project || m.cwd;
     if (m.worktree) t.meta.worktree = m.worktree;
+    if (m.envId) Object.assign(t.meta, { envId: m.envId, envName: m.envName });
+    if (m.noFolder) t.meta.noFolder = true;
     t.meta.customName = true;
     src.forkInto(t, Number.isInteger(req.body?.index) ? req.body.index : undefined);
     store.save();

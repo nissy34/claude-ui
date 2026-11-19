@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { api, timeAgo } from './api.js';
 import { getThemePref, setThemePref } from './theme.js';
+import { EnvironmentDialog, ClonePanel, envSummary, FolderIcon, EnvIcon, GitIcon } from './Environments.jsx';
 
 function dotState(s) {
   if (s.kind === 'chat') {
@@ -328,33 +329,43 @@ function lastFolder() {
   }
 }
 
-const FolderIcon = () => (
-  <svg className="pl-ico" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
-    <path d="M1.5 4.5a1 1 0 0 1 1-1h3.6l1.4 1.5h6a1 1 0 0 1 1 1v6.5a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1z" fill="none" stroke="currentColor" strokeWidth="1.2" />
-  </svg>
-);
 const ChatIcon = () => (
   <svg className="pl-ico" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
     <path d="M2.5 3.5h11a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H7l-3 2.5v-2.5H2.5a1 1 0 0 1-1-1v-6a1 1 0 0 1 1-1z" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
   </svg>
 );
+const ENV = 'env:';
 
 export function NewChatDialog({ projects, onCreate, onClose, onReloadProjects, onError, onHistory }) {
   const all = projects.projects;
+  const [envs, setEnvs] = useState(null);
   const [q, setQ] = useState('');
-  // Start on the folder used last time (or "No folder"), else the most recently used folder.
+  // Start on the folder or environment used last time (or "No folder"), else the most recently used folder.
   const [sel, setSel] = useState(() => {
     const last = lastFolder();
-    if (last === NO_FOLDER || (last && all.some((p) => p.path === last))) return last;
+    if (last === NO_FOLDER || last?.startsWith(ENV) || (last && all.some((p) => p.path === last))) return last;
     return all.find((p) => p.lastUsed)?.path || NO_FOLDER;
   });
   const [worktree, setWorktree] = useState(false);
   const [newName, setNewName] = useState(null);
+  const [cloning, setCloning] = useState(false);
+  const [editEnv, setEditEnv] = useState(null); // {} for new, env object to edit
+  React.useEffect(() => {
+    api('/api/environments')
+      .then((r) => setEnvs(r.environments))
+      .catch(() => setEnvs([]));
+  }, []);
+  // A remembered environment that was deleted falls back to the newest folder.
+  React.useEffect(() => {
+    if (envs && sel?.startsWith(ENV) && !envs.some((e) => ENV + e.id === sel)) setSel(all.find((p) => p.lastUsed)?.path || NO_FOLDER);
+  }, [envs]);
   const needle = q.trim().toLowerCase();
   const list = all.filter((p) => !needle || p.name.toLowerCase().includes(needle));
+  const envList = (envs || []).filter((e) => !needle || e.name.toLowerCase().includes(needle));
   const showNone = !needle || 'no folder'.includes(needle);
-  const showSearch = all.length > 6;
+  const showSearch = all.length + (envs?.length || 0) > 6;
   const selProject = all.find((x) => x.path === sel);
+  const selEnv = sel?.startsWith(ENV) ? envs?.find((e) => ENV + e.id === sel) : null;
   const noFolder = sel === NO_FOLDER;
 
   const create = async (e) => {
@@ -369,23 +380,44 @@ export function NewChatDialog({ projects, onCreate, onClose, onReloadProjects, o
     }
   };
 
-  const start = (p = sel) => {
-    if (!p) return;
+  const remember = (p) => {
     try {
       localStorage.setItem(LAST_KEY, p);
     } catch {}
+  };
+
+  const start = (p = sel) => {
+    if (!p || (p.startsWith(ENV) && !envs)) return;
+    remember(p);
     if (p === NO_FOLDER) onCreate({ noFolder: true, kind: 'chat' });
+    else if (p.startsWith(ENV)) onCreate({ envId: p.slice(ENV.length), kind: 'chat' });
     else onCreate({ cwd: p, kind: 'chat', worktree: worktree && !!all.find((x) => x.path === p)?.git });
     onClose();
+  };
+
+  const cloned = async (path) => {
+    await onReloadProjects();
+    remember(path);
+    onCreate({ cwd: path, kind: 'chat' });
+    onClose();
+  };
+
+  const envSaved = (env) => {
+    setEnvs((l) => [...(l || []).filter((e) => e.id !== env.id), env].sort((a, b) => a.name.localeCompare(b.name)));
+    setSel(ENV + env.id);
+    setEditEnv(null);
   };
 
   const onSearchKey = (e) => {
     if (e.key !== 'Enter') return;
     e.preventDefault();
-    if (needle && list.length) start(list[0].path);
+    if (needle && envList.length) start(ENV + envList[0].id);
+    else if (needle && list.length) start(list[0].path);
     else if (needle && showNone) start(NO_FOLDER);
     else start();
   };
+
+  const historyDir = noFolder ? projects.scratch : selEnv ? selEnv.folders[0] || projects.scratch : sel;
 
   return (
     <div className="modal" onClick={onClose}>
@@ -398,7 +430,7 @@ export function NewChatDialog({ projects, onCreate, onClose, onReloadProjects, o
         </div>
         <div className="modal-body">
           <span className="label">Where should Claude work?</span>
-          {showSearch && <input className="field" autoFocus placeholder="Search folders" value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={onSearchKey} />}
+          {showSearch && <input className="field" autoFocus placeholder="Search folders and environments" value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={onSearchKey} />}
           <div className="pick-list" role="listbox" aria-label="Folder">
             {showNone && (
               <button role="option" aria-selected={noFolder} className={noFolder ? 'on' : ''} onClick={() => setSel(NO_FOLDER)} onDoubleClick={() => start(NO_FOLDER)} autoFocus={!showSearch}>
@@ -410,7 +442,32 @@ export function NewChatDialog({ projects, onCreate, onClose, onReloadProjects, o
                 <span className="pl-check">{noFolder ? '✓' : ''}</span>
               </button>
             )}
-            {showNone && list.length > 0 && <div className="pl-sep" />}
+            {envList.length > 0 && (
+              <>
+                {showNone && <div className="pl-sep" />}
+                <div className="pl-group">Environments</div>
+                {envList.map((e) => {
+                  const on = sel === ENV + e.id;
+                  return (
+                    <div key={e.id} className={`pl-env ${on ? 'on' : ''}`}>
+                      <button role="option" aria-selected={on} className={on ? 'on' : ''} onClick={() => setSel(ENV + e.id)} onDoubleClick={() => start(ENV + e.id)}>
+                        <EnvIcon />
+                        <span className="pl-name">
+                          {e.name}
+                          <span className="pl-sub">{envSummary(e)}</span>
+                        </span>
+                        <span className="pl-check">{on ? '✓' : ''}</span>
+                      </button>
+                      <button className="pl-edit" onClick={() => setEditEnv(e)} aria-label={`Edit ${e.name}`} title="Edit environment">
+                        ✎
+                      </button>
+                    </div>
+                  );
+                })}
+                {list.length > 0 && <div className="pl-group">Folders</div>}
+              </>
+            )}
+            {showNone && envList.length === 0 && list.length > 0 && <div className="pl-sep" />}
             {list.map((p) => (
               <button key={p.path} role="option" aria-selected={sel === p.path} className={sel === p.path ? 'on' : ''} onClick={() => setSel(p.path)} onDoubleClick={() => start(p.path)}>
                 <FolderIcon />
@@ -420,31 +477,43 @@ export function NewChatDialog({ projects, onCreate, onClose, onReloadProjects, o
                 <span className="pl-check">{sel === p.path ? '✓' : ''}</span>
               </button>
             ))}
-            {list.length === 0 && !showNone && <div className="pad muted">No folders match</div>}
+            {list.length === 0 && envList.length === 0 && !showNone && <div className="pad muted">Nothing matches</div>}
           </div>
           <div className="pl-foot">
             <span className="muted" title={projects.root}>
               {all.length === 0 ? 'No folders yet in ' : 'Folders in '}
               {projects.root}
             </span>
-            {newName === null && (
-              <button className="link-btn" onClick={() => setNewName('')}>
-                + New folder
-              </button>
-            )}
           </div>
+          {!cloning && newName === null && (
+            <div className="pl-actions">
+              <button className="btn small" onClick={() => setNewName('')}>
+                <FolderIcon /> New folder
+              </button>
+              <button className="btn small" onClick={() => setCloning(true)}>
+                <GitIcon /> Clone from git
+              </button>
+              <button className="btn small" onClick={() => setEditEnv({})}>
+                <EnvIcon /> New environment
+              </button>
+            </div>
+          )}
           {newName !== null && (
             <form className="row" onSubmit={create}>
               <input className="field" autoFocus placeholder="new-project" value={newName} onChange={(e) => setNewName(e.target.value)} onKeyDown={(e) => e.key === 'Escape' && (e.stopPropagation(), setNewName(null))} />
+              <button type="button" className="btn small" onClick={() => setNewName(null)}>
+                Cancel
+              </button>
               <button className="btn small">Create</button>
             </form>
           )}
+          {cloning && <ClonePanel root={projects.root} onDone={cloned} onCancel={() => setCloning(false)} />}
           {projects.rootCaseHint && (
             <div className="pl-warn">
               The projects folder is set as <code>{projects.root}</code>, but your home folder is spelled with different capitals. Set <code>CW_PROJECTS_ROOT={projects.rootCaseHint}</code> in <code>.env</code> and restart, so these chats line up with Claude on your computer.
             </div>
           )}
-          {selProject?.git && (
+          {selProject?.git && !cloning && (
             <div className="wt-row">
               <div className="wt-text">
                 <div>Isolated worktree</div>
@@ -455,8 +524,8 @@ export function NewChatDialog({ projects, onCreate, onClose, onReloadProjects, o
           )}
         </div>
         <div className="modal-foot">
-          {sel && (
-            <button className="btn ghost" onClick={() => (onClose(), onHistory(noFolder ? projects.scratch : sel))}>
+          {sel && historyDir && (
+            <button className="btn ghost" onClick={() => (onClose(), onHistory(historyDir))}>
               Resume a past conversation…
             </button>
           )}
@@ -464,11 +533,21 @@ export function NewChatDialog({ projects, onCreate, onClose, onReloadProjects, o
           <button className="btn" onClick={onClose}>
             Cancel
           </button>
-          <button className="btn primary" disabled={!sel} onClick={() => start()}>
+          <button className="btn primary" disabled={!sel || cloning} onClick={() => start()}>
             Start chat
           </button>
         </div>
       </div>
+      {editEnv && (
+        <EnvironmentDialog
+          env={editEnv.id ? editEnv : null}
+          projects={projects}
+          onSaved={envSaved}
+          onDeleted={(id) => (setEnvs((l) => l.filter((e) => e.id !== id)), setEditEnv(null), sel === ENV + id && setSel(NO_FOLDER))}
+          onClose={() => setEditEnv(null)}
+          onError={onError}
+        />
+      )}
     </div>
   );
 }
