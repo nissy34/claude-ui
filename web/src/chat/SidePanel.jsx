@@ -5,6 +5,7 @@ import ArtifactView from './ArtifactView.jsx';
 import BrowserView from './BrowserView.jsx';
 import BackgroundTasks, { isLive } from './BackgroundTasks.jsx';
 import { Button, IconButton } from '../ui/index.jsx';
+import { confirmDialog } from '../ui/dialogs.jsx';
 
 function UnifiedDiff({ diff, path, comments, onComment }) {
   const [draft, setDraft] = useState(null); // { i, line, text }
@@ -104,7 +105,7 @@ function PrCard({ sessionId, refreshKey, onPrompt, busy, onError }) {
   if (!pr) return null;
   const { pass, fail, pending: pend } = pr.summary;
   const merge = async () => {
-    if (!window.confirm(`Turn on auto-merge (squash) for PR #${pr.number}? GitHub merges it once checks and reviews pass.`)) return;
+    if (!(await confirmDialog(`Turn on auto-merge (squash) for PR #${pr.number}? GitHub merges it once checks and reviews pass.`, { ok: 'Turn on' }))) return;
     setMerging(true);
     try {
       setSt(await api(`/api/sessions/${sessionId}/pr/merge-when-ready`, { method: 'POST', body: { number: pr.number } }));

@@ -15,6 +15,7 @@ Open the app at **`/#design`** to see every token and component in the current t
 
 1. **No raw values in screens.** Colors, font sizes and radii in `styles.css` and JSX use tokens (`var(--accent)`, `var(--fs-md)`, `var(--r-lg)`). Pixel values are fine for layout (widths, offsets). No `style={{ color: … }}` or `fontSize` in JSX: use a class.
 2. **Use the components.** `Button`, `IconButton`, `Menu`/`MenuItem`, `Modal`/`ModalHead`/`ModalBody`/`ModalFoot`, `Input`/`Select`/`Textarea`, `Pill`, `Count`, `Card`, `Toggle`, `Segmented`, `Spinner`, `Kbd` from `web/src/ui`. They pass through any props and merge `className`.
+   - Dialogs close on Escape (top one only) and on a click outside. Menus: call `useDismiss(open, close, rootRef)` so they close on Escape and outside clicks. Ask with `confirmDialog()` / `promptDialog()` from `web/src/ui/dialogs.jsx`, never `window.confirm` / `window.prompt`.
 3. **Forms:** put `fields` (and optionally `sm`) on a form or wrapper and every plain input, select and textarea inside gets the standard look, or use `className="field"` on a single control.
 4. **Surfaces:** a bordered list item or panel is a `card` (`interactive` for clickable, `sunken` inside a panel). State labels are a `pill` with a tone (`accent`, `green`, `red`, `warn`, `blue`, `purple`).
 5. **New token or component?** Add it to `tokens.css` / `components.css` (+ `ui/index.jsx`) and to the gallery (`Gallery.jsx`), not to a screen.

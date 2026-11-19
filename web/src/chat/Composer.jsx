@@ -5,7 +5,8 @@ import { needsSignIn } from './McpAuth.jsx';
 import { findModel, modelLabel, useModels } from '../models.js';
 import { withQuote } from './quote.js';
 import { QuoteMark } from './QuoteReply.jsx';
-import { Button, Menu } from '../ui/index.jsx';
+import { Button, Menu, useDismiss } from '../ui/index.jsx';
+import { promptDialog } from '../ui/dialogs.jsx';
 
 const isTouch = typeof window !== 'undefined' && window.matchMedia('(pointer: coarse)').matches;
 
@@ -252,14 +253,7 @@ export default function Composer({ sessionId, disabled, busy, onSend, onStop, mo
 
   // Close an open menu on an outside click.
   const barRef = useRef(null);
-  useEffect(() => {
-    if (!menu) return;
-    const onDown = (e) => {
-      if (!e.target.closest?.('.menu-wrap')) (setMenu(null), setSub(null));
-    };
-    document.addEventListener('mousedown', onDown);
-    return () => document.removeEventListener('mousedown', onDown);
-  }, [menu]);
+  useDismiss(!!menu, () => (setMenu(null), setSub(null)), barRef);
 
   // Work out what to suggest from the text around the cursor: /commands at the start, @files anywhere.
   const updateSuggest = (value, cursor) => {
@@ -443,6 +437,7 @@ export default function Composer({ sessionId, disabled, busy, onSend, onStop, mo
   return (
     <div className="composer-wrap">
       <div
+        ref={barRef}
         className="composer"
         onDragOver={(e) => e.preventDefault()}
         onDrop={(e) => {
@@ -648,10 +643,10 @@ export default function Composer({ sessionId, disabled, busy, onSend, onStop, mo
                 )}
                 <div className="sep" />
                 <button
-                  onClick={() => {
-                    const v = window.prompt('Model name or alias', model);
-                    if (v != null) onModel(v);
+                  onClick={async () => {
                     setMenu(null);
+                    const v = await promptDialog('Model name or alias', model, { ok: 'Use model', placeholder: 'e.g. sonnet or claude-sonnet-5-5' });
+                    if (v != null) onModel(v.trim());
                   }}
                 >
                   <span className="check" />

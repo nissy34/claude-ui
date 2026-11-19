@@ -15,7 +15,8 @@ import { isLive as taskLive, BackgroundPill } from './BackgroundTasks.jsx';
 import { ChatCtx } from './ctx.js';
 import SideChat from './SideChat.jsx';
 import TerminalView from '../TerminalView.jsx';
-import { Button, IconButton, Menu, Modal, ModalHead } from '../ui/index.jsx';
+import { Button, IconButton, Menu, Modal, ModalHead, useDismiss } from '../ui/index.jsx';
+import { confirmDialog, promptDialog } from '../ui/dialogs.jsx';
 
 const AUTH_RE = /oauth|authenticat|\/login|not logged in|invalid api key|credentials/i;
 
@@ -350,7 +351,10 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
   const [files, setFiles] = useState([]);
   const [wide, setWide] = useState(false);
   const [changesKey, setChangesKey] = useState(0);
+  const pendingArtifacts = useRef(new Map());
   const [menu, setMenu] = useState(false);
+  const moreRef = useRef(null);
+  useDismiss(menu, () => setMenu(false), moreRef);
   const [info, setInfo] = useState(false);
   const [terminal, setTerminal] = useState(false);
   const [inbox, setInbox] = useState([]);
@@ -421,7 +425,13 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
           if (e.k === 'block' && e.block?.type === 'tool_use' && !e.parent) {
             const { name, input } = e.block;
             if (/^mcp__browser__(navigate|click|type)$/.test(name)) ctxRef.current?.openBrowser();
-            else if (name === 'Write' && /\.(html?|svg)$/i.test(input?.file_path || '')) setTimeout(() => ctxRef.current?.openArtifact(input.file_path), 400);
+            // Opened once the file is written: before that (e.g. while asking permission) the page doesn't exist yet.
+            else if (name === 'Write' && /\.(html?|svg)$/i.test(input?.file_path || '')) pendingArtifacts.current.set(e.block.id, input.file_path);
+          }
+          if (e.k === 'tool_result' && pendingArtifacts.current.has(e.toolUseId)) {
+            const file = pendingArtifacts.current.get(e.toolUseId);
+            pendingArtifacts.current.delete(e.toolUseId);
+            if (!e.isError) setTimeout(() => ctxRef.current?.openArtifact(file), 200);
           }
           if (e.k === 'block' || e.k === 'result') {
             setDeltas((d) => {
@@ -629,18 +639,18 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
     return () => window.removeEventListener('hashchange', check);
   }, [meta.cwd, session.id]);
 
-  const rename = () => {
+  const rename = async () => {
     setMenu(false);
-    const name = window.prompt('Rename chat', meta.name);
+    const name = await promptDialog('Rename chat', meta.name);
     if (name) api(`/api/sessions/${session.id}`, { method: 'PATCH', body: { name } }).catch(onError);
   };
   const archive = () => {
     setMenu(false);
     api(`/api/sessions/${session.id}`, { method: 'PATCH', body: { archived: !meta.archived } }).catch(onError);
   };
-  const remove = () => {
+  const remove = async () => {
     setMenu(false);
-    if (!window.confirm('Delete this chat? Claude keeps its own transcript, so you can resume it later from "Past conversations".')) return;
+    if (!(await confirmDialog('Delete this chat? Claude keeps its own transcript, so you can resume it later from "Past conversations".', { ok: 'Delete', danger: true }))) return;
     api(`/api/sessions/${session.id}`, { method: 'DELETE' }).then(onDeleted).catch(onError);
   };
   const fork = async (index) => {
@@ -735,13 +745,13 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
               <IconButton className={`${terminal ? 'on' : ''}`} title="Terminal" onClick={toggleTerminal}>
                 ›_
               </IconButton>
-              <IconButton className={`${panel && panel !== 'browser' && panel !== 'tasks' ? 'on' : ''}`} title="Changes and files" onClick={() => (panel && panel !== 'browser' && panel !== 'tasks' ? setPanel(null) : openPanel('changes'))}>
+              <IconButton className={`${panel === 'changes' ? 'on' : ''}`} title="Changes and files" onClick={() => (panel === 'changes' ? setPanel(null) : openPanel('changes'))}>
                 ± <span className="lbl hide-mobile">Changes</span>
               </IconButton>
               <IconButton className={`${panel === 'browser' ? 'on' : ''}`} title="Browser" onClick={() => (panel === 'browser' ? setPanel(null) : openPanel('browser'))}>
                 ◎ <span className="lbl hide-mobile">Browser</span>
               </IconButton>
-              <div className="menu-wrap">
+              <div className="menu-wrap" ref={moreRef}>
                 <IconButton title="More" onClick={() => setMenu((m) => !m)}>
                   ⋯
                 </IconButton>

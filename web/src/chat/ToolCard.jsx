@@ -176,6 +176,8 @@ function childSessionId(result) {
   }
 }
 
+const STOPPED_RE = /^\s*(The user doesn't want to proceed with this tool use|\[Request interrupted by user)/;
+
 /** First meaningful line of a failed tool's result, for the collapsed row. */
 function errorLine(text) {
   const line = String(text).split('\n').map((l) => l.trim()).find(Boolean) || '';
@@ -246,7 +248,9 @@ export default function ToolCard({ item, cwd, children }) {
   const [open, setOpen] = useState(isEditLike && !plan && !(name === 'Write' && filePath && artifactKind(filePath)));
   const [showResult, setShowResult] = useState(false);
   const stats = useMemo(() => diffStats(name, input || {}), [name, input]);
-  const status = result ? (result.isError ? 'error' : 'done') : item.perm && !item.perm.done ? 'waiting' : 'running';
+  // Stop (or a denial) makes the CLI answer the tool with its own "doesn't want to proceed" boilerplate.
+  const stopped = !!result?.isError && STOPPED_RE.test(result.text || '');
+  const status = stopped ? 'stopped' : result ? (result.isError ? 'error' : 'done') : item.perm && !item.perm.done ? 'waiting' : 'running';
   const summary = toolSummary(name, input, cwd);
   const body = open ? <ToolBody name={name} input={input} cwd={cwd} /> : null;
   const resultText = result?.text || '';
@@ -291,9 +295,10 @@ export default function ToolCard({ item, cwd, children }) {
             {bg.live ? 'Running in background' : 'Background'}
           </span>
         )}
-        <span className={`tstate ${status}`}>{status === 'running' ? <span className="spinner" /> : status === 'error' ? '!' : status === 'waiting' ? '…' : '✓'}</span>
+        <span className={`tstate ${status}`}>{status === 'running' ? <span className="spinner" /> : status === 'error' ? '!' : status === 'stopped' ? '■' : status === 'waiting' ? '…' : '✓'}</span>
       </button>
       {result?.images?.length > 0 && <ToolImages images={result.images} label={name.replace(/^mcp__([^_]+)__/, '$1 · ')} />}
+      {stopped && !open && item.perm?.done !== 'deny' && <div className="tool-stopped">Stopped</div>}
       {status === 'error' && !open && resultText && (
         <div className="tool-err" title={resultText} onClick={() => setOpen(true)}>
           {errorLine(resultText)}

@@ -340,9 +340,24 @@ export async function run(sessionId, op, a = {}) {
       default:
         throw new Error(`Unknown browser action ${op}`);
     }
+  } catch (e) {
+    throw new Error(cleanError(e));
   } finally {
     bump(t);
   }
+}
+
+// Playwright errors carry a colored "Call log" and the API name ("page.goto: net::ERR_NAME_NOT_RESOLVED at http://a/ Call log: …").
+// Keep the first line, without color codes or the "page.goto:" prefix.
+export function cleanError(e) {
+  const msg = String(e?.message || e)
+    .replace(/\u001b\[[0-9;]*m/g, '')
+    .split(/\n|\s+Call log:/)[0]
+    .replace(/^(page|locator|frame|keyboard|mouse|elementHandle)\.\w+:\s*/, '')
+    .trim();
+  const net = msg.match(/^net::(ERR_[A-Z_]+) at (\S+)/);
+  if (net) return `Couldn't open ${net[2]} (${net[1]})`;
+  return msg || 'Browser action failed';
 }
 
 export async function screenshot(sessionId, { type = 'png', quality, fullPage = false } = {}) {
