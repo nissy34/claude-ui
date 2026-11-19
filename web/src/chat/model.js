@@ -1,5 +1,16 @@
 // Turns the flat event log from the server into renderable items.
 
+// Chats saved before pictures were kept show Claude Code's note for the saved copy instead.
+const SOURCE_RE = /\[Image: source: ([^\]\n]+?[\\/]tool-results[\\/][^\]\n\\/]+\.(?:png|jpe?g|gif|webp))\]/gi;
+
+function resultOf(e) {
+  if (e.images?.length || typeof e.text !== 'string' || !e.text.includes('[Image: source:')) return { text: e.text, isError: e.isError, images: e.images || [] };
+  const images = [...e.text.matchAll(SOURCE_RE)].map((m) => `/api/tool-result-image?path=${encodeURIComponent(m[1].trim())}`);
+  if (!images.length) return { text: e.text, isError: e.isError, images: [] };
+  const text = e.text.replace(SOURCE_RE, '').replace(/^\[image\]$/gm, '').replace(/\n{3,}/g, '\n\n').trim();
+  return { text, isError: e.isError, images };
+}
+
 export function buildItems(events, deltas, offset = 0) {
   const items = [];
   const tools = new Map(); // tool_use id -> item
@@ -23,7 +34,7 @@ export function buildItems(events, deltas, offset = 0) {
           tools.set(e.block.id, child);
         } else if (e.k === 'tool_result') {
           const t = tools.get(e.toolUseId);
-          if (t) t.result = { text: e.text, isError: e.isError };
+          if (t) t.result = resultOf(e);
         }
       }
       continue;
@@ -53,7 +64,7 @@ export function buildItems(events, deltas, offset = 0) {
       }
       case 'tool_result': {
         const t = tools.get(e.toolUseId);
-        if (t) t.result = { text: e.text, isError: e.isError };
+        if (t) t.result = resultOf(e);
         break;
       }
       case 'perm': {

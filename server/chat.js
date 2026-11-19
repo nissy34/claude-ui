@@ -12,6 +12,7 @@ import { browserAvailable } from './browser.js';
 import { config, PRIVATE_ENV } from './config.js';
 import { resolveCommand } from './launch.js';
 import { withOpener } from './opener.js';
+import { toolResultParts } from './tool-images.js';
 import { elicitationEvent, elicitationResponse, mcpAuthMethods, slimServers } from './mcp-admin.js';
 
 const CHAT_DIR = path.join(config.dataDir, 'chats');
@@ -71,15 +72,10 @@ function clip(s, n = MAX_TEXT) {
   return s.length > n ? s.slice(0, n) + `\n… [${s.length - n} more characters]` : s;
 }
 
-function resultText(content) {
-  if (typeof content === 'string') return content;
-  if (Array.isArray(content)) {
-    return content
-      .map((c) => (c.type === 'text' ? c.text : c.type === 'image' ? '[image]' : c.type === 'tool_reference' ? `[${c.tool_name}]` : ''))
-      .filter(Boolean)
-      .join('\n');
-  }
-  return content == null ? '' : JSON.stringify(content);
+/** A tool_result's text (clipped) and the URLs of any pictures it returned. */
+function resultEvent(content) {
+  const { text, images } = toolResultParts(content);
+  return images.length ? { text: clip(text), images } : { text: clip(text) };
 }
 
 function promptText(content) {
@@ -112,7 +108,7 @@ export function eventsFromTranscript(file) {
       const hasToolResult = Array.isArray(c) && c.some((x) => x.type === 'tool_result');
       if (hasToolResult) {
         for (const x of c) {
-          if (x.type === 'tool_result') events.push({ k: 'tool_result', toolUseId: x.tool_use_id, text: clip(resultText(x.content)), isError: !!x.is_error, ts });
+          if (x.type === 'tool_result') events.push({ k: 'tool_result', toolUseId: x.tool_use_id, ...resultEvent(x.content), isError: !!x.is_error, ts });
         }
       } else {
         const text = promptText(c).trim();
@@ -479,7 +475,7 @@ export class ChatSession {
         if (Array.isArray(c)) {
           for (const x of c) {
             if (x.type === 'tool_result') {
-              this.record({ k: 'tool_result', toolUseId: x.tool_use_id, text: clip(resultText(x.content)), isError: !!x.is_error, parent: msg.parent_tool_use_id || null, uuid: msg.uuid });
+              this.record({ k: 'tool_result', toolUseId: x.tool_use_id, ...resultEvent(x.content), isError: !!x.is_error, parent: msg.parent_tool_use_id || null, uuid: msg.uuid });
             }
           }
         }

@@ -384,7 +384,7 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
       run = [];
     };
     for (const it of items) {
-      if (!verbose && it.type === 'tool' && QUIET.has(it.name) && !(it.perm && !it.perm.done) && !it.result?.isError) run.push(it);
+      if (!verbose && it.type === 'tool' && QUIET.has(it.name) && !(it.perm && !it.perm.done) && !it.result?.isError && !it.result?.images?.length) run.push(it);
       else {
         flush();
         out.push(it);
