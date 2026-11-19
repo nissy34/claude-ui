@@ -14,6 +14,7 @@ import { config } from './config.js';
 import { loginAllowed, loginFailed } from './auth.js';
 import * as notes from './notes.js';
 import { controlSession } from './session-control.js';
+import { createFileTools } from './desktop-files.js';
 
 const TOKEN_FILE = path.join(config.dataDir, 'mcp-token');
 const BRIDGE = path.join(path.dirname(fileURLToPath(import.meta.url)), 'desktop-bridge.mjs');
@@ -235,13 +236,16 @@ function currentPlan(events) {
 }
 
 export function createDesktopMcp({ store, resolveDir, createWorktree, getChanges, listProjects }) {
+  const files = createFileTools({ store, resolveDir, source: 'Claude Desktop' });
+  const tools = [...TOOLS, ...files.tools];
   function chat(id) {
     const s = store.get(String(id || '').trim());
     if (!s) throw new Error(`No session "${id}". list_sessions shows the ids.`);
     return s;
   }
 
-  async function run(name, a = {}) {
+  async function run(name, a = {}, ctx = {}) {
+    if (files.names.has(name)) return files.run(name, a, ctx);
     switch (name) {
       case 'list_projects':
         return listProjects();
@@ -357,7 +361,7 @@ export function createDesktopMcp({ store, resolveDir, createWorktree, getChanges
     }
   }
 
-  async function handle(msg) {
+  async function handle(msg, ctx = {}) {
     const { id, method, params } = msg || {};
     if (id === undefined || id === null) return null; // notification
     const ok = (result) => ({ jsonrpc: '2.0', id, result });
@@ -370,16 +374,18 @@ export function createDesktopMcp({ store, resolveDir, createWorktree, getChanges
             capabilities: { tools: {} },
             serverInfo: { name: 'claude-ui', version: '1.0.0' },
             instructions:
-              "Connects to Claude Code running in the user's own web UI on their computer. Use it to hand work off there (handoff), check what a chat did (list_sessions, get_session), continue or manage a chat (send_message, stop_session, rename_session, archive_session, set_session_options), and share notes both ways (list_notes, read_note, write_note).",
+              "Connects to Claude Code running in the user's own web UI on their computer. Use it to hand work off there (handoff), check what a chat did (list_sessions, get_session), continue or manage a chat (send_message, stop_session, rename_session, archive_session, set_session_options), and share notes both ways (list_notes, read_note, write_note). " +
+                "A chat's files live on that machine, not on yours: copy them over with list_files, read_file and download_link, and send files into a chat's folder with write_file or upload_link (links are fetched or uploaded with curl).",
           });
         }
         case 'ping':
           return ok({});
         case 'tools/list':
-          return ok({ tools: TOOLS });
+          return ok({ tools });
         case 'tools/call':
           try {
-            const out = await run(params?.name, params?.arguments || {});
+            const out = await run(params?.name, params?.arguments || {}, ctx);
+            if (out?.__content) return ok({ content: out.__content });
             return ok({ content: [{ type: 'text', text: JSON.stringify(out, null, 2) }] });
           } catch (e) {
             return ok({ content: [{ type: 'text', text: `Error: ${e.message}` }], isError: true });
@@ -417,11 +423,13 @@ export function createDesktopMcp({ store, resolveDir, createWorktree, getChanges
       const body = req.body;
       if (!body || typeof body !== 'object') return res.status(400).json({ jsonrpc: '2.0', id: null, error: { code: -32700, message: 'Parse error' } });
       const batch = Array.isArray(body);
-      const out = (await Promise.all((batch ? body : [body]).map(handle))).filter(Boolean);
+      // Links handed out by the file tools use the address this client reached us at.
+      const ctx = { base: `${req.protocol}://${req.get('host')}` };
+      const out = (await Promise.all((batch ? body : [body]).map((m) => handle(m, ctx)))).filter(Boolean);
       if (!out.length) return res.status(202).end();
       res.json(batch ? out : out[0]);
     });
   }
 
-  return { mount, run, tools: TOOLS };
+  return { mount, run, tools };
 }
