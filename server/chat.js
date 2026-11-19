@@ -682,11 +682,11 @@ export class ChatSession {
    * chat is mid-turn it waits in an inbox; at the end of the turn everything queued is delivered in
    * order as one turn, each part labelled with its sender, so nothing is dropped or lands mid-turn.
    */
-  deliver({ text, from, now }) {
+  deliver({ text, from, steer }) {
     if (this.isBusy()) {
       const item = this.enqueue({ text, from });
-      // Steer now: stop the current turn and send this right away (like Send now in the chat).
-      if (now) {
+      // Steer: stop the current turn and send this right away (like Send now in the chat).
+      if (steer) {
         this.sendQueuedNow(item.id).catch(() => {});
         return { queued: 0, interrupted: true };
       }

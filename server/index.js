@@ -166,7 +166,7 @@ app.post(
       if (!wait) return res.json({ ok: true, note: `Delivered to "${s.meta.name}" as the reply it was waiting for; it carries on now.`, session: sessionSummary(s) });
     }
 
-    const r = replied ? { queued: 0 } : s.deliver({ text, from: { ...from, kind: wait ? 'question' : undefined }, now: !!req.body?.now });
+    const r = replied ? { queued: 0 } : s.deliver({ text, from: { ...from, kind: wait ? 'question' : undefined }, steer: !!req.body?.steer });
     const where = r.interrupted
       ? `Sent now: "${s.meta.name}" stopped its current turn and got your message.`
       : r.held
