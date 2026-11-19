@@ -3,6 +3,7 @@ import { api } from '../api.js';
 import { highlight } from './markdown.js';
 import ArtifactView from './ArtifactView.jsx';
 import BrowserView from './BrowserView.jsx';
+import BackgroundTasks, { isLive } from './BackgroundTasks.jsx';
 
 function UnifiedDiff({ diff, path, comments, onComment }) {
   const [draft, setDraft] = useState(null); // { i, line, text }
@@ -322,7 +323,8 @@ function FileView({ sessionId, path, refreshKey }) {
   );
 }
 
-export default function SidePanel({ sessionId, tab, files, onTab, onCloseFile, onClose, refreshKey, onOpenFile, onPrompt, busy, onError, wide, onWide }) {
+export default function SidePanel({ sessionId, tab, files, onTab, onCloseFile, onClose, refreshKey, onOpenFile, onPrompt, busy, onError, wide, onWide, tasks = [], taskFocus }) {
+  const liveTasks = tasks.filter(isLive).length;
   return (
     <aside className={`side-panel ${wide ? 'wide' : ''}`}>
       <div className="panel-head">
@@ -333,6 +335,11 @@ export default function SidePanel({ sessionId, tab, files, onTab, onCloseFile, o
           <button className={`panel-tab ${tab === 'browser' ? 'on' : ''}`} onClick={() => onTab('browser')}>
             Browser
           </button>
+          {(tab === 'tasks' || tasks.length > 0) && (
+            <button className={`panel-tab ${tab === 'tasks' ? 'on' : ''}`} onClick={() => onTab('tasks')} title="Background tasks">
+              Background{liveTasks > 0 && <span className="tab-count">{liveTasks}</span>}
+            </button>
+          )}
           {files.map((f) => (
             <button key={f} className={`panel-tab ${tab === f ? 'on' : ''}`} onClick={() => onTab(f)} title={f.replace(/^art:/, '')}>
               {f.startsWith('art:') ? '◇ ' : ''}
@@ -359,6 +366,8 @@ export default function SidePanel({ sessionId, tab, files, onTab, onCloseFile, o
       <div className="panel-body">
         {tab === 'changes' ? (
           <Changes sessionId={sessionId} refreshKey={refreshKey} onOpenFile={onOpenFile} onPrompt={onPrompt} busy={busy} />
+        ) : tab === 'tasks' ? (
+          <BackgroundTasks sessionId={sessionId} tasks={tasks} onError={onError} focus={taskFocus} />
         ) : tab === 'browser' ? (
           <BrowserView sessionId={sessionId} onError={onError} />
         ) : tab.startsWith('art:') ? (

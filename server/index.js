@@ -774,6 +774,16 @@ function chatOf(req) {
   if (s.meta.kind !== 'chat') throw new Error('MCP sign-in from here works in chats; in a terminal session run /mcp');
   return s;
 }
+// Background tasks (run_in_background shells, Monitor, background agents) of a chat.
+function chatSession(req) {
+  const s = getSession(req);
+  if (s.meta.kind !== 'chat') throw new Error('Background tasks are shown for chats');
+  return s;
+}
+app.get('/api/sessions/:id/tasks', wrap(async (req, res) => res.json({ tasks: chatSession(req).tasksSummary() })));
+app.get('/api/sessions/:id/tasks/:task/output', wrap(async (req, res) => res.json(await chatSession(req).taskOutput(req.params.task))));
+app.post('/api/sessions/:id/tasks/:task/stop', wrap(async (req, res) => (await chatSession(req).stopTask(req.params.task), res.json({ ok: true }))));
+app.delete('/api/sessions/:id/tasks/:task', wrap(async (req, res) => (chatSession(req).dismissTask(req.params.task), res.json({ ok: true }))));
 app.post('/api/sessions/:id/mcp/status', wrap(async (req, res) => res.json({ servers: await chatOf(req).mcpStatus({ start: !!req.body?.start }) })));
 app.post(
   '/api/signin-page',
