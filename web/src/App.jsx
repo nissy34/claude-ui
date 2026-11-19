@@ -10,6 +10,7 @@ import ArtifactsGallery from './ArtifactsGallery.jsx';
 import SigninWindow from './SigninWindow.jsx';
 import { setBrowserAvailable } from './chat/McpAuth.jsx';
 import Scheduled from './Scheduled.jsx';
+import { Button, IconButton } from './ui/index.jsx';
 
 function readHash() {
   const m = location.hash.match(/s=([0-9a-f-]{36})/i);
@@ -271,17 +272,17 @@ function Empty({ onMenu, onNew, missing }) {
   return (
     <div className="empty">
       <div className="topbar">
-        <button className="icon-btn menu-btn" onClick={onMenu} aria-label="Menu">
+        <IconButton className="menu-btn" onClick={onMenu} aria-label="Menu">
           ☰
-        </button>
+        </IconButton>
       </div>
       <div className="empty-body">
         <span className="mark">&gt;_</span>
         <h2>{missing ? 'That chat no longer exists' : greeting()}</h2>
         <p>Start a chat in one of your projects, or with no folder at all. Claude keeps working on the server when you close this tab, and you can pick it up from any device.</p>
-        <button className="btn primary" onClick={onNew}>
+        <Button variant="primary" onClick={onNew}>
           New chat
-        </button>
+        </Button>
       </div>
     </div>
   );

@@ -1,5 +1,6 @@
 import React, { useRef, useState } from 'react';
 import { api } from './api.js';
+import { Button, IconButton, Modal, ModalHead } from './ui/index.jsx';
 
 export const FolderIcon = () => (
   <svg className="pl-ico" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
@@ -81,92 +82,85 @@ export function EnvironmentDialog({ env, projects, onSaved, onDeleted, onClose, 
   };
 
   return (
-    <div className="modal env-modal" onClick={(e) => (e.stopPropagation(), onClose())}>
-      <form className="modal-card env-dialog" onClick={(e) => e.stopPropagation()} onSubmit={save}>
-        <div className="modal-head">
-          <span className="mtitle">{env ? 'Edit environment' : 'New environment'}</span>
-          <button type="button" className="icon-btn" onClick={onClose} aria-label="Close">
-            ✕
-          </button>
+    <Modal onClose={(e) => (e.stopPropagation(), onClose())} overlayClassName="env-modal" className="env-dialog" onSubmit={save}>
+      <ModalHead title={env ? 'Edit environment' : 'New environment'} onClose={onClose} />
+      <div className="modal-body">
+        <div className="env-tabs" role="tablist">
+          <span role="tab" aria-selected="true" className="on">
+            Local
+          </span>
         </div>
-        <div className="modal-body">
-          <div className="env-tabs" role="tablist">
-            <span role="tab" aria-selected="true" className="on">
-              Local
-            </span>
-          </div>
-          <label className="env-label" htmlFor="env-name">
-            Name
-          </label>
-          <input id="env-name" className="field env-field" value={name} onChange={(e) => setName(e.target.value)} autoFocus={!env} maxLength={60} />
+        <label className="env-label" htmlFor="env-name">
+          Name
+        </label>
+        <input id="env-name" className="field env-field" value={name} onChange={(e) => setName(e.target.value)} autoFocus={!env} maxLength={60} />
 
-          <div className="env-row-head">
-            <span className="env-label">
-              Folders <span className="muted">(optional)</span>
-            </span>
-            <button type="button" className="btn small" onClick={() => setAdding((a) => !a)} aria-expanded={adding}>
-              ＋ Add
-            </button>
-          </div>
-          {adding && <FolderPicker projects={all} taken={folders.map((f) => f.path)} onPick={add} onCancel={() => setAdding(false)} />}
-          {folders.length > 0 ? (
-            <div className="env-box">
-              {folders.map((f, i) => (
-                <div key={f.path} className="env-folder" title={f.path}>
-                  <FolderIcon />
-                  <span className="ef-name">{base(f.path)}</span>
-                  {i === 0 && folders.length > 1 && <span className="tag">main</span>}
-                  <span className="ef-git muted">{!f.exists ? 'Missing' : f.git ? 'Git repository' : f.git === false ? 'Not a Git repository' : ''}</span>
-                  {i > 0 && (
-                    <button type="button" className="link-btn" onClick={() => makeMain(f.path)} title="Claude starts in the main folder; the others are added to its workspace">
-                      Make main
-                    </button>
-                  )}
-                  <button type="button" className="icon-btn small" onClick={() => remove(f.path)} aria-label={`Remove ${base(f.path)}`}>
-                    ✕
+        <div className="env-row-head">
+          <span className="env-label">
+            Folders <span className="muted">(optional)</span>
+          </span>
+          <Button type="button" size="sm" onClick={() => setAdding((a) => !a)} aria-expanded={adding}>
+            ＋ Add
+          </Button>
+        </div>
+        {adding && <FolderPicker projects={all} taken={folders.map((f) => f.path)} onPick={add} onCancel={() => setAdding(false)} />}
+        {folders.length > 0 ? (
+          <div className="env-box card">
+            {folders.map((f, i) => (
+              <div key={f.path} className="env-folder" title={f.path}>
+                <FolderIcon />
+                <span className="ef-name">{base(f.path)}</span>
+                {i === 0 && folders.length > 1 && <span className="tag">main</span>}
+                <span className="ef-git muted">{!f.exists ? 'Missing' : f.git ? 'Git repository' : f.git === false ? 'Not a Git repository' : ''}</span>
+                {i > 0 && (
+                  <button type="button" className="link-btn" onClick={() => makeMain(f.path)} title="Claude starts in the main folder; the others are added to its workspace">
+                    Make main
                   </button>
-                </div>
-              ))}
-            </div>
-          ) : (
-            !adding && <div className="env-box env-empty muted">No folders. Chats in this environment work in a scratch folder.</div>
-          )}
-
-          <div className="env-box">
-            <button type="button" className="env-vars-head" onClick={() => setShowVars((s) => !s)} aria-expanded={showVars}>
-              <span>
-                <span className="ev-title">Environment variables</span>
-                <span className="ev-sub muted">{varCount ? `${varCount} variable${varCount > 1 ? 's' : ''}` : 'None for this environment'}</span>
-              </span>
-              <svg className={`ev-chev ${showVars ? 'open' : ''}`} width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
-                <path d={showVars ? 'M3.5 6 8 10.5 12.5 6' : 'M6 3.5 10.5 8 6 12.5'} fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
-            </button>
-            {showVars && (
-              <div className="env-vars-body">
-                <textarea className="field mono" rows={5} spellCheck={false} placeholder={'API_URL=https://staging.example.com\nDEBUG=1'} value={vars} onChange={(e) => setVars(e.target.value)} aria-label="Environment variables" />
-                <div className="muted small-note">One KEY=value per line. Passed to Claude and the commands it runs. Stored on the server in plain text.</div>
+                )}
+                <IconButton type="button" size="sm" onClick={() => remove(f.path)} aria-label={`Remove ${base(f.path)}`}>
+                  ✕
+                </IconButton>
               </div>
-            )}
+            ))}
           </div>
-          {err && <div className="pl-warn err">{err}</div>}
-        </div>
-        <div className="modal-foot">
-          {env && (
-            <button type="button" className="btn ghost danger" onClick={del}>
-              Delete
-            </button>
+        ) : (
+          !adding && <div className="env-box card env-empty muted">No folders. Chats in this environment work in a scratch folder.</div>
+        )}
+
+        <div className="env-box card">
+          <button type="button" className="env-vars-head" onClick={() => setShowVars((s) => !s)} aria-expanded={showVars}>
+            <span>
+              <span className="ev-title">Environment variables</span>
+              <span className="ev-sub muted">{varCount ? `${varCount} variable${varCount > 1 ? 's' : ''}` : 'None for this environment'}</span>
+            </span>
+            <svg className={`ev-chev ${showVars ? 'open' : ''}`} width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
+              <path d={showVars ? 'M3.5 6 8 10.5 12.5 6' : 'M6 3.5 10.5 8 6 12.5'} fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </button>
+          {showVars && (
+            <div className="env-vars-body">
+              <textarea className="field mono" rows={5} spellCheck={false} placeholder={'API_URL=https://staging.example.com\nDEBUG=1'} value={vars} onChange={(e) => setVars(e.target.value)} aria-label="Environment variables" />
+              <div className="muted small-note">One KEY=value per line. Passed to Claude and the commands it runs. Stored on the server in plain text.</div>
+            </div>
           )}
-          <span className="spacer" />
-          <button type="button" className="btn" onClick={onClose}>
-            Cancel
-          </button>
-          <button className="btn primary dark" disabled={busy || !name.trim()}>
-            {env ? 'Save' : 'Create environment'}
-          </button>
         </div>
-      </form>
-    </div>
+        {err && <div className="pl-warn err">{err}</div>}
+      </div>
+      <div className="modal-foot">
+        {env && (
+          <Button type="button" variant="ghost danger" onClick={del}>
+            Delete
+          </Button>
+        )}
+        <span className="spacer" />
+        <Button type="button"  onClick={onClose}>
+          Cancel
+        </Button>
+        <Button variant="dark" disabled={busy || !name.trim()}>
+          {env ? 'Save' : 'Create environment'}
+        </Button>
+      </div>
+    </Modal>
   );
 }
 
@@ -268,7 +262,7 @@ export function ClonePanel({ root, onDone, onCancel }) {
   };
 
   return (
-    <form className="clone-panel" onSubmit={run}>
+    <form className="clone-panel card" onSubmit={run}>
       <div className="clone-head">
         <GitIcon />
         <span>Clone from git</span>
@@ -276,12 +270,12 @@ export function ClonePanel({ root, onDone, onCancel }) {
       <input className="field" autoFocus placeholder="https://github.com/owner/repo or git@github.com:owner/repo.git" value={url} onChange={(e) => setUrl(e.target.value)} disabled={!!state} aria-label="Repository address" onKeyDown={(e) => e.key === 'Escape' && (e.stopPropagation(), cancel())} />
       <div className="row">
         <input className="field" placeholder={guess ? `Folder name (${guess})` : 'Folder name'} value={name} onChange={(e) => setName(e.target.value)} disabled={!!state} aria-label="Folder name" />
-        <button type="button" className="btn small" onClick={cancel}>
+        <Button type="button" size="sm" onClick={cancel}>
           Cancel
-        </button>
-        <button className="btn small primary" disabled={!url.trim() || !!state}>
+        </Button>
+        <Button variant="primary" size="sm" disabled={!url.trim() || !!state}>
           Clone
-        </button>
+        </Button>
       </div>
       {state ? (
         <div className="clone-progress" aria-live="polite">

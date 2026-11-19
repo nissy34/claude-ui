@@ -4,6 +4,7 @@ import { highlight } from './markdown.js';
 import ArtifactView from './ArtifactView.jsx';
 import BrowserView from './BrowserView.jsx';
 import BackgroundTasks, { isLive } from './BackgroundTasks.jsx';
+import { Button, IconButton } from '../ui/index.jsx';
 
 function UnifiedDiff({ diff, path, comments, onComment }) {
   const [draft, setDraft] = useState(null); // { i, line, text }
@@ -44,13 +45,13 @@ function UnifiedDiff({ diff, path, comments, onComment }) {
             .map((c) => (
               <div key={c.id} className="dl-comment">
                 <span>{c.text}</span>
-                <button className="icon-btn" title="Remove comment" onClick={() => onComment({ remove: c.id })}>
+                <IconButton title="Remove comment" onClick={() => onComment({ remove: c.id })}>
                   ✕
-                </button>
+                </IconButton>
               </div>
             ))}
           {draft?.i === i && (
-            <div className="dl-draft">
+            <div className="dl-draft fields sm">
               <textarea
                 autoFocus
                 rows={2}
@@ -63,12 +64,12 @@ function UnifiedDiff({ diff, path, comments, onComment }) {
                 }}
               />
               <div className="row">
-                <button className="btn small ghost" onClick={() => setDraft(null)}>
+                <Button variant="ghost" size="sm" onClick={() => setDraft(null)}>
                   Cancel
-                </button>
-                <button className="btn small primary" disabled={!draft.text.trim()} onClick={save}>
+                </Button>
+                <Button variant="primary" size="sm" disabled={!draft.text.trim()} onClick={save}>
                   Add comment
-                </button>
+                </Button>
               </div>
             </div>
           )}
@@ -98,7 +99,7 @@ function PrCard({ sessionId, refreshKey, onPrompt, busy, onError }) {
     return () => clearInterval(t);
   }, [pending]); // eslint-disable-line react-hooks/exhaustive-deps
   if (!st) return null;
-  if (!st.available) return <div className="pr-card muted pr-note">{st.reason}</div>;
+  if (!st.available) return <div className="pr-card card muted pr-note">{st.reason}</div>;
   const pr = st.pr;
   if (!pr) return null;
   const { pass, fail, pending: pend } = pr.summary;
@@ -114,15 +115,15 @@ function PrCard({ sessionId, refreshKey, onPrompt, busy, onError }) {
     }
   };
   return (
-    <div className="pr-card">
+    <div className="pr-card card">
       <div className="pr-top">
-        <span className={`pr-state ${pr.state.toLowerCase()}`}>{pr.state === 'OPEN' ? 'Open' : pr.state === 'DRAFT' ? 'Draft' : pr.state === 'MERGED' ? 'Merged' : 'Closed'}</span>
+        <span className={`pill strong pr-state ${{ OPEN: 'green', MERGED: 'purple', CLOSED: 'red' }[pr.state] || ''}`}>{pr.state === 'OPEN' ? 'Open' : pr.state === 'DRAFT' ? 'Draft' : pr.state === 'MERGED' ? 'Merged' : 'Closed'}</span>
         <a href={pr.url} target="_blank" rel="noreferrer" className="pr-title" title={pr.title}>
           #{pr.number} {pr.title}
         </a>
-        <button className="icon-btn" title="Refresh" onClick={load}>
+        <IconButton title="Refresh" onClick={load}>
           ↻
-        </button>
+        </IconButton>
       </div>
       {pr.checks.length > 0 && (
         <button className="pr-checks" onClick={() => setOpen(!open)}>
@@ -156,24 +157,24 @@ function PrCard({ sessionId, refreshKey, onPrompt, busy, onError }) {
       {(pr.state === 'OPEN' || pr.state === 'DRAFT') && (
         <div className="git-actions">
           {fail > 0 && (
-            <button className="btn small" disabled={busy || !onPrompt} onClick={() => onPrompt(`CI is failing on PR #${pr.number} (${pr.url}). Use gh to look at the failing checks and their logs, find the root cause, fix it, and push. Don't skip or disable tests.`)}>
+            <Button size="sm" disabled={busy || !onPrompt} onClick={() => onPrompt(`CI is failing on PR #${pr.number} (${pr.url}). Use gh to look at the failing checks and their logs, find the root cause, fix it, and push. Don't skip or disable tests.`)}>
               Fix failing checks
-            </button>
+            </Button>
           )}
           {(pr.review === 'CHANGES_REQUESTED' || pr.review === 'REVIEW_REQUIRED') && (
-            <button className="btn small" disabled={busy || !onPrompt} onClick={() => onPrompt(`Read the review comments on PR #${pr.number} (${pr.url}) with gh, address the ones that need changes, push, and reply on the threads you handled.`)}>
+            <Button size="sm" disabled={busy || !onPrompt} onClick={() => onPrompt(`Read the review comments on PR #${pr.number} (${pr.url}) with gh, address the ones that need changes, push, and reply on the threads you handled.`)}>
               Address review comments
-            </button>
+            </Button>
           )}
           {pr.mergeable === 'CONFLICTING' && (
-            <button className="btn small" disabled={busy || !onPrompt} onClick={() => onPrompt(`PR #${pr.number} has a merge conflict with ${pr.base}. Merge ${pr.base} into this branch, resolve the conflicts carefully, run the tests, and push.`)}>
+            <Button size="sm" disabled={busy || !onPrompt} onClick={() => onPrompt(`PR #${pr.number} has a merge conflict with ${pr.base}. Merge ${pr.base} into this branch, resolve the conflicts carefully, run the tests, and push.`)}>
               Resolve conflict
-            </button>
+            </Button>
           )}
           {!pr.autoMerge && pr.state === 'OPEN' && (
-            <button className="btn small" disabled={merging} onClick={merge}>
+            <Button size="sm" disabled={merging} onClick={merge}>
               {merging ? 'Turning on…' : 'Merge when ready'}
-            </button>
+            </Button>
           )}
         </div>
       )}
@@ -214,32 +215,32 @@ function Changes({ sessionId, refreshKey, onOpenFile, onPrompt, busy }) {
   return (
     <>
       <div className="changes-summary">
-        <span className="pill branch">⎇ {data.branch}</span>
+        <span className="pill mono">⎇ {data.branch}</span>
         <span>
           {data.files.length} file{data.files.length === 1 ? '' : 's'} <span className="add">+{add}</span> <span className="del">−{del}</span>
         </span>
-        <span style={{ flex: 1 }} />
-        <button className="icon-btn" title="Refresh" onClick={load}>
+        <span className="spacer" />
+        <IconButton title="Refresh" onClick={load}>
           {loading ? <span className="spinner" /> : '↻'}
-        </button>
+        </IconButton>
         {data.files.length > 0 && (
-          <button className="btn small ghost" onClick={() => setOpen(Object.fromEntries(data.files.map((f) => [f.path, !Object.values(open).some(Boolean)])))}>
+          <Button variant="ghost" size="sm" onClick={() => setOpen(Object.fromEntries(data.files.map((f) => [f.path, !Object.values(open).some(Boolean)])))}>
             {Object.values(open).some(Boolean) ? 'Collapse all' : 'Expand all'}
-          </button>
+          </Button>
         )}
       </div>
       <PrCard sessionId={sessionId} refreshKey={refreshKey} onPrompt={onPrompt} busy={busy} />
       {onPrompt && (
         <div className="git-actions">
-          <button className="btn small" disabled={busy || !data.files.length} onClick={() => onPrompt('Commit the current changes with a clear commit message. Stage only the files that belong to this work.')}>
+          <Button size="sm" disabled={busy || !data.files.length} onClick={() => onPrompt('Commit the current changes with a clear commit message. Stage only the files that belong to this work.')}>
             Commit
-          </button>
-          <button className="btn small" disabled={busy || !data.files.length} onClick={() => onPrompt('Commit the current changes with a clear commit message, then push the branch.')}>
+          </Button>
+          <Button size="sm" disabled={busy || !data.files.length} onClick={() => onPrompt('Commit the current changes with a clear commit message, then push the branch.')}>
             Commit and push
-          </button>
-          <button className="btn small primary" disabled={busy} onClick={() => onPrompt('Commit any uncommitted changes, push this branch, and open a pull request with a clear title and description. Use the gh CLI if it is available, and give me the PR link.')}>
+          </Button>
+          <Button variant="primary" size="sm" disabled={busy} onClick={() => onPrompt('Commit any uncommitted changes, push this branch, and open a pull request with a clear title and description. Use the gh CLI if it is available, and give me the PR link.')}>
             Create PR
-          </button>
+          </Button>
         </div>
       )}
       {comments.length > 0 && (
@@ -247,13 +248,13 @@ function Changes({ sessionId, refreshKey, onOpenFile, onPrompt, busy }) {
           <span>
             {comments.length} comment{comments.length === 1 ? '' : 's'}
           </span>
-          <span style={{ flex: 1 }} />
-          <button className="btn small ghost" onClick={() => setComments([])}>
+          <span className="spacer" />
+          <Button variant="ghost" size="sm" onClick={() => setComments([])}>
             Discard
-          </button>
-          <button className="btn small primary" disabled={busy || !onPrompt} onClick={sendReview} title="Ctrl/⌘ Enter">
+          </Button>
+          <Button variant="primary" size="sm" disabled={busy || !onPrompt} onClick={sendReview} title="Ctrl/⌘ Enter">
             Send to Claude
-          </button>
+          </Button>
         </div>
       )}
       {data.files.length === 0 && <div className="panel-empty">No uncommitted changes.</div>}
@@ -305,13 +306,13 @@ function FileView({ sessionId, path, refreshKey }) {
   return (
     <>
       <div className="file-meta">
-        <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis' }}>{path}</span>
+        <span className="grow ellipsis">{path}</span>
         <span>{lines.length} lines</span>
-        <button className="btn small ghost" onClick={() => navigator.clipboard?.writeText(data.content)}>
+        <Button variant="ghost" size="sm" onClick={() => navigator.clipboard?.writeText(data.content)}>
           Copy
-        </button>
+        </Button>
       </div>
-      <div className="file-view diff" style={{ borderRadius: 0, maxHeight: 'none' }}>
+      <div className="file-view diff flush">
         {lines.map((l, i) => (
           <div key={i} className="ln">
             <span className="lno">{i + 1}</span>
@@ -337,7 +338,7 @@ export default function SidePanel({ sessionId, tab, files, onTab, onCloseFile, o
           </button>
           {(tab === 'tasks' || tasks.length > 0) && (
             <button className={`panel-tab ${tab === 'tasks' ? 'on' : ''}`} onClick={() => onTab('tasks')} title="Background tasks">
-              Background{liveTasks > 0 && <span className="tab-count">{liveTasks}</span>}
+              Background{liveTasks > 0 && <span className="count tab-count">{liveTasks}</span>}
             </button>
           )}
           {files.map((f) => (
@@ -356,12 +357,12 @@ export default function SidePanel({ sessionId, tab, files, onTab, onCloseFile, o
             </button>
           ))}
         </div>
-        <button className="icon-btn hide-mobile" title={wide ? 'Narrower' : 'Wider'} onClick={onWide}>
+        <IconButton className="hide-mobile" title={wide ? 'Narrower' : 'Wider'} onClick={onWide}>
           {wide ? '⇥' : '⇤'}
-        </button>
-        <button className="icon-btn" title="Close panel" onClick={onClose}>
+        </IconButton>
+        <IconButton title="Close panel" onClick={onClose}>
           ✕
-        </button>
+        </IconButton>
       </div>
       <div className="panel-body">
         {tab === 'changes' ? (

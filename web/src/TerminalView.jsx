@@ -4,6 +4,7 @@ import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import { api, wsUrl } from './api.js';
 import KeyBar from './KeyBar.jsx';
+import { Button, IconButton, Modal } from './ui/index.jsx';
 
 const isTouch = typeof window !== 'undefined' && window.matchMedia('(pointer: coarse)').matches;
 
@@ -249,9 +250,9 @@ export default function TerminalView({ session, onMenu, onError, onDeleted, onCr
   return (
     <div className="term-view">
       <div className="topbar bordered">
-        <button className="icon-btn menu-btn" onClick={onMenu} aria-label="Menu">
+        <IconButton className="menu-btn" onClick={onMenu} aria-label="Menu">
           ☰
-        </button>
+        </IconButton>
         <div className="title" onClick={rename} title="Rename">
           <span className={`dot ${running ? (session.attention ? 'attn' : 'on') : 'off'}`} />
           <span className="tname">{session.name}</span>
@@ -260,38 +261,38 @@ export default function TerminalView({ session, onMenu, onError, onDeleted, onCr
         {conn === 'reconnecting' && <span className="pill warn">reconnecting…</span>}
         {session.clients > 1 && <span className="pill" title="Other devices attached">{session.clients} viewers</span>}
         <div className="tools">
-          <button className="icon-btn" title="Smaller text" onClick={() => setFontSize((f) => Math.max(8, f - 1))}>
+          <IconButton title="Smaller text" onClick={() => setFontSize((f) => Math.max(8, f - 1))}>
             A−
-          </button>
-          <button className="icon-btn" title="Larger text" onClick={() => setFontSize((f) => Math.min(24, f + 1))}>
+          </IconButton>
+          <IconButton title="Larger text" onClick={() => setFontSize((f) => Math.min(24, f + 1))}>
             A+
-          </button>
-          <button className={`icon-btn ${compose ? 'on' : ''}`} title="Compose box" onClick={() => setCompose((c) => !c)}>
+          </IconButton>
+          <IconButton className={`${compose ? 'on' : ''}`} title="Compose box" onClick={() => setCompose((c) => !c)}>
             ✎
-          </button>
-          <button className="icon-btn" title="View as text (for copying)" onClick={showText}>
+          </IconButton>
+          <IconButton title="View as text (for copying)" onClick={showText}>
             ⧉
-          </button>
+          </IconButton>
           {running ? (
-            <button className="icon-btn" title="Stop" onClick={kill}>
+            <IconButton title="Stop" onClick={kill}>
               ■
-            </button>
+            </IconButton>
           ) : (
-            <button className="icon-btn" title="Resume" onClick={restart}>
+            <IconButton title="Resume" onClick={restart}>
               ▶
-            </button>
+            </IconButton>
           )}
-          <button className="icon-btn danger" title="Delete" onClick={remove}>
+          <IconButton danger title="Delete" onClick={remove}>
             🗑
-          </button>
+          </IconButton>
         </div>
       </div>
 
       {session.tuiFor && (
         <div className="term-banner">
           <span>This chat is open in Claude's own terminal UI. Everything you do here stays in the same conversation.</span>
-          <button
-            className="btn small primary"
+          <Button
+            variant="primary" size="sm"
             onClick={() =>
               api(`/api/sessions/${session.id}/back-to-chat`, { method: 'POST' })
                 .then((r) => onSelect?.(r.session.id))
@@ -299,7 +300,7 @@ export default function TerminalView({ session, onMenu, onError, onDeleted, onCr
             }
           >
             Back to chat
-          </button>
+          </Button>
         </div>
       )}
       {onCreate && session.kind === 'claude' && !session.tuiFor && (
@@ -310,12 +311,12 @@ export default function TerminalView({ session, onMenu, onError, onDeleted, onCr
               : 'This is the raw Claude terminal. The Desktop-style chat has tool cards, diffs and approvals.'}
           </span>
           {session.name !== 'Log in to Claude' && (
-            <button
-              className="btn small primary"
+            <Button
+              variant="primary" size="sm"
               onClick={() => onCreate({ cwd: session.cwd, kind: 'chat', ...(session.claudeSessionId ? { resume: session.claudeSessionId, name: session.name } : {}) })}
             >
               Open as chat
-            </button>
+            </Button>
           )}
         </div>
       )}
@@ -324,9 +325,9 @@ export default function TerminalView({ session, onMenu, onError, onDeleted, onCr
         {!running && conn !== 'gone' && (
           <div className="ended">
             Session ended{session.exitCode != null ? ` (exit ${session.exitCode})` : ''}.
-            <button className="btn small primary" onClick={restart}>
+            <Button variant="primary" size="sm" onClick={restart}>
               Resume
-            </button>
+            </Button>
           </div>
         )}
         {conn === 'connecting' && <div className="overlay-msg">Connecting…</div>}
@@ -347,25 +348,23 @@ export default function TerminalView({ session, onMenu, onError, onDeleted, onCr
             }}
             autoCapitalize="sentences"
           />
-          <button className="btn primary">Send</button>
+          <Button variant="primary">Send</Button>
         </form>
       )}
 
       {textView !== null && (
-        <div className="modal" onClick={() => setTextView(null)}>
-          <div className="modal-card" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-head">
-              <span>Terminal text</span>
-              <button className="btn small" onClick={() => navigator.clipboard?.writeText(textView).catch(() => {})}>
-                Copy all
-              </button>
-              <button className="icon-btn" onClick={() => setTextView(null)}>
-                ✕
-              </button>
-            </div>
-            <pre className="modal-text">{textView}</pre>
+        <Modal onClose={() => setTextView(null)}>
+          <div className="modal-head">
+            <span>Terminal text</span>
+            <Button size="sm" onClick={() => navigator.clipboard?.writeText(textView).catch(() => {})}>
+              Copy all
+            </Button>
+            <IconButton onClick={() => setTextView(null)}>
+              ✕
+            </IconButton>
           </div>
-        </div>
+          <pre className="modal-text">{textView}</pre>
+        </Modal>
       )}
     </div>
   );

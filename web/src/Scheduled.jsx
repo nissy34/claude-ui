@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { api, timeAgo } from './api.js';
 import { MODES } from './chat/Composer.jsx';
 import { useModels } from './models.js';
+import { Button, IconButton, Modal } from './ui/index.jsx';
 
 const PRESETS = [
   ['manual', 'Manual (run by hand)'],
@@ -74,7 +75,7 @@ function TaskForm({ task, projects, defaultCwd, onSave, onCancel, onError }) {
   };
   const folders = [...new Set([f.cwd, ...projects.projects.map((p) => p.path)].filter(Boolean))];
   return (
-    <div className="sched-form">
+    <div className="sched-form fields">
       <label>
         Name
         <input value={f.name} onChange={set('name')} placeholder="Morning build check" autoFocus />
@@ -162,12 +163,12 @@ function TaskForm({ task, projects, defaultCwd, onSave, onCancel, onError }) {
       </label>
       {f.permissionMode === 'default' && f.preset !== 'manual' && <div className="muted sched-note">Runs nobody watches wait at every permission prompt in "Ask before edits" mode. Pick another mode if this task edits files or runs commands.</div>}
       <div className="sched-actions">
-        <button className="btn small ghost" onClick={onCancel}>
+        <Button variant="ghost" size="sm" onClick={onCancel}>
           Cancel
-        </button>
-        <button className="btn small primary" disabled={busy || !f.name.trim() || !f.prompt.trim()} onClick={save}>
+        </Button>
+        <Button variant="primary" size="sm" disabled={busy || !f.name.trim() || !f.prompt.trim()} onClick={save}>
           {task ? 'Save' : 'Create'}
-        </button>
+        </Button>
       </div>
     </div>
   );
@@ -210,81 +211,79 @@ export default function Scheduled({ projects, defaultCwd, onClose, onOpen, onErr
   const remove = act((t) => window.confirm(`Delete "${t.name}"? Chats from earlier runs stay.`) && api(`/api/schedules/${t.id}`, { method: 'DELETE' }));
 
   return (
-    <div className="modal" onClick={onClose}>
-      <div className="modal-card wide" onClick={(e) => e.stopPropagation()}>
-        <div className="modal-head">
-          <span className="mtitle">Scheduled</span>
-          <span className="muted" style={{ fontSize: 12 }}>
-            {data?.tz ? `Server time zone: ${data.tz}` : ''}
-          </span>
-          <span style={{ flex: 1 }} />
-          {!editing && (
-            <button className="btn small primary" onClick={() => setEditing('new')}>
-              ＋ New task
-            </button>
-          )}
-          <button className="icon-btn" onClick={onClose} aria-label="Close">
-            ✕
-          </button>
-        </div>
-        <div className="modal-body">
-          {editing ? (
-            <TaskForm task={editing === 'new' ? null : editing} projects={projects} defaultCwd={defaultCwd} onSave={save} onCancel={() => setEditing(null)} onError={onError} />
-          ) : !data ? (
-            <div className="muted">Loading…</div>
-          ) : data.tasks.length === 0 ? (
-            <div className="panel-empty">
-              <div style={{ fontSize: 28, marginBottom: 8 }}>◷</div>
-              Run a prompt on a schedule: a morning summary, a nightly test run, a weekly dependency check. Each run starts a new chat on this server, so it runs even when your laptop is closed. You can also ask Claude in any chat to schedule something.
-            </div>
-          ) : (
-            <div className="sched-list">
-              {data.tasks.map((t) => (
-                <div key={t.id} className={`sched-item ${t.enabled ? '' : 'paused'}`}>
-                  <div className="sched-main" onClick={() => setOpen(open === t.id ? null : t.id)}>
-                    <div className="sched-name">
-                      {t.name} {!t.enabled && <span className="pill">{t.preset === 'once' && t.lastRun ? 'Done' : 'Paused'}</span>}
-                    </div>
-                    <div className="muted sched-meta">
-                      {describe(t)} · next {t.enabled && t.nextRun ? when(t.nextRun) : '—'} · last {t.lastRun ? timeAgo(t.lastRun) : 'never'} · {t.cwd.split(/[\\/]/).pop()}
-                    </div>
-                  </div>
-                  <div className="sched-btns">
-                    <button className="btn small" onClick={() => run(t)}>
-                      Run now
-                    </button>
-                    <button className="btn small ghost" onClick={() => toggle(t)}>
-                      {t.enabled ? 'Pause' : 'Resume'}
-                    </button>
-                    <button className="btn small ghost" onClick={() => setEditing(t)}>
-                      Edit
-                    </button>
-                    <button className="icon-btn" title="Delete" onClick={() => remove(t)}>
-                      ✕
-                    </button>
-                  </div>
-                  {open === t.id && (
-                    <div className="sched-detail">
-                      <pre className="sched-prompt">{t.prompt}</pre>
-                      <div className="muted" style={{ fontSize: 12, margin: '6px 0 4px' }}>
-                        History
-                      </div>
-                      {(t.history || []).length === 0 && <div className="muted">No runs yet.</div>}
-                      {(t.history || []).map((h, i) => (
-                        <div key={i} className="sched-run">
-                          <span>{when(h.at)}</span>
-                          <span className="muted">{h.why}</span>
-                          {h.status === 'failed' ? <span style={{ color: 'var(--red)' }}>Failed: {h.error}</span> : h.sessionId ? <button className="link-btn" onClick={() => onOpen(h.sessionId)}>Open chat</button> : null}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
+    <Modal onClose={onClose} size="wide">
+      <div className="modal-head">
+        <span className="mtitle">Scheduled</span>
+        <span className="muted text-sm">
+          {data?.tz ? `Server time zone: ${data.tz}` : ''}
+        </span>
+        <span className="spacer" />
+        {!editing && (
+          <Button variant="primary" size="sm" onClick={() => setEditing('new')}>
+            ＋ New task
+          </Button>
+        )}
+        <IconButton onClick={onClose} aria-label="Close">
+          ✕
+        </IconButton>
       </div>
-    </div>
+      <div className="modal-body">
+        {editing ? (
+          <TaskForm task={editing === 'new' ? null : editing} projects={projects} defaultCwd={defaultCwd} onSave={save} onCancel={() => setEditing(null)} onError={onError} />
+        ) : !data ? (
+          <div className="muted">Loading…</div>
+        ) : data.tasks.length === 0 ? (
+          <div className="panel-empty">
+            <div className="empty-icon">◷</div>
+            Run a prompt on a schedule: a morning summary, a nightly test run, a weekly dependency check. Each run starts a new chat on this server, so it runs even when your laptop is closed. You can also ask Claude in any chat to schedule something.
+          </div>
+        ) : (
+          <div className="sched-list">
+            {data.tasks.map((t) => (
+              <div key={t.id} className={`sched-item ${t.enabled ? '' : 'paused'}`}>
+                <div className="sched-main" onClick={() => setOpen(open === t.id ? null : t.id)}>
+                  <div className="sched-name">
+                    {t.name} {!t.enabled && <span className="pill">{t.preset === 'once' && t.lastRun ? 'Done' : 'Paused'}</span>}
+                  </div>
+                  <div className="muted sched-meta">
+                    {describe(t)} · next {t.enabled && t.nextRun ? when(t.nextRun) : '—'} · last {t.lastRun ? timeAgo(t.lastRun) : 'never'} · {t.cwd.split(/[\\/]/).pop()}
+                  </div>
+                </div>
+                <div className="sched-btns">
+                  <Button size="sm" onClick={() => run(t)}>
+                    Run now
+                  </Button>
+                  <Button variant="ghost" size="sm" onClick={() => toggle(t)}>
+                    {t.enabled ? 'Pause' : 'Resume'}
+                  </Button>
+                  <Button variant="ghost" size="sm" onClick={() => setEditing(t)}>
+                    Edit
+                  </Button>
+                  <IconButton title="Delete" onClick={() => remove(t)}>
+                    ✕
+                  </IconButton>
+                </div>
+                {open === t.id && (
+                  <div className="sched-detail">
+                    <pre className="sched-prompt">{t.prompt}</pre>
+                    <div className="muted text-sm" style={{ margin: '6px 0 4px' }}>
+                      History
+                    </div>
+                    {(t.history || []).length === 0 && <div className="muted">No runs yet.</div>}
+                    {(t.history || []).map((h, i) => (
+                      <div key={i} className="sched-run">
+                        <span>{when(h.at)}</span>
+                        <span className="muted">{h.why}</span>
+                        {h.status === 'failed' ? <span className="text-red">Failed: {h.error}</span> : h.sessionId ? <button className="link-btn" onClick={() => onOpen(h.sessionId)}>Open chat</button> : null}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </Modal>
   );
 }

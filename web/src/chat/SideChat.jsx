@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { renderMarkdown } from './markdown.js';
 import Linkify from './Linkify.jsx';
+import { Button, IconButton } from '../ui/index.jsx';
 
 // Desktop's side chat (/btw, Ctrl/⌘+;): ask about the conversation without adding to it.
 // Answers come from a throwaway, read-only fork of the chat; nothing is saved.
@@ -63,10 +64,10 @@ export default function SideChat({ sessionId, initial, onClose }) {
       <div className="side-chat-head">
         <span>Side chat</span>
         <span className="muted">Not added to the conversation</span>
-        <span style={{ flex: 1 }} />
-        <button className="icon-btn" title="Close (Esc)" onClick={onClose}>
+        <span className="spacer" />
+        <IconButton title="Close (Esc)" onClick={onClose}>
           ✕
-        </button>
+        </IconButton>
       </div>
       <div className="side-chat-body">
         {list.length === 0 && <div className="muted side-chat-empty">Ask a quick question about this chat: what a change does, where something lives, what Claude meant. Claude answers from the conversation and can read files, but won't change anything.</div>}
@@ -82,7 +83,7 @@ export default function SideChat({ sessionId, initial, onClose }) {
         <div ref={endRef} />
       </div>
       <form
-        className="side-chat-input"
+        className="side-chat-input fields"
         onSubmit={(e) => {
           e.preventDefault();
           ask(q);
@@ -90,13 +91,13 @@ export default function SideChat({ sessionId, initial, onClose }) {
       >
         <input ref={inputRef} value={q} onChange={(e) => setQ(e.target.value)} placeholder={busy ? 'Answering…' : 'Ask on the side…'} />
         {busy ? (
-          <button type="button" className="btn small" onClick={() => abortRef.current?.abort()}>
+          <Button type="button" size="sm" onClick={() => abortRef.current?.abort()}>
             Stop
-          </button>
+          </Button>
         ) : (
-          <button className="btn small primary" disabled={!q.trim()}>
+          <Button variant="primary" size="sm" disabled={!q.trim()}>
             Ask
-          </button>
+          </Button>
         )}
       </form>
     </div>

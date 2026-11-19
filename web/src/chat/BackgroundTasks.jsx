@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { api } from '../api.js';
+import { Button, IconButton } from '../ui/index.jsx';
 
 // Background tasks of a chat, like Claude Desktop's "Background tasks" pane: shells Claude started
 // with run_in_background, Monitor watches, background agents. Each row shows how long it has run,
@@ -32,10 +33,12 @@ function useNow(on) {
   return now;
 }
 
+const STATUS_TONE = { running: 'accent', pending: 'accent', stopping: 'accent', completed: 'green', failed: 'red' };
+
 function StatusChip({ status }) {
   const label = { running: 'Running', stopping: 'Stopping…', pending: 'Pending', paused: 'Paused', completed: 'Done', failed: 'Failed', stopped: 'Stopped', killed: 'Stopped' }[status] || status;
   return (
-    <span className={`bg-status ${status}`}>
+    <span className={`pill bg-status ${STATUS_TONE[status] || ''}`}>
       {(status === 'running' || status === 'stopping') && <span className="bg-spin" />}
       {label}
     </span>
@@ -125,13 +128,13 @@ function TaskRow({ sessionId, task, now, open, onToggle, onError }) {
         </span>
         <StatusChip status={task.status} />
         {live ? (
-          <button className="btn small ghost bg-stop" title="Stop this task" disabled={task.status === 'stopping'} onClick={stop}>
+          <Button variant="ghost" size="sm" className="bg-stop" title="Stop this task" disabled={task.status === 'stopping'} onClick={stop}>
             ■<span className="hide-mobile"> Stop</span>
-          </button>
+          </Button>
         ) : (
-          <button className="icon-btn bg-dismiss" title="Remove from the list" onClick={dismiss}>
+          <IconButton className="bg-dismiss" title="Remove from the list" onClick={dismiss}>
             ✕
-          </button>
+          </IconButton>
         )}
       </div>
       {open && (

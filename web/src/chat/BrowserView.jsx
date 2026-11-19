@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../api.js';
+import { Button, IconButton } from '../ui/index.jsx';
 
 // Live view of the chat's built-in browser tab (the same one Claude drives). Click, type and
 // scroll on the picture to use the page yourself.
@@ -139,15 +140,15 @@ export default function BrowserView({ sessionId, onError }) {
   return (
     <div className="browser">
       <form className="browser-bar" onSubmit={go}>
-        <button type="button" className="icon-btn" title="Back" disabled={!st?.open} onClick={() => act('back')}>
+        <IconButton type="button"  title="Back" disabled={!st?.open} onClick={() => act('back')}>
           ←
-        </button>
-        <button type="button" className="icon-btn" title="Forward" disabled={!st?.open} onClick={() => act('forward')}>
+        </IconButton>
+        <IconButton type="button"  title="Forward" disabled={!st?.open} onClick={() => act('forward')}>
           →
-        </button>
-        <button type="button" className="icon-btn" title="Reload" disabled={!st?.open} onClick={() => act('reload')}>
+        </IconButton>
+        <IconButton type="button"  title="Reload" disabled={!st?.open} onClick={() => act('reload')}>
           {busy ? <span className="spinner" /> : '↻'}
-        </button>
+        </IconButton>
         <input
           className="browser-url"
           value={url}
@@ -174,12 +175,12 @@ export default function BrowserView({ sessionId, onError }) {
         </div>
       ) : (
         <div className="panel-empty">
-          <div style={{ fontSize: 28, marginBottom: 8 }}>◎</div>
+          <div className="empty-icon">◎</div>
           This chat's browser runs on the server, so it can open your dev servers on localhost. Claude can use it too: ask it to open your app and test it, and you'll see it here.
           <div style={{ marginTop: 12 }}>
-            <button className="btn small primary" onClick={() => act('navigate', { url: url.trim() || 'about:blank' })}>
+            <Button variant="primary" size="sm" onClick={() => act('navigate', { url: url.trim() || 'about:blank' })}>
               Open browser
-            </button>
+            </Button>
           </div>
         </div>
       )}

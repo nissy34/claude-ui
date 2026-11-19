@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { api, timeAgo } from './api.js';
+import { Button, IconButton, Segmented } from './ui/index.jsx';
 
 function copy(text) {
   try {
@@ -75,17 +76,16 @@ function Connect({ onError }) {
         </p>
       )}
       <h4 className="set-h">1. Pick where you use Claude</h4>
-      <div className="seg" style={{ margin: '4px 0 6px' }}>
-        <button className={via === 'code' ? 'on' : ''} onClick={() => pickVia('code')}>
-          Claude Code (HTTP)
-        </button>
-        <button className={via === 'uvx' ? 'on' : ''} onClick={() => pickVia('uvx')}>
-          Desktop chat, uvx
-        </button>
-        <button className={via === 'node' ? 'on' : ''} onClick={() => pickVia('node')}>
-          Desktop chat, Node
-        </button>
-      </div>
+      <Segmented
+        className="seg-inline"
+        value={via}
+        onChange={pickVia}
+        options={[
+          ['code', 'Claude Code (HTTP)'],
+          ['uvx', 'Desktop chat, uvx'],
+          ['node', 'Desktop chat, Node'],
+        ]}
+      />
       {via === 'code' ? (
         <p className="muted set-note">
           Claude Code (in the Desktop app's Code tab, the terminal or an IDE) connects to HTTP MCP servers directly, so nothing else is needed.
@@ -120,42 +120,42 @@ function Connect({ onError }) {
       <div className="desk-fields">
         <label>
           Address Claude uses to reach this server
-          <input className="search-in" value={host} onChange={(e) => setHost(e.target.value.trim().replace(/^(https?:\/\/)?([^/]*).*$/i, '$1$2'))} placeholder="192.168.1.20:8787" />
+          <input className="field sm search-in" value={host} onChange={(e) => setHost(e.target.value.trim().replace(/^(https?:\/\/)?([^/]*).*$/i, '$1$2'))} placeholder="192.168.1.20:8787" />
         </label>
         {via === 'node' && (
           <label>
             Where you saved the bridge
-            <input className="search-in" value={where} onChange={(e) => setWhere(e.target.value)} />
+            <input className="field sm search-in" value={where} onChange={(e) => setWhere(e.target.value)} />
           </label>
         )}
       </div>
       {via === 'code' && (
         <div className="copy-block">
           <pre className="set-pre">{addCmd(show ? token : '<token>')}</pre>
-          <button className="btn small" onClick={() => copy(addCmd(token))}>
+          <Button size="sm" onClick={() => copy(addCmd(token))}>
             Copy
-          </button>
+          </Button>
         </div>
       )}
       <div className="copy-block">
         <pre className="set-pre">{cfg}</pre>
-        <button className="btn small" onClick={() => copy(cfgCopy)}>
+        <Button size="sm" onClick={() => copy(cfgCopy)}>
           Copy
-        </button>
+        </Button>
       </div>
       <h4 className="set-h">Token</h4>
       <div className="token-row">
         <code className="token">{show ? token : '•'.repeat(24)}</code>
-        <button className="btn small" onClick={() => setShow(!show)}>
+        <Button size="sm" onClick={() => setShow(!show)}>
           {show ? 'Hide' : 'Show'}
-        </button>
-        <button className="btn small" onClick={() => copy(token)}>
+        </Button>
+        <Button size="sm" onClick={() => copy(token)}>
           Copy
-        </button>
+        </Button>
         {!info.fromEnv && (
-          <button className="btn small danger" onClick={rotate}>
+          <Button variant="danger" size="sm" onClick={rotate}>
             New token
-          </button>
+          </Button>
         )}
       </div>
       <p className="muted set-note">Anyone with the token can start chats on this computer, like the password. Making a new one disconnects the old.</p>
@@ -166,7 +166,7 @@ function Connect({ onError }) {
 function NoteScope({ projects, value, onChange }) {
   const options = [...new Set([value, ...(projects?.projects || []).map((p) => p.path)].filter(Boolean))];
   return (
-    <select className="proj-pick" value={value || ''} onChange={(e) => onChange(e.target.value)}>
+    <select className="field sm proj-pick" value={value || ''} onChange={(e) => onChange(e.target.value)}>
       <option value="">Global notes (every project)</option>
       {options.map((p) => (
         <option key={p} value={p}>
@@ -235,11 +235,11 @@ function Notes({ onError, projects, activeCwd }) {
     <>
       <div className="tab-top">
         <NoteScope projects={projects} value={project} onChange={setProject} />
-        <input className="search-in" placeholder="Search notes" value={q} onChange={(e) => setQ(e.target.value)} />
+        <input className="field sm search-in" placeholder="Search notes" value={q} onChange={(e) => setQ(e.target.value)} />
         {!edit && (
-          <button className="btn small primary" onClick={() => setEdit({ title: '', content: '', scope: project ? 'project' : 'global' })}>
+          <Button variant="primary" size="sm" onClick={() => setEdit({ title: '', content: '', scope: project ? 'project' : 'global' })}>
             + New note
-          </button>
+          </Button>
         )}
       </div>
       <p className="muted set-note">
@@ -248,21 +248,21 @@ function Notes({ onError, projects, activeCwd }) {
           : 'Global notes are shared by every project, Claude Desktop and every chat. Pick a project to see its own notes.'}
       </p>
       {edit && (
-        <form className="add-form" onSubmit={save}>
+        <form className="add-form card sunken fields sm" onSubmit={save}>
           <input value={edit.title} onChange={(e) => setEdit({ ...edit, title: e.target.value })} placeholder="Title" required disabled={!!edit.id} />
           <textarea rows={6} value={edit.content} onChange={(e) => setEdit({ ...edit, content: e.target.value })} placeholder="Markdown" />
           <div className="row end">
-            <button type="button" className="btn small" onClick={() => setEdit(null)}>
+            <Button type="button" size="sm" onClick={() => setEdit(null)}>
               Cancel
-            </button>
-            <button className="btn small primary">Save {edit.scope === 'global' ? 'global note' : 'to project memory'}</button>
+            </Button>
+            <Button variant="primary" size="sm">Save {edit.scope === 'global' ? 'global note' : 'to project memory'}</Button>
           </div>
         </form>
       )}
       {list?.length === 0 && <div className="empty-box">{q ? 'No matching notes.' : 'No notes yet.'}</div>}
       <div className="item-list">
         {list?.map((n) => (
-          <div key={key(n)} className="item note-item">
+          <div key={key(n)} className="item card note-item">
             <div className="item-main" onClick={() => view(n)} style={{ cursor: 'pointer' }}>
               <div className="item-title">
                 {n.title} {project && <span className="tag">{n.scope === 'project' ? 'project' : 'global'}</span>}
@@ -277,8 +277,8 @@ function Notes({ onError, projects, activeCwd }) {
               </div>
               {open?.key === key(n) ? <pre className="set-pre">{open.content}</pre> : <div className="item-sub">{(n.description || n.preview).slice(0, 140)}</div>}
             </div>
-            <button
-              className="icon-btn"
+            <IconButton
+              
               title="Edit"
               onClick={() =>
                 api(`/api/notes/${encodeURIComponent(n.id)}${scopeQs(n)}`)
@@ -287,10 +287,10 @@ function Notes({ onError, projects, activeCwd }) {
               }
             >
               ✎
-            </button>
-            <button className="icon-btn" title="Delete" onClick={() => del(n)}>
+            </IconButton>
+            <IconButton title="Delete" onClick={() => del(n)}>
               🗑
-            </button>
+            </IconButton>
           </div>
         ))}
       </div>
@@ -302,14 +302,7 @@ export default function DesktopTab({ onError, projects, activeCwd }) {
   const [view, setView] = useState('connect');
   return (
     <>
-      <div className="seg" style={{ marginBottom: 12 }}>
-        <button className={view === 'connect' ? 'on' : ''} onClick={() => setView('connect')}>
-          Connect
-        </button>
-        <button className={view === 'notes' ? 'on' : ''} onClick={() => setView('notes')}>
-          Notes
-        </button>
-      </div>
+      <Segmented className="seg-block" value={view} onChange={setView} options={[['connect', 'Connect'], ['notes', 'Notes']]} />
       {view === 'connect' ? <Connect onError={onError} /> : <Notes onError={onError} projects={projects} activeCwd={activeCwd} />}
     </>
   );

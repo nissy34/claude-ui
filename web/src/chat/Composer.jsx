@@ -5,6 +5,7 @@ import { needsSignIn } from './McpAuth.jsx';
 import { findModel, modelLabel, useModels } from '../models.js';
 import { withQuote } from './quote.js';
 import { QuoteMark } from './QuoteReply.jsx';
+import { Button, Menu } from '../ui/index.jsx';
 
 const isTouch = typeof window !== 'undefined' && window.matchMedia('(pointer: coarse)').matches;
 
@@ -93,10 +94,10 @@ function ContextRing({ used, window: win, onCompact }) {
         </svg>
       </button>
       {open && (
-        <div className="pop up right">
+        <Menu place="up" align="right">
           <div className="pad">
             <b>{Math.round(pct * 100)}% of context used</b>
-            <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+            <div className="muted text-sm" style={{ marginTop: 4 }}>
               {used.toLocaleString()} of {(win || 200000).toLocaleString()} tokens. Claude compacts automatically when it gets full.
             </div>
           </div>
@@ -105,7 +106,7 @@ function ContextRing({ used, window: win, onCompact }) {
             <span className="check" />
             Compact now
           </button>
-        </div>
+        </Menu>
       )}
     </div>
   );
@@ -135,7 +136,7 @@ function UsageButton({ usage }) {
         {Math.round(main * 100)}% used
       </button>
       {open && (
-        <div className="pop up right usage-pop">
+        <Menu place="up" align="right" className="usage-pop">
           <div className="pad usage-title">Plan usage limits</div>
           {entries.map(([k, w]) => (
             <div key={k} className="usage-row">
@@ -150,7 +151,7 @@ function UsageButton({ usage }) {
               </div>
             </div>
           ))}
-        </div>
+        </Menu>
       )}
     </div>
   );
@@ -450,7 +451,7 @@ export default function Composer({ sessionId, disabled, busy, onSend, onStop, mo
         }}
       >
         {suggest && (
-          <div className={`cmd-menu ${suggest.type === 'cmd' ? 'cmds' : ''}`} ref={menuRef} onScroll={placeTip}>
+          <div role="listbox" className={`pop cmd-menu ${suggest.type === 'cmd' ? 'cmds' : ''}`} ref={menuRef} onScroll={placeTip}>
             {suggest.items.map((it, i) => (
               <button
                 key={it.label}
@@ -534,7 +535,7 @@ export default function Composer({ sessionId, disabled, busy, onSend, onStop, mo
               +
             </button>
             {menu === 'plus' && (
-              <div className="pop up plus-pop">
+              <Menu place="up" className="plus-pop">
                 <button onClick={() => (setMenu(null), fileRef.current?.click())}>
                   <span className="check">⎙</span> Upload or add files <kbd>Ctrl U</kbd>
                 </button>
@@ -551,14 +552,14 @@ export default function Composer({ sessionId, disabled, busy, onSend, onStop, mo
                   onClick={() => (sub !== 'mcp' && onMcpRefresh?.(), setSub(sub === 'mcp' ? null : 'mcp'))}
                 >
                   <span className="check">⌗</span> Connectors
-                  {(mcpServers || []).some((m) => m.status !== 'connected' && m.status !== 'pending') && <span className="warn-pill">⚠ {(mcpServers || []).filter((m) => m.status !== 'connected' && m.status !== 'pending').length}</span>}
+                  {(mcpServers || []).some((m) => m.status !== 'connected' && m.status !== 'pending') && <span className="pill accent warn-pill">⚠ {(mcpServers || []).filter((m) => m.status !== 'connected' && m.status !== 'pending').length}</span>}
                   <span className="chev-r">›</span>
                 </button>
                 <button onMouseEnter={() => setSub(null)} onClick={() => (setMenu(null), onSettings?.('plugins'))}>
                   <span className="check">⚒</span> Add plugins
                 </button>
                 {sub === 'skills' && (
-                  <div className="pop sub">
+                  <Menu place="sub">
                     {commands.length === 0 && <span className="pad muted">Shown after the first message</span>}
                     {commands.slice(0, 40).map(({ name: c, description }) => (
                       <button
@@ -576,19 +577,19 @@ export default function Composer({ sessionId, disabled, busy, onSend, onStop, mo
                     ))}
                     <div className="sep" />
                     <button onClick={() => (setMenu(null), onSettings?.('skills'))}>Manage skills…</button>
-                  </div>
+                  </Menu>
                 )}
                 {sub === 'mcp' && (
-                  <div className="pop sub">
+                  <Menu place="sub">
                     {(mcpServers || []).length === 0 && <span className="pad muted">Checking…</span>}
                     {(mcpServers || []).map((m) => (
                       <div key={m.name} className="pad mcp-line">
                         <span className={`dot ${m.status === 'connected' ? 'on' : m.status === 'pending' ? 'busy' : 'err'}`} />
-                        <span style={{ flex: 1 }}>{m.name}</span>
+                        <span className="grow">{m.name}</span>
                         {needsSignIn(m) && onMcpSignIn ? (
-                          <button className="btn small primary mcp-signin" onClick={() => (setMenu(null), setSub(null), onMcpSignIn(m.name))}>
+                          <Button variant="primary" size="sm" className="mcp-signin" onClick={() => (setMenu(null), setSub(null), onMcpSignIn(m.name))}>
                             Sign in
-                          </button>
+                          </Button>
                         ) : (
                           <span className="muted">{m.status}</span>
                         )}
@@ -596,9 +597,9 @@ export default function Composer({ sessionId, disabled, busy, onSend, onStop, mo
                     ))}
                     <div className="sep" />
                     <button onClick={() => (setMenu(null), onSettings?.('mcp'))}>Manage connectors…</button>
-                  </div>
+                  </Menu>
                 )}
-              </div>
+              </Menu>
             )}
           </div>
           <button className="chip icon hide-mobile" title="Slash commands" onClick={openCommands}>
@@ -610,7 +611,7 @@ export default function Composer({ sessionId, disabled, busy, onSend, onStop, mo
               {isTouch ? modeInfo.short : modeInfo.label} <span className="chev">▾</span>
             </button>
             {menu === 'mode' && (
-              <div className="pop up">
+              <Menu place="up">
                 {MODES.map((m) => (
                   <button key={m.id} className={m.id === mode ? 'on' : ''} onClick={() => pick(onMode)(m.id)}>
                     <span className="check">{m.id === mode ? '✓' : ''}</span>
@@ -620,7 +621,7 @@ export default function Composer({ sessionId, disabled, busy, onSend, onStop, mo
                     </span>
                   </button>
                 ))}
-              </div>
+              </Menu>
             )}
           </div>
           <div className="menu-wrap">
@@ -628,7 +629,7 @@ export default function Composer({ sessionId, disabled, busy, onSend, onStop, mo
               {modelLabel(models, model, activeModel)} <span className="chev">▾</span>
             </button>
             {menu === 'model' && (
-              <div className="pop up model-pop">
+              <Menu place="up" className="model-pop">
                 {(models.length ? models.filter((m) => !m.id.startsWith('claude-') || m.id === model) : [{ id: '', displayName: 'Default', description: '' }]).map((m) => (
                   <ModelItem key={m.id} m={m} on={m.id === (model || '')} onPick={() => pick(onModel)(m.id)} />
                 ))}
@@ -656,7 +657,7 @@ export default function Composer({ sessionId, disabled, busy, onSend, onStop, mo
                   <span className="check" />
                   Other model…
                 </button>
-              </div>
+              </Menu>
             )}
           </div>
           <div className="menu-wrap hide-mobile">
@@ -664,7 +665,7 @@ export default function Composer({ sessionId, disabled, busy, onSend, onStop, mo
               {effort ? `${effortInfo?.label} effort` : 'Effort'} <span className="chev">▾</span>
             </button>
             {menu === 'effort' && (
-              <div className="pop up">
+              <Menu place="up">
                 {efforts.map((x) => (
                   <button key={x.id} className={x.id === (effort || '') ? 'on' : ''} onClick={() => pick(onEffort)(x.id)}>
                     <span className="check">{x.id === (effort || '') ? '✓' : ''}</span>
@@ -673,7 +674,7 @@ export default function Composer({ sessionId, disabled, busy, onSend, onStop, mo
                 ))}
                 <div className="sep" />
                 <span className="pad muted">Applies from the next message</span>
-              </div>
+              </Menu>
             )}
           </div>
           <span className="footer-info">{footer}</span>

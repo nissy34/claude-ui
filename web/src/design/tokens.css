@@ -1,0 +1,182 @@
+/*
+ * Design tokens: the one place to change how the app looks.
+ *
+ * Every color, size, radius, shadow and timing in the UI comes from here.
+ * Components (components.css, ../ui) and screens (../styles.css) only use
+ * these variables. See README.md next to this file for the rules.
+ *
+ * The palette follows Claude Desktop: warm off-white paper in light mode,
+ * warm charcoal in dark mode, a terracotta accent.
+ */
+
+:root {
+  /* ---------- color: surfaces ---------- */
+  --bg: #faf9f5;           /* app background, chat canvas */
+  --sidebar: #f3f1ea;      /* sidebar, settings nav, bars docked to an edge */
+  --panel: #ffffff;        /* raised surfaces: cards, menus, dialogs, inputs */
+  --panel-2: #f0eee6;      /* sunken / secondary surfaces: user bubble, segmented track, pills */
+  --hover: #ebe8de;        /* hover fill for rows and quiet buttons */
+  --active: #e6e2d6;       /* selected row */
+  --scrim: rgb(20 18 12 / 35%);
+
+  /* ---------- color: lines ---------- */
+  --line: #e3e0d6;         /* default 1px border and divider */
+  --line-strong: #cfcbbf;  /* focused / emphasized border, tree lines */
+
+  /* ---------- color: text ---------- */
+  --text: #29261b;         /* primary text */
+  --text-2: #3d3929;       /* secondary text (rows, labels) */
+  --muted: #7a776d;        /* meta text, placeholders, icons */
+
+  /* ---------- color: accent and status ---------- */
+  --accent: #c96442;
+  --accent-hover: #b4532f;
+  --accent-soft: #f5e6de;
+  --on-accent: #ffffff;    /* text/icons on an --accent (or any saturated) fill */
+  --green: #3f7d37;
+  --green-soft: #e3efdc;
+  --red: #b3412f;
+  --red-soft: #f7e1dc;
+  --blue: #2f6db0;
+  --blue-soft: #dfe9f5;
+  --warn: #9a6a00;
+  --warn-soft: #f6ecd2;
+  --purple: #8a63d2;
+  --purple-soft: #ece4f8;
+
+  /* ---------- color: code ---------- */
+  --code-bg: #f5f3ec;
+  --code-inline: #efece3;
+  --diff-add: #e3f1dc;
+  --diff-del: #f8e2dd;
+  --term-bg: #1e1d1b;      /* terminal is always dark */
+  --term-text: #a39f94;
+  --syn-keyword: #a8462a;
+  --syn-string: #3f7d37;
+  --syn-number: #9a6a00;
+  --syn-comment: #8c897e;
+  --syn-title: #2f6db0;
+  --syn-attr: #7a4fa3;
+  --syn-type: #1f7a7a;
+  --syn-meta: #6b6860;
+
+  /* ---------- elevation ---------- */
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / 12%);                     /* toggle knob, selected segment */
+  --shadow: 0 1px 2px rgb(0 0 0 / 4%), 0 4px 18px rgb(0 0 0 / 6%); /* composer, floating pills */
+  --shadow-pop: 0 10px 40px rgb(0 0 0 / 14%);                  /* menus, dialogs, toasts */
+  --focus-ring: 0 0 0 3px color-mix(in srgb, var(--accent) 15%, transparent);
+
+  /* ---------- type ---------- */
+  --serif: 'Tiempos Text', 'Iowan Old Style', 'Charter', Georgia, ui-serif, serif;
+  --sans: ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, Roboto, 'Helvetica Neue', sans-serif;
+  --mono: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace;
+  --fs-2xs: 10.5px;        /* badges, counters, kbd in menus */
+  --fs-xs: 11.5px;         /* pills, captions, footers */
+  --fs-sm: 12.5px;         /* meta text, hints, small buttons, code */
+  --fs-md: 13.5px;         /* menus, rows, form text: the UI default */
+  --fs-base: 14px;         /* body, dialog text, buttons */
+  --fs-lg: 15.5px;         /* chat messages and the composer */
+  --fs-input: 16px;        /* inputs on phones (smaller makes iOS zoom in) */
+  --fs-title: 17px;        /* dialog titles */
+  --fs-display: 30px;      /* serif headings on empty states */
+  --fw-medium: 500;
+  --fw-bold: 600;
+  --lh-tight: 1.3;
+  --lh: 1.45;
+  --lh-loose: 1.6;
+
+  /* ---------- space (4px grid, with half steps for dense UI) ---------- */
+  --sp-0: 2px;
+  --sp-1: 4px;
+  --sp-1h: 6px;
+  --sp-2: 8px;
+  --sp-2h: 10px;
+  --sp-3: 12px;
+  --sp-3h: 14px;
+  --sp-4: 16px;
+  --sp-5: 20px;
+  --sp-6: 24px;
+  --sp-8: 32px;
+
+  /* ---------- radii ---------- */
+  --r-xs: 4px;             /* kbd, inline code, tiny buttons */
+  --r-sm: 6px;             /* menu items, small controls */
+  --r-md: 8px;             /* buttons, inputs, rows */
+  --r-lg: 10px;            /* cards, code blocks, list items */
+  --r-xl: 12px;            /* menus, panels, docks */
+  --r-2xl: 16px;           /* dialogs, chat bubbles, popovers */
+  --r-3xl: 20px;           /* composer */
+  --r-full: 999px;         /* pills, counters, progress bars */
+
+  /* ---------- sizes ---------- */
+  --control-h: 32px;       /* icon buttons, send button, chips */
+  --control-h-sm: 26px;
+  --topbar-h: 48px;
+  --sidebar-w: 280px;
+  --content-w: 768px;      /* chat column */
+
+  /* ---------- layers ---------- */
+  --z-dock: 5;
+  --z-float: 25;
+  --z-menu: 40;
+  --z-drawer: 50;
+  --z-panel: 55;
+  --z-modal: 60;
+  --z-modal-top: 70;
+  --z-toast: 80;
+  --z-lightbox: 1000;
+
+  /* ---------- motion ---------- */
+  --ease: ease;
+  --dur-fast: .12s;
+  --dur: .15s;
+  --dur-slow: .2s;
+
+  --app-h: 100dvh;
+  color-scheme: light;
+}
+
+:root[data-theme='dark'] {
+  --bg: #262624;
+  --sidebar: #1f1e1d;
+  --panel: #30302e;
+  --panel-2: #2b2a28;
+  --hover: #353431;
+  --active: #3c3a36;
+  --scrim: rgb(0 0 0 / 50%);
+  --line: #3b3a36;
+  --line-strong: #4d4b45;
+  --text: #f3f1ea;
+  --text-2: #e2ded3;
+  --muted: #a39f94;
+  --accent: #d97757;
+  --accent-hover: #e48a6b;
+  --accent-soft: #3d2c25;
+  --on-accent: #ffffff;
+  --green: #8fc27f;
+  --green-soft: #26331f;
+  --red: #ec8a7a;
+  --red-soft: #3c2421;
+  --blue: #8cbdf0;
+  --blue-soft: #1f2c3a;
+  --warn: #e5c07b;
+  --warn-soft: #3a3020;
+  --purple: #b79cf0;
+  --purple-soft: #2f2740;
+  --code-bg: #1e1d1b;
+  --code-inline: #3a3935;
+  --diff-add: #213020;
+  --diff-del: #3a2220;
+  --syn-keyword: #e39a7a;
+  --syn-string: #a8c98f;
+  --syn-number: #e5c07b;
+  --syn-comment: #807d74;
+  --syn-title: #8cbdf0;
+  --syn-attr: #c9b8e8;
+  --syn-type: #6fc1c1;
+  --syn-meta: #9a988e;
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / 30%);
+  --shadow: 0 1px 2px rgb(0 0 0 / 20%), 0 4px 18px rgb(0 0 0 / 25%);
+  --shadow-pop: 0 10px 40px rgb(0 0 0 / 50%);
+  color-scheme: dark;
+}

@@ -11,7 +11,9 @@ export function getThemePref() {
 export function applyTheme(pref = getThemePref()) {
   const dark = pref === 'dark' || (pref === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
   document.documentElement.dataset.theme = dark ? 'dark' : 'light';
-  document.querySelector('meta[name=theme-color]')?.setAttribute('content', dark ? '#262624' : '#faf9f5');
+  // The browser bar matches the app background token (design/tokens.css).
+  const bg = getComputedStyle(document.documentElement).getPropertyValue('--bg').trim();
+  document.querySelector('meta[name=theme-color]')?.setAttribute('content', bg || (dark ? '#262624' : '#faf9f5'));
 }
 
 export function setThemePref(pref) {
