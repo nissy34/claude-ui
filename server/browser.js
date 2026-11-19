@@ -3,6 +3,7 @@
 // and the web UI shows the same tab live in the Browser panel and can click and type into it.
 import { createRequire } from 'node:module';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { config } from './config.js';
 
@@ -70,10 +71,26 @@ export function onSigninChange(fn) {
 }
 const signinChanged = () => signinListeners.forEach((fn) => fn(signinList()));
 
+// Chromium locks a profile as "<hostname>-<pid>" and refuses one locked by another host. In Docker
+// the hostname is the container id, so after a rebuild the old container's lock (left behind when it
+// stopped) would keep the sign-in window from starting. Only this server uses the profile.
+function clearStaleProfileLock(dir) {
+  if (!config.inDocker) return;
+  let lock;
+  try {
+    lock = fs.readlinkSync(path.join(dir, 'SingletonLock'));
+  } catch {
+    return;
+  }
+  if (lock.slice(0, lock.lastIndexOf('-')) === os.hostname()) return; // Chromium handles its own host
+  for (const f of ['SingletonLock', 'SingletonCookie', 'SingletonSocket']) fs.rmSync(path.join(dir, f), { force: true });
+}
+
 async function launchSignin() {
   if (!browserAvailable()) throw new Error('The built-in browser is not available on this server.');
   const dir = path.join(config.dataDir, 'browser-profile');
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  clearStaleProfileLock(dir);
   const base = { headless: true, args: ['--no-sandbox', '--disable-dev-shm-usage'], viewport: { width: 1280, height: 800 }, deviceScaleFactor: 1, ignoreHTTPSErrors: true };
   const attempts = config.browserPath ? [{ ...base, executablePath: config.browserPath }] : [base, { ...base, channel: 'chrome' }, { ...base, channel: 'msedge' }];
   let last;

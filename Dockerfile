@@ -46,13 +46,21 @@ RUN npm install -g --no-audit --no-fund @anthropic-ai/claude-code@${CLAUDE_CODE_
 WORKDIR /app
 COPY --from=build /app /app
 
-# Browsers live in the image, not in your (mounted) home folder.
-ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+# The built-in browser lives in the image at /ms-playwright and is handed to
+# claude-ui alone as CW_BROWSER_PATH. PLAYWRIGHT_BROWSERS_PATH is set only for
+# this install, never image-wide, so chats, MCP servers and the scripts they run
+# keep Playwright's default (~/.cache/ms-playwright, a volume in
+# docker-compose.yml) and download whichever build their own Playwright wants.
+# --with-deps also installs the system libraries those builds need.
 RUN if [ "$WITH_BROWSER" = 1 ]; then \
-      node node_modules/playwright-core/cli.js install --with-deps chromium \
+      export PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
+      && node node_modules/playwright-core/cli.js install --with-deps --no-shell chromium \
+      && exe=$(node -p "require('playwright-core').chromium.executablePath()") \
+      && test -x "$exe" \
+      && echo "CW_BROWSER_PATH=$exe" > /etc/claude-ui.env \
       && rm -rf /var/lib/apt/lists/*; \
-    else echo "CW_BROWSER=0" > /etc/claude-ui.env; fi; \
-    touch /etc/claude-ui.env
+    else echo "CW_BROWSER=0" > /etc/claude-ui.env; fi \
+    && touch /etc/claude-ui.env
 
 COPY docker/entrypoint.sh /usr/local/bin/claude-ui-entrypoint
 
