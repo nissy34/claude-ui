@@ -1,6 +1,7 @@
 // Local environments: a named set of folders and environment variables a chat can start in.
 // The first folder is the chat's working folder, the rest are passed with --add-dir, and the
-// variables go into the claude process. Stored in ~/.claude-web/environments.json.
+// variables go into the claude process. Each folder can pin a branch and run in its own git
+// worktree. Stored in ~/.claude-web/environments.json, with the picker's starred entries.
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -11,11 +12,17 @@ const FILE = path.join(config.dataDir, 'environments.json');
 const RESERVED = new Set([...PRIVATE_ENV, 'CW_INTERNAL_URL', 'CW_INTERNAL_TOKEN', 'CW_SESSION_ID', 'CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING']);
 
 let list = null;
+let favorites = [];
+
+// Folders were plain paths before branches and worktrees; read either shape.
+const folderOf = (f) => (typeof f === 'string' ? { path: f } : { path: f.path, ...(f.branch ? { branch: f.branch } : {}), ...(f.worktree ? { worktree: true } : {}) });
 
 function load() {
   if (list) return list;
   try {
-    list = JSON.parse(fs.readFileSync(FILE, 'utf8')).environments || [];
+    const j = JSON.parse(fs.readFileSync(FILE, 'utf8'));
+    list = (j.environments || []).map((e) => ({ ...e, folders: (e.folders || []).map(folderOf) }));
+    favorites = Array.isArray(j.favorites) ? j.favorites : [];
   } catch {
     list = [];
   }
@@ -24,8 +31,24 @@ function load() {
 
 function save() {
   const tmp = FILE + '.tmp';
-  fs.writeFileSync(tmp, JSON.stringify({ environments: list }, null, 2), { mode: 0o600 });
+  fs.writeFileSync(tmp, JSON.stringify({ environments: list, favorites }, null, 2), { mode: 0o600 });
   fs.renameSync(tmp, FILE);
+}
+
+/** Starred picker entries: "env:<id>" or a folder path. */
+export function listFavorites() {
+  load();
+  return favorites;
+}
+
+export function setFavorite(key, on) {
+  load();
+  key = String(key || '').slice(0, 1000);
+  if (!key) throw new Error('Nothing to star');
+  favorites = favorites.filter((k) => k !== key);
+  if (on) favorites.unshift(key);
+  save();
+  return favorites;
 }
 
 export function listEnvironments() {
@@ -40,12 +63,12 @@ export function getEnvironment(id) {
 function decorate(e) {
   return {
     ...e,
-    folderInfo: e.folders.map((p) => {
+    folderInfo: e.folders.map((f) => {
       let exists = false;
       try {
-        exists = fs.statSync(p).isDirectory();
+        exists = fs.statSync(f.path).isDirectory();
       } catch {}
-      return { path: p, exists, git: exists && fs.existsSync(path.join(p, '.git')) };
+      return { ...f, exists, git: exists && fs.existsSync(path.join(f.path, '.git')) };
     }),
   };
 }
@@ -77,9 +100,12 @@ function clean(body, resolveDir) {
   const name = String(body?.name || '').trim().slice(0, 60);
   if (!name) throw new Error('Give the environment a name');
   const folders = [];
-  for (const f of Array.isArray(body?.folders) ? body.folders : []) {
-    const p = resolveDir(String(f));
-    if (!folders.includes(p)) folders.push(p);
+  for (const raw of Array.isArray(body?.folders) ? body.folders : []) {
+    const f = folderOf(raw);
+    const p = resolveDir(String(f.path));
+    const branch = f.branch ? String(f.branch).trim().slice(0, 200) : '';
+    if (branch && (branch.startsWith('-') || /[\s~^:?*[\\]|\.\.|@\{/.test(branch))) throw new Error(`Bad branch name: ${branch}`);
+    if (!folders.some((x) => x.path === p)) folders.push({ path: p, ...(branch ? { branch } : {}), ...(f.worktree ? { worktree: true } : {}) });
   }
   return { name, folders, env: parseEnv(body?.env) };
 }
@@ -107,13 +133,17 @@ export function deleteEnvironment(id) {
   const i = list.findIndex((e) => e.id === id);
   if (i < 0) throw new Error('No such environment');
   list.splice(i, 1);
+  favorites = favorites.filter((k) => k !== `env:${id}`);
   save();
 }
 
-/** What a session started in this environment adds to its process: extra dirs and variables. */
+/**
+ * What a session started in this environment adds to its process: extra dirs and variables.
+ * The extra dirs were fixed when the chat started (worktree paths where a folder has one).
+ */
 export function sessionExtras(meta) {
   const e = getEnvironment(meta?.envId);
-  if (!e) return { addDirs: [], env: {} };
-  const addDirs = e.folders.filter((p) => p !== meta.cwd && p !== meta.project && fs.existsSync(p));
-  return { addDirs, env: { ...e.env } };
+  const dirs = Array.isArray(meta?.addDirs) ? meta.addDirs : e ? e.folders.map((f) => f.path) : [];
+  const addDirs = dirs.filter((p) => p !== meta.cwd && p !== meta.project && fs.existsSync(p));
+  return { addDirs, env: e ? { ...e.env } : {} };
 }

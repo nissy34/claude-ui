@@ -5,7 +5,7 @@
  */
 import React, { useState } from 'react';
 import { setThemePref } from '../theme.js';
-import { Button, Card, Count, IconButton, Input, Kbd, Menu, MenuItem, MenuSeparator, ModalBody, ModalFoot, ModalHead, Pill, Segmented, Select, Spinner, Textarea, Toggle } from '../ui/index.jsx';
+import { Button, Card, Count, IconButton, Input, Kbd, Menu, MenuItem, MenuSeparator, ModalBody, ModalFoot, ModalHead, Pill, Segmented, Select, Spinner, Textarea, Toggle, Checkbox } from '../ui/index.jsx';
 
 const COLORS = [
   ['Surfaces', ['bg', 'sidebar', 'panel', 'panel-2', 'hover', 'active']],
@@ -148,6 +148,12 @@ export default function Gallery() {
           <div className="ds-row">
             <Toggle value={toggle} onChange={setToggle} label="Toggle" />
             <Toggle value={false} disabled label="Disabled toggle" />
+            <Checkbox checked={toggle} onChange={setToggle}>
+              Worktree
+            </Checkbox>
+            <Checkbox checked={false} disabled>
+              Disabled
+            </Checkbox>
             <Segmented value={seg} onChange={setSeg} options={[['day', 'Day'], ['week', 'Week'], ['month', 'Month']]} />
             <Spinner />
             <span>

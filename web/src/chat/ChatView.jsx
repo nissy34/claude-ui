@@ -18,7 +18,8 @@ import { ChatCtx } from './ctx.js';
 import SideChat from './SideChat.jsx';
 import TerminalView from '../TerminalView.jsx';
 import { Button, IconButton, Menu, Modal, ModalHead, useDismiss } from '../ui/index.jsx';
-import { confirmDialog, promptDialog } from '../ui/dialogs.jsx';
+import { promptDialog } from '../ui/dialogs.jsx';
+import { deleteChat } from './deleteChat.js';
 import { copyText } from '../ui/clipboard.js';
 
 const AUTH_RE = /oauth|authenticat|\/login|not logged in|invalid api key|credentials/i;
@@ -663,8 +664,9 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
   };
   const remove = async () => {
     setMenu(false);
-    if (!(await confirmDialog('Delete this chat? Claude keeps its own transcript, so you can resume it later from "Past conversations".', { ok: 'Delete', danger: true }))) return;
-    api(`/api/sessions/${session.id}`, { method: 'DELETE' }).then(onDeleted).catch(onError);
+    deleteChat(session)
+      .then((done) => done && onDeleted())
+      .catch(onError);
   };
   const fork = async (index) => {
     try {

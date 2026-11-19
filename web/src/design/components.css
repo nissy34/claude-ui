@@ -85,6 +85,9 @@ textarea.field, .fields textarea { resize: vertical; }
 .toggle:disabled { opacity: .45; cursor: default; }
 .toggle:focus-visible { outline: none; box-shadow: var(--focus-ring); }
 
+.checkbox { display: inline-flex; align-items: center; gap: var(--sp-1h); font-size: var(--fs-md); color: var(--text-2); cursor: pointer; user-select: none; }
+.checkbox input { width: 15px; height: 15px; margin: 0; accent-color: var(--accent); cursor: inherit; }
+.checkbox.disabled { opacity: .5; cursor: default; }
 .seg { display: inline-flex; background: var(--panel-2); border: 1px solid var(--line); border-radius: var(--r-lg); padding: var(--sp-0); }
 .seg button { background: none; border: 0; padding: 5px var(--sp-3); border-radius: var(--r-md); font-size: var(--fs-md); color: var(--text-2); }
 .seg button.on { background: var(--panel); color: var(--text); box-shadow: var(--shadow-sm); }
@@ -197,4 +200,4 @@ kbd { display: inline-block; font: var(--fs-xs) var(--mono); background: var(--p
 
 /* confirmDialog / promptDialog (ui/dialogs.jsx) */
 .ask-dialog { max-width: 420px; }
-.ask-text { margin: 0; line-height: 1.5; color: var(--text); }
+.ask-text { margin: 0; line-height: 1.5; color: var(--text); white-space: pre-line; }

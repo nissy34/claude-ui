@@ -158,6 +158,16 @@ export function Toggle({ value, onChange, label, className, ...rest }) {
   return <button type="button" role="switch" aria-checked={!!value} aria-label={label} className={cx('toggle', value && 'on', className)} onClick={() => onChange?.(!value)} {...rest} />;
 }
 
+/** Checkbox with a label. checked: boolean; onChange(next). */
+export function Checkbox({ checked, onChange, disabled, className, children, title, ...rest }) {
+  return (
+    <label className={cx('checkbox', disabled && 'disabled', className)} title={title}>
+      <input type="checkbox" checked={!!checked} disabled={disabled} onChange={(e) => onChange?.(e.target.checked)} {...rest} />
+      {children != null && <span>{children}</span>}
+    </label>
+  );
+}
+
 /** Segmented control. options: [[value, label], …]. */
 export function Segmented({ options, value, onChange, className }) {
   return (
