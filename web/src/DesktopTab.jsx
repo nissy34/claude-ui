@@ -1,12 +1,10 @@
 import React, { useEffect, useState } from 'react';
 import { api, timeAgo } from './api.js';
 import { Button, IconButton, Segmented } from './ui/index.jsx';
+import { confirmDialog } from './ui/dialogs.jsx';
+import { copyText } from './ui/clipboard.js';
 
-function copy(text) {
-  try {
-    navigator.clipboard.writeText(text);
-  } catch {}
-}
+const copy = (text) => copyText(text);
 
 const isWin = /win/i.test(navigator.platform || navigator.userAgent);
 
@@ -51,7 +49,7 @@ function Connect({ onError }) {
   const cfgCopy = JSON.stringify({ mcpServers: { 'claude-ui': server(token) } }, null, 2);
   const addCmd = (t) => `claude mcp add --scope user --transport http claude-ui ${url} --header "Authorization: Bearer ${t}"`;
   const rotate = async () => {
-    if (!window.confirm('Make a new token? Claude Desktop stops connecting until you put the new one in its config.')) return;
+    if (!(await confirmDialog('Make a new token? Claude Desktop stops connecting until you put the new one in its config.', { ok: 'Make new token' }))) return;
     try {
       const r = await api('/api/desktop-mcp/token', { method: 'POST' });
       setInfo({ ...info, token: r.token });
@@ -211,7 +209,7 @@ function Notes({ onError, projects, activeCwd }) {
     }
   };
   const del = async (n) => {
-    if (!window.confirm(`Delete the note "${n.title}"?${n.scope === 'project' ? ' It is removed from this project\'s Claude Code memory.' : ''}`)) return;
+    if (!(await confirmDialog(`Delete the note "${n.title}"?${n.scope === 'project' ? ' It is removed from this project\'s Claude Code memory.' : ''}`, { ok: 'Delete', danger: true }))) return;
     try {
       await api(`/api/notes/${encodeURIComponent(n.id)}${scopeQs(n)}`, { method: 'DELETE' });
       if (open?.key === key(n)) setOpen(null);

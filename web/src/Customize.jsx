@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { api } from './api.js';
 import { McpLogins, PasteCallback } from './chat/McpAuth.jsx';
 import { Button, IconButton, Segmented, Toggle } from './ui/index.jsx';
+import { confirmDialog } from './ui/dialogs.jsx';
 
 const RESTART_NOTE = 'Changes apply to new chats, and to open chats after their next restart.';
 
@@ -331,7 +332,7 @@ export function McpTab({ projects, activeCwd, onError }) {
             >
               ✎
             </IconButton>
-            <IconButton title="Remove" disabled={busy === s.name} onClick={() => window.confirm(`Remove the MCP server "${s.name}" (${s.scope})?`) && run(s.name, () => post('remove', { name: s.name, scope: s.scope }))}>
+            <IconButton title="Remove" disabled={busy === s.name} onClick={async () => (await confirmDialog(`Remove the MCP server "${s.name}" (${s.scope})?`, { ok: 'Remove', danger: true })) && run(s.name, () => post('remove', { name: s.name, scope: s.scope }))}>
               🗑
             </IconButton>
           </div>
@@ -530,8 +531,8 @@ export function PluginsTab({ onError }) {
                   <IconButton
                     
                     title="Remove"
-                    onClick={() =>
-                      window.confirm(`Remove marketplace ${name}?`) &&
+                    onClick={async () =>
+                      (await confirmDialog(`Remove marketplace ${name}?`, { ok: 'Remove', danger: true })) &&
                       run(name, () =>
                         api('/api/claude/marketplaces/action', {
                           method: 'POST',
@@ -576,7 +577,7 @@ export function PluginsTab({ onError }) {
                       <Button size="sm" disabled={busy === id} onClick={() => act('update', id)}>
                         Update
                       </Button>
-                      <IconButton title="Uninstall" disabled={busy === id} onClick={() => window.confirm(`Uninstall ${p.name || id}?`) && act('uninstall', id, p.scope)}>
+                      <IconButton title="Uninstall" disabled={busy === id} onClick={async () => (await confirmDialog(`Uninstall ${p.name || id}?`, { ok: 'Uninstall', danger: true })) && act('uninstall', id, p.scope)}>
                         🗑
                       </IconButton>
                     </>
@@ -717,7 +718,7 @@ export function SkillsTab({ projects, activeCwd, onError }) {
             >
               Edit
             </Button>
-            <IconButton title="Delete" onClick={() => window.confirm(`Delete the skill "${s.name}"? It's moved to a .trash folder next to it.`) && run(s.id, () => post('delete', { scope: s.scope, id: s.id }))}>
+            <IconButton title="Delete" onClick={async () => (await confirmDialog(`Delete the skill "${s.name}"? It's moved to a .trash folder next to it.`, { ok: 'Delete', danger: true })) && run(s.id, () => post('delete', { scope: s.scope, id: s.id }))}>
               🗑
             </IconButton>
           </div>

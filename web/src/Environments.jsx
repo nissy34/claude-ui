@@ -1,6 +1,7 @@
 import React, { useRef, useState } from 'react';
 import { api } from './api.js';
 import { Button, IconButton, Modal, ModalHead } from './ui/index.jsx';
+import { confirmDialog } from './ui/dialogs.jsx';
 
 export const FolderIcon = () => (
   <svg className="pl-ico" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
@@ -72,7 +73,7 @@ export function EnvironmentDialog({ env, projects, onSaved, onDeleted, onClose, 
   };
 
   const del = async () => {
-    if (!confirm(`Delete the environment "${env.name}"? Its folders are not touched.`)) return;
+    if (!(await confirmDialog(`Delete the environment "${env.name}"? Its folders are not touched.`, { ok: 'Delete', danger: true }))) return;
     try {
       await api(`/api/environments/${env.id}`, { method: 'DELETE' });
       onDeleted(env.id);
@@ -82,7 +83,7 @@ export function EnvironmentDialog({ env, projects, onSaved, onDeleted, onClose, 
   };
 
   return (
-    <Modal onClose={(e) => (e.stopPropagation(), onClose())} overlayClassName="env-modal" className="env-dialog" onSubmit={save}>
+    <Modal as="form" onClose={(e) => (e.stopPropagation(), onClose())} overlayClassName="env-modal" className="env-dialog" onSubmit={save}>
       <ModalHead title={env ? 'Edit environment' : 'New environment'} onClose={onClose} />
       <div className="modal-body">
         <div className="env-tabs" role="tablist">

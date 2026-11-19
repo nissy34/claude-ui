@@ -1,6 +1,7 @@
 import { Marked } from 'marked';
 import DOMPurify from 'dompurify';
 import hljs from 'highlight.js/lib/common';
+import { copyText } from '../ui/clipboard.js';
 
 const marked = new Marked({
   gfm: true,
@@ -50,7 +51,8 @@ document.addEventListener('click', (e) => {
   const btn = e.target.closest?.('.copy-code');
   if (!btn) return;
   const code = btn.closest('.codeblock')?.querySelector('code')?.innerText || '';
-  navigator.clipboard?.writeText(code).then(() => {
+  copyText(code).then((ok) => {
+    if (!ok) return;
     btn.textContent = 'Copied';
     setTimeout(() => (btn.textContent = 'Copy'), 1200);
   });

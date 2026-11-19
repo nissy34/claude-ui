@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api.js';
 import { Button } from '../ui/index.jsx';
+import { confirmDialog } from '../ui/dialogs.jsx';
 
 // MCP sign-in (OAuth). Claude's flow redirects to http://localhost:<port>/callback on the machine
 // running Claude. Sign-in pages open in the sign-in window (the server's own browser, on that
@@ -394,7 +395,7 @@ export function McpLogins({ cwd, onError, onChange }) {
                       </Button>
                     )}
                     {canSignOut(s) && (
-                      <Button size="sm" disabled={busy === s.name} onClick={() => window.confirm(`Sign out of ${s.name}? Chats lose access until you sign in again.`) && act('signout', { name: s.name })}>
+                      <Button size="sm" disabled={busy === s.name} onClick={async () => (await confirmDialog(`Sign out of ${s.name}? Chats lose access until you sign in again.`, { ok: 'Sign out', danger: true })) && act('signout', { name: s.name })}>
                         Sign out
                       </Button>
                     )}

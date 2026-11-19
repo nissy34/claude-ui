@@ -3,6 +3,7 @@ import { api, timeAgo } from './api.js';
 import { MODES } from './chat/Composer.jsx';
 import { useModels } from './models.js';
 import { Button, IconButton, Modal } from './ui/index.jsx';
+import { confirmDialog } from './ui/dialogs.jsx';
 
 const PRESETS = [
   ['manual', 'Manual (run by hand)'],
@@ -208,13 +209,13 @@ export default function Scheduled({ projects, defaultCwd, onClose, onOpen, onErr
     const r = await api(`/api/schedules/${t.id}/run`, { method: 'POST' });
     if (r.run?.sessionId) onOpen(r.run.sessionId);
   });
-  const remove = act((t) => window.confirm(`Delete "${t.name}"? Chats from earlier runs stay.`) && api(`/api/schedules/${t.id}`, { method: 'DELETE' }));
+  const remove = act(async (t) => (await confirmDialog(`Delete "${t.name}"? Chats from earlier runs stay.`, { ok: 'Delete', danger: true })) && api(`/api/schedules/${t.id}`, { method: 'DELETE' }));
 
   return (
     <Modal onClose={onClose} size="wide">
       <div className="modal-head">
         <span className="mtitle">Scheduled</span>
-        <span className="muted text-sm">
+        <span className="muted text-sm hide-mobile">
           {data?.tz ? `Server time zone: ${data.tz}` : ''}
         </span>
         <span className="spacer" />

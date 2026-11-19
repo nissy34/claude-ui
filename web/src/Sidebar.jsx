@@ -2,7 +2,8 @@ import React, { useMemo, useState } from 'react';
 import { api, timeAgo } from './api.js';
 import { getThemePref, setThemePref } from './theme.js';
 import { EnvironmentDialog, ClonePanel, envSummary, FolderIcon, EnvIcon, GitIcon } from './Environments.jsx';
-import { Button, IconButton, Menu, Modal, ModalHead } from './ui/index.jsx';
+import { Button, IconButton, Menu, Modal, ModalHead, useDismiss } from './ui/index.jsx';
+import { confirmDialog, promptDialog } from './ui/dialogs.jsx';
 
 function dotState(s) {
   if (s.kind === 'chat') {
@@ -95,16 +96,16 @@ export default function Sidebar({ sessions, activeId, onSelect, onCreate, onNewC
   const searchRef = React.useRef(null);
 
   const patch = (s, body) => api(`/api/sessions/${s.id}`, { method: 'PATCH', body }).catch(onError);
-  const rowAction = (s, action) => {
+  const rowAction = async (s, action) => {
     setMenu(null);
     if (action === 'pin') patch(s, { pinned: !s.pinned });
     else if (action === 'unread') patch(s, { unread: true });
     else if (action === 'archive') patch(s, { archived: !s.archived });
     else if (action === 'rename') {
-      const name = window.prompt('Rename chat', s.name);
+      const name = await promptDialog('Rename chat', s.name);
       if (name) patch(s, { name });
     } else if (action === 'delete') {
-      if (!window.confirm(`Delete "${s.name}"? Claude keeps its own transcript, so you can resume it later from Past conversations.`)) return;
+      if (!(await confirmDialog(`Delete "${s.name}"? Claude keeps its own transcript, so you can resume it later from Past conversations.`, { ok: 'Delete', danger: true }))) return;
       api(`/api/sessions/${s.id}`, { method: 'DELETE' })
         .then(() => s.id === activeId && onSelect(null))
         .catch(onError);
@@ -163,12 +164,8 @@ export default function Sidebar({ sessions, activeId, onSelect, onCreate, onNewC
     </div>
   );
 
-  React.useEffect(() => {
-    if (!menu) return;
-    const onDown = (e) => !e.target.closest?.('.menu-wrap') && setMenu(null);
-    document.addEventListener('mousedown', onDown);
-    return () => document.removeEventListener('mousedown', onDown);
-  }, [menu]);
+  const asideRef = React.useRef(null);
+  useDismiss(!!menu, () => setMenu(null), asideRef);
 
   // Shortcut letters work while a row's menu is open, like the desktop app.
   React.useEffect(() => {
@@ -186,7 +183,7 @@ export default function Sidebar({ sessions, activeId, onSelect, onCreate, onNewC
   const cap = (t) => t[0].toUpperCase() + t.slice(1);
 
   return (
-    <aside className="sidebar">
+    <aside className="sidebar" ref={asideRef}>
       <div className="side-head">
         <div className="brand">
           <span className="mark sm">&gt;_</span> Claude Web
@@ -205,7 +202,7 @@ export default function Sidebar({ sessions, activeId, onSelect, onCreate, onNewC
         </button>
         <div className="side-search">
           <span className="s-ico">⌕</span>
-          <input ref={searchRef} placeholder="Search" value={q} onChange={(e) => setQ(e.target.value)} />
+          <input ref={searchRef} placeholder="Search" value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => e.key === 'Escape' && q && (e.preventDefault(), setQ(''), e.currentTarget.blur())} />
         </div>
         <button onClick={onArtifacts}>
           <span className="nico">◇</span> Artifacts
@@ -532,6 +529,16 @@ export function NewChatDialog({ projects, onCreate, onClose, onReloadProjects, o
           Start chat
         </Button>
       </div>
+      {editEnv && (
+        <EnvironmentDialog
+          env={editEnv.id ? editEnv : null}
+          projects={projects}
+          onSaved={envSaved}
+          onDeleted={(id) => (setEnvs((l) => l.filter((e) => e.id !== id)), setEditEnv(null), sel === ENV + id && setSel(NO_FOLDER))}
+          onClose={() => setEditEnv(null)}
+          onError={onError}
+        />
+      )}
     </Modal>
   );
 }

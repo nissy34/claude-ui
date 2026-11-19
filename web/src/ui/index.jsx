@@ -6,7 +6,7 @@
  * Every component passes unknown props (onClick, title, disabled, aria-*, ref…)
  * through to its root element and merges `className`.
  */
-import React, { forwardRef } from 'react';
+import React, { forwardRef, useEffect, useRef } from 'react';
 
 export const cx = (...parts) => parts.flat().filter(Boolean).join(' ');
 
@@ -35,6 +35,33 @@ export const Menu = forwardRef(function Menu({ place = 'down', align, className,
   return <div ref={ref} role="menu" className={cx('pop', place, align, className)} {...rest} />;
 });
 
+/**
+ * Closes an open menu on Escape or a mousedown outside it. A click in another menu
+ * button inside `root` (e.g. the next chip in the same bar) is left to that button.
+ */
+export function useDismiss(open, close, root) {
+  const closeRef = useRef(close);
+  closeRef.current = close;
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e) => {
+      const wrap = e.target.closest?.('.menu-wrap');
+      if (!wrap || !root?.current || !root.current.contains(wrap)) closeRef.current();
+    };
+    const onKey = (e) => {
+      if (e.key !== 'Escape' || e.defaultPrevented) return;
+      e.preventDefault();
+      closeRef.current();
+    };
+    document.addEventListener('mousedown', onDown);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
+}
+
 /** A row in a Menu. icon and kbd are optional; hint renders as a muted second line. */
 export function MenuItem({ icon, kbd, hint, on, danger, className, children, ...rest }) {
   return (
@@ -51,13 +78,32 @@ export function MenuItem({ icon, kbd, hint, on, danger, className, children, ...
 
 export const MenuSeparator = () => <div className="sep" role="separator" />;
 
-/** Dialog: dims the app, closes on a click outside the card. size: undefined | 'wide'. */
-export function Modal({ onClose, size, className, overlayClassName, children, ...rest }) {
+/** Dialog: dims the app, closes on a click outside the card or Escape. size: undefined | 'wide'. as="form" makes the card a form (pass onSubmit). */
+// Open dialogs, newest last: Escape closes only the top one.
+const openModals = [];
+
+export function Modal({ as: Card = 'div', onClose, size, className, overlayClassName, children, ...rest }) {
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
+  useEffect(() => {
+    const me = {};
+    openModals.push(me);
+    const onKey = (e) => {
+      if (e.key !== 'Escape' || e.defaultPrevented || openModals[openModals.length - 1] !== me || !closeRef.current) return;
+      e.preventDefault();
+      closeRef.current({ stopPropagation() {}, preventDefault() {} });
+    };
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      openModals.splice(openModals.indexOf(me), 1);
+    };
+  }, []);
   return (
     <div className={cx('modal', overlayClassName)} onClick={onClose}>
-      <div role="dialog" aria-modal="true" className={cx('modal-card', size, className)} onClick={(e) => e.stopPropagation()} {...rest}>
+      <Card role="dialog" aria-modal="true" className={cx('modal-card', size, className)} onClick={(e) => e.stopPropagation()} {...rest}>
         {children}
-      </div>
+      </Card>
     </div>
   );
 }
@@ -69,7 +115,7 @@ export function ModalHead({ title, onClose, className, children }) {
       {title != null && <span className="mtitle">{title}</span>}
       {children}
       {onClose && (
-        <IconButton onClick={onClose} aria-label="Close" title="Close">
+        <IconButton type="button" onClick={onClose} aria-label="Close" title="Close">
           ✕
         </IconButton>
       )}

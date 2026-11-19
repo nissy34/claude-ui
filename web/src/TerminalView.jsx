@@ -5,6 +5,8 @@ import { WebLinksAddon } from '@xterm/addon-web-links';
 import { api, wsUrl } from './api.js';
 import KeyBar from './KeyBar.jsx';
 import { Button, IconButton, Modal } from './ui/index.jsx';
+import { confirmDialog, promptDialog } from './ui/dialogs.jsx';
+import { copyText } from './ui/clipboard.js';
 
 const isTouch = typeof window !== 'undefined' && window.matchMedia('(pointer: coarse)').matches;
 
@@ -91,7 +93,7 @@ export default function TerminalView({ session, onMenu, onError, onDeleted, onCr
 
     term.attachCustomKeyEventHandler((e) => {
       if (e.type === 'keydown' && (e.ctrlKey || e.metaKey) && e.key === 'c' && term.hasSelection()) {
-        navigator.clipboard?.writeText(term.getSelection()).catch(() => {});
+        copyText(term.getSelection());
         term.clearSelection();
         return false;
       }
@@ -232,16 +234,16 @@ export default function TerminalView({ session, onMenu, onError, onDeleted, onCr
   };
 
   const rename = async () => {
-    const name = window.prompt('Rename session', session.name);
+    const name = await promptDialog('Rename session', session.name);
     if (!name) return;
     api(`/api/sessions/${session.id}`, { method: 'PATCH', body: { name } }).catch(onError);
   };
   const restart = () => api(`/api/sessions/${session.id}/restart`, { method: 'POST' }).catch(onError);
-  const kill = () => {
-    if (window.confirm('Stop this session? The conversation can be resumed later.')) api(`/api/sessions/${session.id}/kill`, { method: 'POST' }).catch(onError);
+  const kill = async () => {
+    if ((await confirmDialog('Stop this session? The conversation can be resumed later.', { ok: 'Stop', danger: true }))) api(`/api/sessions/${session.id}/kill`, { method: 'POST' }).catch(onError);
   };
-  const remove = () => {
-    if (!window.confirm('Delete this session from the list? (Claude keeps its own transcript.)')) return;
+  const remove = async () => {
+    if (!(await confirmDialog('Delete this session from the list? (Claude keeps its own transcript.)', { ok: 'Delete', danger: true }))) return;
     api(`/api/sessions/${session.id}`, { method: 'DELETE' }).then(onDeleted).catch(onError);
   };
 
@@ -356,7 +358,7 @@ export default function TerminalView({ session, onMenu, onError, onDeleted, onCr
         <Modal onClose={() => setTextView(null)}>
           <div className="modal-head">
             <span>Terminal text</span>
-            <Button size="sm" onClick={() => navigator.clipboard?.writeText(textView).catch(() => {})}>
+            <Button size="sm" onClick={() => copyText(textView)}>
               Copy all
             </Button>
             <IconButton onClick={() => setTextView(null)}>
