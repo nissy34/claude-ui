@@ -576,6 +576,12 @@ export class ChatSession {
           }
         }
         m.totalCost = (m.totalCost || 0) + (msg.total_cost_usd || 0);
+        // The real context window of the model this turn ran on, as the CLI reports it (e.g.
+        // 1,000,000 for 1M-context models). Re-read every turn so a mid-chat model switch shows.
+        {
+          const win = mainModelWindow(msg.modelUsage, m.activeModel);
+          if (win) m.contextWindow = win;
+        }
         this.record({
           k: 'result',
           subtype: msg.subtype,
@@ -592,8 +598,10 @@ export class ChatSession {
         if (!msg.is_error) this.autoTitle();
         break;
       case 'autocompact_state':
+        // The window autocompact works against (model window minus room for output). Only used
+        // until the first result reports the model's real window; older CLIs never send this.
         if (msg.value?.effective_window) {
-          m.contextWindow = msg.value.effective_window;
+          m.compactWindow = msg.value.effective_window;
           m.compactAt = msg.value.threshold;
         }
         break;
@@ -1169,3 +1177,16 @@ export class ChatSession {
 }
 
 Object.assign(ChatSession.prototype, mcpAuthMethods, bgTaskMethods);
+
+// modelUsage on a result is keyed by canonical model id ({ 'claude-opus-5-5': { contextWindow, ... } }).
+// Pick the chat's own model; subagents on other models show up as extra keys. Falls back to the
+// model that read the most tokens this turn.
+export function mainModelWindow(usage, activeModel) {
+  const entries = Object.entries(usage || {}).filter(([, u]) => u && u.contextWindow > 0);
+  if (!entries.length) return null;
+  const base = String(activeModel || '').replace(/\[.*\]$/, '');
+  const hit = entries.find(([k]) => k === base) || entries.find(([k]) => base && (k.startsWith(base) || base.startsWith(k)));
+  if (hit) return hit[1].contextWindow;
+  const size = (u) => (u.inputTokens || 0) + (u.cacheReadInputTokens || 0) + (u.cacheCreationInputTokens || 0);
+  return entries.sort((a, b) => size(b[1]) - size(a[1]))[0][1].contextWindow;
+}
