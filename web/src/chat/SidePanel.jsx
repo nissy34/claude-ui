@@ -6,6 +6,7 @@ import BrowserView from './BrowserView.jsx';
 import BackgroundTasks, { isLive } from './BackgroundTasks.jsx';
 import { Button, IconButton } from '../ui/index.jsx';
 import { confirmDialog } from '../ui/dialogs.jsx';
+import { copyText } from '../ui/clipboard.js';
 
 function UnifiedDiff({ diff, path, comments, onComment }) {
   const [draft, setDraft] = useState(null); // { i, line, text }
@@ -309,7 +310,7 @@ function FileView({ sessionId, path, refreshKey }) {
       <div className="file-meta">
         <span className="grow ellipsis">{path}</span>
         <span>{lines.length} lines</span>
-        <Button variant="ghost" size="sm" onClick={() => navigator.clipboard?.writeText(data.content)}>
+        <Button variant="ghost" size="sm" onClick={() => copyText(data.content)}>
           Copy
         </Button>
       </div>

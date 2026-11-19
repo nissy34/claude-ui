@@ -2,12 +2,9 @@ import React, { useEffect, useState } from 'react';
 import { api, timeAgo } from './api.js';
 import { Button, IconButton, Segmented } from './ui/index.jsx';
 import { confirmDialog } from './ui/dialogs.jsx';
+import { copyText } from './ui/clipboard.js';
 
-function copy(text) {
-  try {
-    navigator.clipboard.writeText(text);
-  } catch {}
-}
+const copy = (text) => copyText(text);
 
 const isWin = /win/i.test(navigator.platform || navigator.userAgent);
 

@@ -17,6 +17,7 @@ import SideChat from './SideChat.jsx';
 import TerminalView from '../TerminalView.jsx';
 import { Button, IconButton, Menu, Modal, ModalHead, useDismiss } from '../ui/index.jsx';
 import { confirmDialog, promptDialog } from '../ui/dialogs.jsx';
+import { copyText } from '../ui/clipboard.js';
 
 const AUTH_RE = /oauth|authenticat|\/login|not logged in|invalid api key|credentials/i;
 
@@ -27,9 +28,7 @@ function notify(title, body) {
   } catch {}
 }
 
-function copy(text) {
-  navigator.clipboard?.writeText(text).catch(() => {});
-}
+const copy = (text) => copyText(text);
 
 function Markdown({ text, streaming }) {
   const html = useMemo(() => renderMarkdown(text), [text]);
