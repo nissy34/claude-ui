@@ -236,8 +236,11 @@ app.get(
 );
 
 // Sign-in pages: the URL opener (opener.js) and Sign in buttons open them in the sign-in browser on
-// this machine, so their redirect to http://127.0.0.1:<port> reaches the waiting process. Every
-// open UI pops up the sign-in window and notifies.
+// this machine, so their redirect to http://127.0.0.1:<port> reaches the waiting process. When the
+// saved browser sign-in finishes it by itself, nothing pops up; otherwise every open UI pops up the
+// sign-in window and notifies.
+const SIGNIN_QUIET_MS = 3000;
+const signinRepeats = new Map(); // `${sid} ${host}` -> recent sign-in times
 function openSigninPage(url, { sid, server } = {}) {
   if (!/^https?:\/\//i.test(String(url || ''))) throw new Error('Only http(s) pages can be opened');
   if (!browserAvailable()) throw new Error('The built-in browser is not available on this server');
@@ -246,10 +249,24 @@ function openSigninPage(url, { sid, server } = {}) {
   try {
     host = new URL(url).host;
   } catch {}
-  from?.meta.kind === 'chat' && from.record({ k: 'notice', text: `Sign-in page opened in the sign-in window: ${host}` });
+  const notice = (text) => from?.meta.kind === 'chat' && from.record({ k: 'notice', text });
   browser
     .openSignin(url)
-    .then((id) => emitUi({ t: 'signin-page', id, url, host, server: server || null, from: from ? { id: from.id, name: from.meta.name } : null }))
+    .then(async (id) => {
+      const finished = await browser.signinSettled(id, SIGNIN_QUIET_MS);
+      if (finished) {
+        // A server that signs in again on every call isn't keeping its login: say so once in a while.
+        const key = `${sid || ''} ${host}`;
+        const now = Date.now();
+        const times = (signinRepeats.get(key) || []).filter((t) => now - t < 5 * 60_000).concat(now);
+        signinRepeats.set(key, times);
+        if (times.length === 3 || times.length % 10 === 0)
+          return notice(`${host} has signed in ${times.length} times in a few minutes. The MCP server that opens it isn't keeping its login, so each call signs in again.`);
+        return times.length < 3 && notice(`Signed in to ${host} with the saved browser sign-in`);
+      }
+      notice(`Sign-in page opened in the sign-in window: ${host}`);
+      emitUi({ t: 'signin-page', id, url, host, server: server || null, from: from ? { id: from.id, name: from.meta.name } : null });
+    })
     .catch((e) => emitUi({ t: 'error', error: `Could not open the sign-in page: ${e.message}` }));
 }
 browser.onSigninChange((pages) => emitUi({ t: 'signin-pages', pages }));

@@ -91,6 +91,8 @@ async function launchSignin() {
         if (!opener) return;
         const owner = [...tabs.values()].find((t) => t.page === opener);
         if (!owner) return;
+        // Popups start on about:blank; wait for the page it is really opening.
+        if (p.url() === 'about:blank') await p.waitForURL((u) => u.href !== 'about:blank', { timeout: 15_000 }).catch(() => {});
         const url = p.url();
         await p.close().catch(() => {});
         if (url && url !== 'about:blank') owner.page.goto(url).catch(() => {});
@@ -144,6 +146,19 @@ export async function openSignin(url) {
   setTimeout(() => closeSignin(id), 20 * 60_000).unref?.(); // a sign-in nobody finished
   page.goto(normalizeUrl(url), { waitUntil: 'domcontentloaded', timeout: 30_000 }).catch(() => {});
   return id;
+}
+
+/** Resolves true if the sign-in tab finishes (or closes) within ms, false if it still waits for the user. */
+export function signinSettled(id, ms) {
+  return new Promise((resolve) => {
+    const check = () => {
+      const t = tabs.get(id);
+      return !t || t.done;
+    };
+    if (check()) return resolve(true);
+    const off = onSigninChange(() => check() && (off(), clearTimeout(timer), resolve(true)));
+    const timer = setTimeout(() => (off(), resolve(check())), ms);
+  });
 }
 
 export function signinList() {
