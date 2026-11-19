@@ -7,9 +7,15 @@ import { Md } from './ProjectCards.jsx';
 const kb = (n) => (n < 1024 ? `${n} B` : n < 1 << 20 ? `${(n / 1024).toFixed(1)} KB` : `${(n / (1 << 20)).toFixed(1)} MB`);
 
 /** Project memory: notes every session in the project shares, one file per subject. */
-export function ProjectMemory({ project, onError }) {
+export function ProjectMemory({ project, onError, initial }) {
   const [files, setFiles] = useState(null);
   const [open, setOpen] = useState(null); // { name, description, content, version, isNew, editing }
+  useEffect(() => {
+    if (initial)
+      api(`/api/cprojects/${project.id}/memory/${encodeURIComponent(initial)}`)
+        .then((r) => setOpen({ ...r, editing: false }))
+        .catch(onError);
+  }, [initial]); // eslint-disable-line react-hooks/exhaustive-deps
   const load = () =>
     api(`/api/cprojects/${project.id}/memory`)
       .then((r) => setFiles(r.files))

@@ -52,7 +52,7 @@ const react = { name: 'react', description: "React with an emoji to a message (b
 const listThreads = { name: 'list_threads', description: "The project's threads: id, title, status (Working, Waiting on you, Ready for review, Idle, Queued, Snoozed, Resolved), checklist progress and last post.", inputSchema: { type: 'object', properties: { include_resolved: { type: 'boolean' } } } };
 
 const COORDINATOR = [
-  { name: 'post_message', description: 'Post a message to the user in the project chat. This is the only way the user sees what you say. Lead with the outcome or the ask; keep it short.', inputSchema: { type: 'object', properties: { text: { type: 'string', description: 'Markdown.' }, cite_ids: cite }, required: ['text'] } },
+  { name: 'post_message', description: 'Post a message to the user in the project chat. This is the only way the user sees what you say. Lead with the outcome or the ask; keep it short.', inputSchema: { type: 'object', properties: { text: { type: 'string', description: 'Markdown.' }, thread_id: { type: 'string', description: 'The thread this post is about, if one: the chat labels it with that thread.' }, cite_ids: cite }, required: ['text'] } },
   {
     name: 'start_thread',
     description:

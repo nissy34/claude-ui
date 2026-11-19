@@ -22,7 +22,8 @@ function readHash() {
 function readProjectHash() {
   const m = location.hash.match(/p=(prj_[\w]+)/);
   const t = location.hash.match(/tab=(\w+)/);
-  return m ? { id: m[1], tab: t ? t[1] : null } : null;
+  const th = location.hash.match(/[&#]t=([\w-]+)/);
+  return m ? { id: m[1], tab: t ? t[1] : null, thread: th ? th[1] : null } : null;
 }
 
 export default function App() {
@@ -248,7 +249,7 @@ export default function App() {
       <div className="scrim" onClick={() => setDrawer(false)} />
       <main className="main">
         {projectRoute && !active ? (
-          <ProjectView key={projectRoute.id} projectId={projectRoute.id} tab={projectRoute.tab} projects={projects} onSelect={select} onMenu={openMenu} onError={showError} onDeleted={() => select(null)} />
+          <ProjectView key={projectRoute.id} projectId={projectRoute.id} tab={projectRoute.tab} thread={projectRoute.thread} projects={projects} onSelect={select} onMenu={openMenu} onError={showError} onDeleted={() => select(null)} />
         ) : active && active.kind === 'chat' ? (
           <ChatView
             key={active.id}

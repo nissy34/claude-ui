@@ -117,7 +117,7 @@ export function mountProjectRoutes(app, { engine, store, resolveDir, wrap }) {
     wrap(async (req, res) => {
       const p = project(req);
       const tid = thread(p, req);
-      const types = new Set(['thread.started', 'user.message', 'thread.post', 'decision.requested', 'session.message', 'reminder.set', 'reminder.due', 'thread.resolved', 'thread.reopened', 'pr.updated', 'notice']);
+      const types = new Set(['thread.started', 'user.message', 'thread.post', 'checklist.updated', 'decision.requested', 'session.message', 'reminder.set', 'reminder.due', 'thread.resolved', 'thread.reopened', 'pr.updated', 'notice']);
       const feed = p.events.filter((e) => types.has(e.type) && (e.thread === tid || (e.type === 'session.message' && e.from?.id === tid)));
       res.json({ feed });
     })
@@ -147,6 +147,10 @@ export function mountProjectRoutes(app, { engine, store, resolveDir, wrap }) {
           const s = store.get(tid);
           if (s) await s.resume();
           break;
+        }
+        case 'message': {
+          const ev = engine.steerThread(p, tid, req.body?.text);
+          return res.json({ event: ev });
         }
         case 'side': {
           const s = await engine.sideThread(p, tid, req.body?.question);

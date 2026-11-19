@@ -249,6 +249,11 @@ async function main() {
     const t = d.threads.find((x) => x.id === started.thread.id);
     return t?.lastPost?.text === 'suggested done' && t;
   }, 10_000, 'suggested thread ran');
+  await api(`/api/cprojects/${q.id}/threads/${T1.id}/message`, { method: 'POST', body: { text: `steer it\n${call('post_message', { kind: 'result', text: 'steered done' })}` } });
+  await until(async () => (await detail(q.id)).threads.find((x) => x.id === T1.id)?.lastPost?.text === 'steered done', 10_000, 'steered thread replied');
+  check(true, 'steering a thread from the project page delivers to that thread');
+  const sfeed = (await api(`/api/cprojects/${q.id}/threads/${T1.id}/feed`)).feed;
+  check(sfeed.some((e) => e.type === 'user.message' && e.body.where === 'steer'), 'the steer message shows in the thread feed', sfeed.map((e) => e.type));
   const side = await api(`/api/cprojects/${q.id}/threads/${T1.id}/side`, { method: 'POST', body: { question: `what is up?\n${call('post_message', { kind: 'result', text: 'side answer' })}` } });
   check(side.thread?.sideOf === T1.id && side.thread.cwd === T1.cwd, 'a side question forks the thread and uses its worktree', side.thread);
   qd = await until(async () => {

@@ -57,6 +57,7 @@ export const DEFAULT_SETTINGS = {
     checkInMinutes: 30,
     rotateTokens: 60_000,
     budgetUsd: 0, // pause new turns once the project has cost this much (0 = no budget)
+    continueOnReset: true, // cut-off turns continue by themselves when the usage limit resets
     quietHours: null, // { from: '23:00', to: '07:00' } holds browser notifications
     askRules: ['Bash(git push --force:*)', 'Bash(git push -f:*)', 'Bash(git push origin main:*)', 'Bash(git push origin master:*)', 'Bash(gh pr merge:*)', 'Bash(rm -rf /:*)'],
   },
@@ -110,7 +111,7 @@ export function mergeSettings(base, patch = {}) {
 export function cleanSettings(s) {
   const out = mergeSettings(DEFAULT_SETTINGS, s);
   out.name = clipText(String(out.name || '').trim() || 'Untitled project', 80);
-  out.goal = clipText(String(out.goal || '').trim(), 400);
+  out.goal = clipText(String(out.goal || '').trim(), 8000);
   out.instructions = String(out.instructions || '').slice(0, 16_000);
   out.folders = (Array.isArray(out.folders) ? out.folders : []).map((f) => (typeof f === 'string' ? { path: f } : { path: String(f.path || '') })).filter((f) => f.path);
   for (const role of ['coordinator', 'thread']) {
@@ -123,6 +124,7 @@ export function cleanSettings(s) {
   if (!PROACTIVITY.includes(p.proactivity)) p.proactivity = 'normal';
   if (!THREAD_MODES.includes(p.threadPermissionMode)) p.threadPermissionMode = 'auto';
   p.worktrees = p.worktrees !== false;
+  p.continueOnReset = p.continueOnReset !== false;
   p.checkInMinutes = Math.min(Math.max(parseInt(p.checkInMinutes, 10) || 30, 5), 24 * 60);
   p.rotateTokens = Math.min(Math.max(parseInt(p.rotateTokens, 10) || 60_000, 20_000), 500_000);
   p.budgetUsd = Math.max(Math.round((Number(p.budgetUsd) || 0) * 10_000) / 10_000, 0);
@@ -462,6 +464,7 @@ export class Project {
     const coord = (extra = {}) => (c ? [{ s: c, ...extra }] : []);
     switch (ev.type) {
       case 'user.message':
+        if (ev.body.where === 'steer' && ev.thread) return [{ s: ev.thread, user: true }]; // steering a thread from the project page (typed in the thread itself: already delivered)
         return ev.body.where === 'chat' ? coord({ user: true }) : [];
       case 'decision.answered': {
         const d = this.state.decisions[ev.body.id];
@@ -621,7 +624,7 @@ export class Project {
     if (isCoord && this.state.coordinatorFresh) envelope = `${this.digest()}\n\n${envelope}`;
     const display = this.displayText(evs);
     this.append({ type: 'wake.sent', body: { session: sid, wake, events: evs.map((e) => e.id) } });
-    const info = { wake, types: evs.map((e) => e.type), user: evs.some((e) => e.trust === 'principal' && (e.type === 'user.message' || e.type === 'decision.answered')), posted: false, engine: true };
+    const info = { wake, types: evs.map((e) => e.type), threads: [...new Set(evs.map((e) => e.thread).filter(Boolean))], user: evs.some((e) => e.trust === 'principal' && (e.type === 'user.message' || e.type === 'decision.answered')), posted: false, engine: true };
     this.turnInfo.set(sid, info);
     const ok = s.send({ text: display, envelope, wake, from: this.wakeFrom(evs) });
     if (!ok) {
@@ -1185,6 +1188,16 @@ export class ProjectEngine {
     return p.append({ type: 'user.message', from: { kind: from }, trust: from === 'user' ? 'principal' : 'relay', body: { where: 'chat', text: clipText(text, 20_000) } });
   }
 
+  /** Steer a thread from the project page: your words, delivered to that thread (cap bypassed). */
+  steerThread(p, sid, text, { from = 'user' } = {}) {
+    const t = p.state.threads[sid];
+    if (!t) throw new Error('No such thread');
+    text = String(text || '').trim();
+    if (!text) throw new Error('Message is empty');
+    if (p.state.paused) p.append({ type: 'project.resumed', from: { kind: from }, trust: 'principal', body: {} });
+    return p.append({ type: 'user.message', thread: sid, from: { kind: from }, trust: from === 'user' ? 'principal' : 'relay', body: { where: 'steer', text: clipText(text, 20_000) } });
+  }
+
   answerDecision(p, id, { choice, note }, { by = 'user' } = {}) {
     const d = p.state.decisions[id];
     if (!d) throw new Error('No such decision');
@@ -1427,7 +1440,7 @@ export class ProjectEngine {
 
   limitReset(p) {
     if (!p.state.limit) return;
-    const cut = Object.keys(p.state.working);
+    const cut = p.settings.policy.continueOnReset === false ? [] : Object.keys(p.state.working);
     p.append({ type: 'limit.reset', body: {} });
     // Turns that the limit cut off continue, 30 s apart, so they don't hit it again together.
     cut.forEach((sid, i) => {
@@ -1497,7 +1510,9 @@ export class ProjectEngine {
         if (!text) throw new Error('text is required');
         info.posted = true;
         if (isCoord) {
-          const ev = p.append({ type: 'chat.post', from: me, trust: 'relay', cites: a.cite_ids, body: { text: clipText(text, 20_000) } });
+          // Which thread the post is about: named by the coordinator, or the one thread whose news woke it.
+          const about = (a.thread_id && p.state.threads[a.thread_id] ? a.thread_id : null) || (info.threads?.length === 1 && p.state.threads[info.threads[0]] ? info.threads[0] : null);
+          const ev = p.append({ type: 'chat.post', from: me, trust: 'relay', cites: a.cite_ids, body: { text: clipText(text, 20_000), ...(about ? { about } : {}) } });
           return { ok: true, event_id: ev.id, note: 'Posted to the project chat.' };
         }
         const kind = ['result', 'blocker', 'question', 'progress'].includes(a.kind) ? a.kind : 'result';

@@ -3,26 +3,36 @@ import { api, timeAgo } from '../api.js';
 import { Button, IconButton, Input, Modal, ModalBody, ModalFoot, ModalHead, Pill, Segmented, Spinner, Textarea } from '../ui/index.jsx';
 import { DecisionCard, Md, StatusPill, SuggestionCard, ThreadCard } from './ProjectCards.jsx';
 import { promptDialog } from '../ui/dialogs.jsx';
-import ProjectSettings from './ProjectSettings.jsx';
-import { ProjectLibrary, ProjectMemory } from './ProjectFiles.jsx';
+import { ProjectSettingsModal } from './ProjectSettings.jsx';
+import ProjectPanel, { PrChip, StatusIcon } from './ProjectPanel.jsx';
 import { STATUS_LABEL, STATUS_ORDER, useProject } from './useProject.js';
 import './project.css';
 
-const TABS = [
-  ['chat', 'Chat'],
-  ['overview', 'Overview'],
-  ['memory', 'Memory'],
-  ['library', 'Library'],
-  ['settings', 'Settings'],
-];
-
-export default function ProjectView({ projectId, tab: initialTab, onSelect, onMenu, onError, onDeleted, projects }) {
+export default function ProjectView({ projectId, tab: initialTab, thread: initialThread, onSelect, onMenu, onError, onDeleted, projects }) {
   const [project, reload] = useProject(projectId, onError);
-  const [tab, setTab] = useState(initialTab || 'chat');
-  useEffect(() => setTab(initialTab || 'chat'), [projectId, initialTab]);
-  const go = (t) => {
-    setTab(t);
-    history.replaceState(null, '', `#p=${projectId}${t === 'chat' ? '' : `&tab=${t}`}`);
+  const narrow = useNarrow();
+  // Right panel: Threads or Context; a thread opens in place. On a phone the panel is a view of its own.
+  const [panel, setPanelState] = useState(initialTab === 'context' ? 'context' : 'threads');
+  const [threadId, setThreadId] = useState(initialThread || null);
+  const [mobileView, setMobileView] = useState(initialThread ? 'panel' : initialTab === 'context' || initialTab === 'threads' ? 'panel' : 'chat');
+  const [settings, setSettings] = useState(initialTab === 'settings' ? 'general' : null);
+  const [showNew, setShowNew] = useState(false);
+  useEffect(() => {
+    setThreadId(initialThread || null);
+    if (initialTab === 'settings') setSettings('general');
+  }, [projectId, initialThread, initialTab]);
+  const writeHash = (p, t) => history.replaceState(null, '', `#p=${projectId}${p === 'context' ? '&tab=context' : ''}${t ? `&t=${t}` : ''}`);
+  const setPanel = (p) => {
+    setPanelState(p);
+    writeHash(p, threadId);
+  };
+  const openThread = (tid) => {
+    setThreadId(tid);
+    if (tid) {
+      setPanelState('threads');
+      setMobileView('panel');
+    }
+    writeHash(tid ? 'threads' : panel, tid);
   };
   if (project === false)
     return (
@@ -36,50 +46,85 @@ export default function ProjectView({ projectId, tab: initialTab, onSelect, onMe
         <Spinner /> Loading project…
       </div>
     );
-  const waiting = (project.counts.waiting || 0) + project.decisions.filter((d) => !d.answer && !d.thread).length;
+  const waiting = project.threads.filter((t) => t.status === 'waiting').length;
+  const showChat = !narrow || mobileView === 'chat';
+  const showPanel = !narrow || mobileView === 'panel';
   return (
-    <div className="pj">
-      <div className="topbar bordered">
-        <IconButton className="menu-btn" onClick={onMenu} aria-label="Menu">
-          ☰
-        </IconButton>
-        <div className="title">
-          <span className="tname">{project.name}</span>
-          {project.goal && <span className="muted tcwd hide-mobile">{project.goal}</span>}
-        </div>
-        <Segmented
-          className="pj-tabs"
-          value={tab}
-          onChange={go}
-          options={TABS.map(([v, l]) => [
-            v,
-            <>
-              {l}
-              {v === 'overview' && waiting > 0 && <span className="count menu-count">{waiting}</span>}
-            </>,
-          ])}
-        />
-      </div>
-      {project.paused && (
-        <div className="pj-banner warn">
-          {project.paused.reason}
-          <Button size="sm" onClick={() => api(`/api/cprojects/${projectId}/resume`, { method: 'POST' }).then(reload).catch(onError)}>
-            Resume
-          </Button>
+    <div className="pj pj-split">
+      {showChat && (
+        <div className="pj-left">
+          <div className="pj-left-head">
+            <IconButton className="menu-btn" onClick={onMenu} aria-label="Menu">
+              ☰
+            </IconButton>
+            <span className="pj-avatar-mark" aria-hidden="true">
+              {(project.name.trim()[0] || '◈').toUpperCase()}
+            </span>
+            <span className="pj-name" title={project.goal || project.name}>
+              {project.name}
+            </span>
+            <span className="spacer" />
+            {narrow && (
+              <button className="pj-mobile-switch" onClick={() => setMobileView('panel')}>
+                Threads {waiting > 0 && <span className="pjp-badge">{waiting}</span>}
+              </button>
+            )}
+            <IconButton title="Project settings" onClick={() => setSettings('general')}>
+              ⚙
+            </IconButton>
+          </div>
+          <Banners project={project} reload={reload} onError={onError} />
+          <ProjectChat project={project} openThread={openThread} onError={onError} />
         </div>
       )}
-      {project.limit && <div className="pj-banner">Usage limit reached. Work continues automatically at {new Date(project.limit.until).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}.</div>}
-      {tab === 'chat' && <ProjectChat project={project} onSelect={onSelect} onError={onError} reload={reload} />}
-      {tab === 'overview' && <Overview project={project} onSelect={onSelect} onError={onError} reload={reload} />}
-      {tab === 'memory' && <ProjectMemory project={project} onError={onError} />}
-      {tab === 'library' && <ProjectLibrary project={project} onError={onError} />}
-      {tab === 'settings' && <ProjectSettings project={project} onSelect={onSelect} onError={onError} reload={reload} onDeleted={onDeleted} projects={projects} />}
+      {showPanel && (
+        <div className="pj-right">
+          {narrow && (
+            <div className="pj-mobile-back">
+              <button className="linklike" onClick={() => setMobileView('chat')}>
+                ‹ {project.name} chat
+              </button>
+            </div>
+          )}
+          <ProjectPanel project={project} tab={panel} setTab={setPanel} threadId={threadId} openThread={openThread} onSelect={onSelect} onError={onError} onNewThread={() => setShowNew(true)} reload={reload} />
+        </div>
+      )}
+      {showNew && <NewThreadDialog project={project} onClose={() => setShowNew(false)} onError={onError} onDone={reload} />}
+      {settings && <ProjectSettingsModal project={project} section={settings} setSection={setSettings} onClose={() => setSettings(null)} onSelect={onSelect} onError={onError} reload={reload} onDeleted={onDeleted} projects={projects} />}
     </div>
   );
 }
 
+function useNarrow() {
+  const q = '(max-width: 860px)';
+  const [n, setN] = useState(() => matchMedia(q).matches);
+  useEffect(() => {
+    const m = matchMedia(q);
+    const on = () => setN(m.matches);
+    m.addEventListener('change', on);
+    return () => m.removeEventListener('change', on);
+  }, []);
+  return n;
+}
+
+function Banners({ project, reload, onError }) {
+  return (
+    <>
+      {project.paused && (
+        <div className="pj-banner warn">
+          {project.paused.reason}
+          <Button size="sm" onClick={() => api(`/api/cprojects/${project.id}/resume`, { method: 'POST' }).then(reload).catch(onError)}>
+            Resume
+          </Button>
+        </div>
+      )}
+      {project.limit && <div className="pj-banner">Usage limit reached. {project.settings.policy.continueOnReset === false ? 'Threads wait for you after it resets' : 'Work continues automatically'} at {new Date(project.limit.until).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}.</div>}
+    </>
+  );
+}
+
 // ---------------------------------------------------------------- project chat
-function ProjectChat({ project, onSelect, onError }) {
+function ProjectChat({ project, openThread, onError }) {
   const listRef = useRef(null);
   const stick = useRef(true);
   const [text, setText] = useState(() => {
@@ -116,41 +161,40 @@ function ProjectChat({ project, onSelect, onError }) {
     setSending(false);
   };
   const items = project.feed.filter((e) => !(e.type === 'decision.answered' || e.type === 'decision.withdrawn'));
+  const cm = project.settings.models.coordinator;
   return (
-    <div className="pj-chat-wrap">
-      <div className="pj-chat">
-        <div
-          className="messages"
-          ref={listRef}
-          onScroll={(e) => {
-            const el = e.currentTarget;
-            stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
-          }}
-        >
-          <div className="messages-inner">
-            {items.length === 0 && (
-              <div className="pj-intro">
-                <div className="pj-intro-title">{project.name}</div>
-                <p className="muted">
-                  Tell the coordinator what you want done. It answers quick questions itself and hands real work to threads: parallel Claude Code sessions, each in its own worktree. Coordinator: {project.settings.models.coordinator.model || 'default'} · {project.settings.models.coordinator.effort || 'default'} effort. Threads: {project.settings.models.thread.model || 'default'} · {project.settings.models.thread.effort || 'default'} effort.
-                </p>
-              </div>
-            )}
-            {items.map((e) => (
-              <FeedItem key={e.id} e={e} project={project} threads={threads} decisions={decisions} onSelect={onSelect} onError={onError} />
-            ))}
-            {(project.coordinatorBusy || project.coordinator?.queued > 0) && (
-              <div className="pj-typing">
-                <Spinner /> {project.coordinatorBusy ? 'Coordinator is working…' : 'Coordinator will read this shortly…'}
-              </div>
-            )}
-          </div>
+    <div className="pj-chat">
+      <div
+        className="messages"
+        ref={listRef}
+        onScroll={(e) => {
+          const el = e.currentTarget;
+          stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+        }}
+      >
+        <div className="messages-inner">
+          {items.length === 0 && (
+            <div className="pj-intro">
+              <div className="pj-intro-title">{project.name}</div>
+              <p className="muted">{project.goal || 'Tell the coordinator what you want done. It answers quick questions itself and hands real work to threads that run in parallel, each in its own worktree.'}</p>
+            </div>
+          )}
+          {items.map((e) => (
+            <FeedItem key={e.id} e={e} project={project} threads={threads} decisions={decisions} onSelect={openThread} onError={onError} />
+          ))}
+          {(project.coordinatorBusy || project.coordinator?.queued > 0) && (
+            <div className="pj-typing">
+              <Spinner /> {project.coordinatorBusy ? 'Working…' : 'Will read this shortly…'}
+            </div>
+          )}
         </div>
-        <div className="pj-composer">
-          <Textarea
-            rows={2}
+      </div>
+      <div className="pj-composer2">
+        <div className="pj-composer-box">
+          <textarea
+            rows={1}
             value={text}
-            placeholder={`Message ${project.name}`}
+            placeholder="Ask Claude a question or start a task…"
             onChange={(e) => saveDraft(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing && !matchMedia('(pointer: coarse)').matches) {
@@ -159,25 +203,33 @@ function ProjectChat({ project, onSelect, onError }) {
               }
             }}
           />
-          <Button variant="primary" onClick={send} disabled={!text.trim() || sending}>
-            Send
-          </Button>
+          <button className="pjp-send" onClick={send} disabled={!text.trim() || sending} aria-label="Send">
+            ↵
+          </button>
+        </div>
+        <div className="pj-composer-foot">
+          <span className="muted small">
+            {project.running}/{project.settings.policy.maxRunning} threads running · ${project.usage.total.toFixed(2)}
+          </span>
+          <span className="spacer" />
+          <span className="muted small">
+            {modelName(cm.model)}
+            {cm.effort ? ` ${cm.effort[0].toUpperCase()}${cm.effort.slice(1)}` : ''}
+          </span>
         </div>
       </div>
-      <aside className="pj-side hide-mobile">
-        <div className="section-head">Threads</div>
-        {project.threads.filter((t) => t.status !== 'resolved').length === 0 && <div className="muted small pad">No open threads.</div>}
-        {[...project.threads]
-          .filter((t) => t.status !== 'resolved')
-          .sort((a, b) => STATUS_ORDER.indexOf(a.status) - STATUS_ORDER.indexOf(b.status) || b.lastActivity - a.lastActivity)
-          .map((t) => (
-            <ThreadCard key={t.id} projectId={project.id} thread={t} compact onOpen={onSelect} onError={onError} />
-          ))}
-        <div className="pj-side-foot muted small">
-          {project.running}/{project.settings.policy.maxRunning} running · ${project.usage.total.toFixed(2)} used
-        </div>
-      </aside>
     </div>
+  );
+}
+
+const modelName = (m) => (!m ? 'Default model' : m.length < 10 ? m[0].toUpperCase() + m.slice(1) : m);
+
+function AboutLabel({ thread, onSelect }) {
+  if (!thread) return null;
+  return (
+    <button className="pj-about" onClick={() => onSelect(thread.id)}>
+      <span className="hook">╭</span> {thread.title}
+    </button>
   );
 }
 
@@ -195,17 +247,22 @@ function FeedItem({ e, project, threads, decisions, onSelect, onError }) {
     case 'chat.post':
       return (
         <div className="msg assistant pj-post">
-          <div className="pj-who">Coordinator · {timeAgo(e.ts)}</div>
+          <AboutLabel thread={threads[b.about]} onSelect={onSelect} />
           <Md text={b.text} />
         </div>
       );
-    case 'thread.started':
+    case 'thread.started': {
+      const t = threads[e.thread];
+      if (!t) return null;
       return (
-        <div className="pj-feed-card">
-          <div className="pj-who">{e.from?.kind === 'user' ? 'You started a thread' : 'Started a thread'}</div>
-          <ThreadCard projectId={project.id} thread={threads[e.thread]} onOpen={onSelect} onError={onError} actions={false} />
-        </div>
+        <button className="pj-started" onClick={() => onSelect(t.id)}>
+          <StatusIcon status={t.status} />
+          <span className="pj-started-what">{b.adopted ? 'Moved in' : e.from?.kind === 'user' ? 'You started' : t.sideOf ? 'Side question' : 'Started'}</span>
+          <span className="pj-started-title">{t.title}</span>
+          <PrChip pr={t.pr} />
+        </button>
       );
+    }
     case 'thread.suggested': {
       const sg = project.suggestions?.find((x) => x.id === b.id);
       return <SuggestionCard projectId={project.id} suggestion={sg} threadTitle={sg?.answer?.thread ? threads[sg.answer.thread]?.title : ''} onError={onError} onOpenThread={onSelect} />;
@@ -219,10 +276,10 @@ function FeedItem({ e, project, threads, decisions, onSelect, onError }) {
     case 'thread.post':
       return (
         <div className={`pj-activity kind-${b.kind}`}>
-          <button className="linklike" onClick={() => onSelect(e.thread)}>
-            {threads[e.thread]?.title || 'Thread'}
-          </button>{' '}
-          <span className={`pk pk-${b.kind}`}>{b.kind}</span> <ActivityText text={b.text} />
+          <AboutLabel thread={threads[e.thread]} onSelect={onSelect} />
+          <div>
+            {b.kind !== 'result' && <span className={`pk pk-${b.kind}`}>{b.kind}</span>} <ActivityText text={b.text} />
+          </div>
         </div>
       );
     case 'thread.resolved':
@@ -292,58 +349,6 @@ function Reactions({ list }) {
   );
 }
 
-// ---------------------------------------------------------------- overview
-function Overview({ project, onSelect, onError, reload }) {
-  const [showNew, setShowNew] = useState(false);
-  const [showResolved, setShowResolved] = useState(false);
-  const groups = STATUS_ORDER.filter((s) => s !== 'resolved' || showResolved).map((s) => [s, project.threads.filter((t) => t.status === s).sort((a, b) => b.lastActivity - a.lastActivity)]);
-  const coordDecisions = project.decisions.filter((d) => !d.answer && !d.thread);
-  const resolvedCount = project.threads.filter((t) => t.status === 'resolved').length;
-  return (
-    <div className="pj-overview">
-      <div className="pj-overview-inner">
-        <div className="pj-overview-bar">
-          <span className="muted">
-            {project.threads.length} threads · {project.running}/{project.settings.policy.maxRunning} running · {project.settings.policy.proactivity} updates
-          </span>
-          <Button size="sm" onClick={() => setShowNew(true)}>
-            ＋ New thread
-          </Button>
-        </div>
-        {coordDecisions.map((d) => (
-          <DecisionCard key={d.id} projectId={project.id} decision={d} onError={onError} />
-        ))}
-        {groups.map(([status, list]) =>
-          list.length ? (
-            <section key={status} className="pj-group">
-              <div className="section-head">
-                {STATUS_LABEL[status]} <span className="muted">{list.length}</span>
-              </div>
-              {list.map((t) => (
-                <React.Fragment key={t.id}>
-                  <ThreadCard projectId={project.id} thread={t} onOpen={onSelect} onError={onError} />
-                  {project.decisions
-                    .filter((d) => d.thread === t.id && !d.answer)
-                    .map((d) => (
-                      <DecisionCard key={d.id} projectId={project.id} decision={d} threadTitle={t.title} onError={onError} onOpenThread={onSelect} />
-                    ))}
-                </React.Fragment>
-              ))}
-            </section>
-          ) : null
-        )}
-        {project.threads.length === 0 && <div className="muted pad">No threads yet. Ask the coordinator for something in the Chat tab, or start one here.</div>}
-        {resolvedCount > 0 && (
-          <button className="show-arch" onClick={() => setShowResolved((v) => !v)}>
-            {showResolved ? 'Hide resolved' : `Resolved (${resolvedCount})`}
-          </button>
-        )}
-      </div>
-      {showNew && <NewThreadDialog project={project} onClose={() => setShowNew(false)} onError={onError} onDone={reload} />}
-    </div>
-  );
-}
-
 function NewThreadDialog({ project, onClose, onError, onDone }) {
   const [title, setTitle] = useState('');
   const [brief, setBrief] = useState('');
@@ -394,7 +399,7 @@ export function ThreadBar({ session, onSelect, onError, view = 'log', setView })
   const isCoord = project.coordinatorId === session.id;
   const t = project.threads.find((x) => x.id === session.id);
   const decisions = project.decisions.filter((d) => d.thread === session.id && !d.answer);
-  const back = () => (location.hash = `p=${project.id}`);
+  const back = () => (location.hash = `p=${project.id}${isCoord ? '' : `&t=${session.id}`}`);
   if (isCoord)
     return (
       <div className="pj-threadbar">
