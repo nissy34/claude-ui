@@ -999,7 +999,9 @@ app.post(
 // ---------- artifacts ----------
 app.get('/api/artifacts', (req, res) => {
   const all = store.list().map((j) => store.get(j.id)).filter(Boolean);
-  const list = listArtifacts(req.query.session ? all.filter((s) => s.meta.id === req.query.session) : all);
+  const pick = req.query.session ? (s) => s.meta.id === req.query.session : req.query.cproject ? (s) => s.meta.cproject === req.query.cproject : () => true;
+  let list = listArtifacts(all.filter(pick));
+  if (req.query.published) list = list.filter((a) => a.published);
   res.json({ artifacts: list });
 });
 app.get(

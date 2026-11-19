@@ -429,7 +429,8 @@ function ClampText({ text }) {
 
 // ---------------------------------------------------------------- context
 function ContextTab({ project, onError, reload }) {
-  const [open, setOpen] = useState({ instructions: true, memory: false, files: true });
+  const [open, setOpen] = useState({ instructions: true, memory: false, files: true, artifacts: true });
+  const [arts, setArts] = useState(null);
   const [mem, setMem] = useState(null);
   const [lib, setLib] = useState(null);
   const [editing, setEditing] = useState(null); // instructions text while editing
@@ -443,6 +444,9 @@ function ContextTab({ project, onError, reload }) {
       .catch(onError);
     api(`/api/cprojects/${project.id}/library`)
       .then(setLib)
+      .catch(onError);
+    api(`/api/artifacts?cproject=${encodeURIComponent(project.id)}&published=1`)
+      .then((r) => setArts(r.artifacts))
       .catch(onError);
   };
   useEffect(load, [project.id, project.lastActivity]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -595,6 +599,24 @@ function ContextTab({ project, onError, reload }) {
               </React.Fragment>
             )
           )}
+        </>
+      )}
+      <button className="pjp-ctx-sec" onClick={() => toggle('artifacts')}>
+        <span className="chev">{open.artifacts ? '⌄' : '›'}</span> Artifacts <span className="muted">{arts?.length ?? ''}</span>
+      </button>
+      {open.artifacts && (
+        <>
+          {arts?.length === 0 && <div className="pjp-ctx-row muted">No artifacts yet. Pages and documents that threads publish show up here.</div>}
+          {arts?.map((a) => (
+            <div key={a.sessionId + a.path} className="pjp-ctx-row file">
+              <span className="pjp-ico">◰</span>
+              <a className="pjp-ctx-name" href={a.url} target="_blank" rel="noreferrer" title={a.path}>
+                {a.title || a.name}
+              </a>
+              <span className="muted pjp-ctx-desc">{project.threads.find((t) => t.id === a.sessionId)?.title || a.sessionName || ''}</span>
+              <span className="pjp-row-time">{short(a.mtime)}</span>
+            </div>
+          ))}
         </>
       )}
       <div className="pjp-storage">
