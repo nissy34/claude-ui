@@ -34,6 +34,7 @@ const MCP_SCRIPT = path.join(path.dirname(fileURLToPath(import.meta.url)), 'mcp-
 const commandCache = new Map(); // cwd -> commands with descriptions
 import { setModels } from './models.js';
 import { globalNotesPrompt } from './notes.js';
+import { firstExchange, generateTitle, queueTitle, transcriptTitle } from './chat-title.js';
 const MCP_BROWSER = path.join(path.dirname(fileURLToPath(import.meta.url)), 'mcp-browser.js');
 const MCP_UI = path.join(path.dirname(fileURLToPath(import.meta.url)), 'mcp-ui.js');
 const MCP_NOTES = path.join(path.dirname(fileURLToPath(import.meta.url)), 'mcp-notes.js');
@@ -208,6 +209,41 @@ export class ChatSession {
       evs.push({ k: 'notice', text: 'Resumed from an earlier conversation', ts: Date.now() });
       fs.writeFileSync(this.logFile, evs.map((e) => JSON.stringify(e)).join('\n') + '\n');
       this.events = evs;
+    }
+  }
+
+  /** Whether this chat still wants a generated title (see chat-title.js for the order of preference). */
+  needsTitle() {
+    const m = this.meta;
+    return config.autoTitles && m.kind === 'chat' && !m.customName && !m.autoTitle && (m.titleTries || 0) < 2 && !this.titling;
+  }
+
+  /** Replace the first-message placeholder with a short title. Never overrides a rename. */
+  async autoTitle() {
+    if (!this.needsTitle()) return;
+    const m = this.meta;
+    this.titling = true;
+    try {
+      let title = '';
+      let source = 'model';
+      const stored = m.claudeSessionId && (await transcriptTitle(transcriptPath(m.cwd, m.claudeSessionId)).catch(() => null));
+      if (stored) ({ title, source } = stored);
+      else {
+        const { user, assistant } = firstExchange(this.events);
+        if (!user && !assistant) return;
+        m.titleTries = (m.titleTries || 0) + 1;
+        title = await queueTitle(() => generateTitle({ user, assistant, env: sessionExtras(m).env }));
+      }
+      // The user may have renamed it while the title was being made.
+      if (!title || m.customName || !this.store.get(m.id)) return this.store.save();
+      m.name = title;
+      m.autoTitle = source;
+      if (source === 'custom') m.customName = true;
+      this.store.save();
+      this.store.changed?.();
+      this.broadcastState();
+    } finally {
+      this.titling = false;
     }
   }
 
@@ -515,6 +551,7 @@ export class ChatSession {
         this.store.save();
         this.broadcastState();
         this.touchIdle();
+        if (!msg.is_error) this.autoTitle();
         break;
       case 'autocompact_state':
         if (msg.value?.effective_window) {
