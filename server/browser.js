@@ -80,6 +80,19 @@ async function launchSignin() {
   for (const opts of attempts) {
     try {
       const ctx = await pw.chromium.launchPersistentContext(dir, opts);
+      // The window shows pictures of the page, where a thin blinking caret is easy to miss: mark the
+      // focused field clearly.
+      await ctx
+        .addInitScript(() => {
+          const add = () => {
+            const st = document.createElement('style');
+            st.textContent = 'input:focus,textarea:focus,select:focus,[contenteditable]:focus{outline:2px solid #2f7de1 !important;outline-offset:1px !important;caret-color:#2f7de1 !important}';
+            (document.head || document.documentElement).appendChild(st);
+          };
+          if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', add);
+          else add();
+        })
+        .catch(() => {});
       ctx.on('close', () => {
         signinPromise = null;
         for (const id of [...tabs.keys()]) if (isSigninId(id)) tabs.delete(id);
@@ -285,25 +298,29 @@ export async function run(sessionId, op, a = {}) {
           if (!loc) throw new Error('Give ref, selector, text, or x and y');
           await loc.click({ timeout: 10_000 });
         }
+        if (a.quiet) return { ok: true }; // the UI's picture follows by itself
         await settle(page);
-        return a.quiet ? { ok: true } : snapshot(page);
+        return snapshot(page);
       }
       case 'type': {
         const loc = target(page, { ref: a.ref, selector: a.selector, text: a.findText });
         if (loc) await loc.fill(String(a.text ?? ''), { timeout: 10_000 });
         else await page.keyboard.type(String(a.text ?? ''));
         if (a.submit) await page.keyboard.press('Enter');
+        if (a.quiet) return { ok: true };
         await settle(page);
-        return a.quiet ? { ok: true } : snapshot(page);
+        return snapshot(page);
       }
       case 'press':
         await page.keyboard.press(String(a.key || 'Enter'));
+        if (a.quiet) return { ok: true };
         await settle(page);
-        return a.quiet ? { ok: true } : snapshot(page);
+        return snapshot(page);
       case 'scroll':
         await page.mouse.wheel(Number(a.dx) || 0, Number(a.dy) || 600);
+        if (a.quiet) return { ok: true };
         await page.waitForTimeout(200);
-        return a.quiet ? { ok: true } : snapshot(page);
+        return snapshot(page);
       case 'evaluate': {
         const v = await page.evaluate(`(async () => { ${/\breturn\b/.test(a.script || '') ? a.script : `return (${a.script})`} })()`);
         return { result: v === undefined ? null : v };
@@ -330,7 +347,8 @@ export async function run(sessionId, op, a = {}) {
 
 export async function screenshot(sessionId, { type = 'png', quality, fullPage = false } = {}) {
   const t = await tab(sessionId);
-  return t.page.screenshot({ type, quality: type === 'jpeg' ? quality || 70 : undefined, fullPage, timeout: 15_000 });
+  // caret: 'initial' keeps the text cursor in the picture, so a focused field shows it.
+  return t.page.screenshot({ type, quality: type === 'jpeg' ? quality || 70 : undefined, fullPage, caret: 'initial', animations: 'allow', timeout: 15_000 });
 }
 
 export async function state(sessionId) {

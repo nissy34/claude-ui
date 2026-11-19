@@ -852,7 +852,7 @@ app.get(
   '/api/sessions/:id/browser/frame',
   wrap(async (req, res) => {
     browserTabOf(req);
-    const buf = await browser.screenshot(req.params.id, { type: 'jpeg', quality: 70 });
+    const buf = await browser.screenshot(req.params.id, { type: 'jpeg', quality: 60 });
     res.setHeader('Cache-Control', 'no-store');
     res.type('image/jpeg').send(buf);
   })
