@@ -30,7 +30,7 @@ RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends \
       ca-certificates curl git openssh-client gh ripgrep less procps jq \
-      python3 python3-venv python3-pip python-is-python3 tini util-linux locales $EXTRA_APT_PACKAGES; \
+      python3 python3-venv python3-pip python-is-python3 tini util-linux locales libatomic1 $EXTRA_APT_PACKAGES; \
     rm -rf /var/lib/apt/lists/*; \
     # The image's "ubuntu" user (uid 1000) would shadow your own user inside
     # the container (ssh and git look up the home folder by uid).
