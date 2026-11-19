@@ -1,6 +1,6 @@
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { api } from './api.js';
-import { Button, IconButton, Modal, ModalHead } from './ui/index.jsx';
+import { Button, Checkbox, IconButton, Modal, ModalHead } from './ui/index.jsx';
 import { confirmDialog } from './ui/dialogs.jsx';
 
 export const FolderIcon = () => (
@@ -33,15 +33,19 @@ export function envToText(env) {
 export function envSummary(e) {
   const f = e.folders.length;
   const v = Object.keys(e.env || {}).length;
-  const parts = [f ? `${f} folder${f > 1 ? 's' : ''}` : 'No folder', v ? `${v} variable${v > 1 ? 's' : ''}` : ''];
+  const wt = e.folders.some((x) => x.worktree);
+  const parts = [f === 1 ? base(e.folders[0].path) : f ? `${f} folders` : 'No folder', wt ? 'worktree' : '', v ? `${v} variable${v > 1 ? 's' : ''}` : ''];
   return parts.filter(Boolean).join(' · ');
 }
 
-/** Create or edit a Local environment: name, folders (first is where Claude works), env vars. */
-export function EnvironmentDialog({ env, projects, onSaved, onDeleted, onClose, onError }) {
+/**
+ * Create or edit a Local environment: name, folders (first is where Claude works, each with a
+ * branch and an optional worktree), env vars. initialFolders/initialName prefill a new one.
+ */
+export function EnvironmentDialog({ env, initialFolders, initialName, projects, onSaved, onDeleted, onClose, onError }) {
   const all = projects?.projects || [];
-  const [name, setName] = useState(env?.name || defaultName(all));
-  const [folders, setFolders] = useState(() => (env?.folderInfo || []).map((f) => ({ path: f.path, git: f.git, exists: f.exists })));
+  const [name, setName] = useState(env?.name || initialName || defaultName(all));
+  const [folders, setFolders] = useState(() => (env ? env.folderInfo || [] : initialFolders || []).map((f) => ({ path: f.path, git: f.git, exists: f.exists, branch: f.branch || '', worktree: !!f.worktree })));
   const [vars, setVars] = useState(envToText(env?.env));
   const [showVars, setShowVars] = useState(false);
   const [adding, setAdding] = useState(false);
@@ -50,10 +54,11 @@ export function EnvironmentDialog({ env, projects, onSaved, onDeleted, onClose, 
   const varCount = vars.split('\n').filter((l) => /^\s*[^#\s][^=]*=/.test(l)).length;
 
   const add = (path, git) => {
-    if (!folders.some((f) => f.path === path)) setFolders((l) => [...l, { path, git, exists: true }]);
+    if (!folders.some((f) => f.path === path)) setFolders((l) => [...l, { path, git, exists: true, branch: '', worktree: false }]);
     setAdding(false);
   };
   const remove = (path) => setFolders((l) => l.filter((f) => f.path !== path));
+  const patch = (path, p) => setFolders((l) => l.map((f) => (f.path === path ? { ...f, ...p } : f)));
   const makeMain = (path) => setFolders((l) => [l.find((f) => f.path === path), ...l.filter((f) => f.path !== path)]);
 
   const save = async (e) => {
@@ -61,12 +66,12 @@ export function EnvironmentDialog({ env, projects, onSaved, onDeleted, onClose, 
     setBusy(true);
     setErr('');
     try {
-      const body = { name, folders: folders.map((f) => f.path), env: vars };
+      const body = { name, folders: folders.map((f) => ({ path: f.path, branch: f.branch || undefined, worktree: f.worktree || undefined })), env: vars };
       const { environment } = env ? await api(`/api/environments/${env.id}`, { method: 'PUT', body }) : await api('/api/environments', { method: 'POST', body });
       onSaved(environment);
     } catch (e2) {
       setErr(e2.message);
-      if (/variable|KEY=value|set by Claude UI/.test(e2.message)) setShowVars(true);
+      if (/variable|KEY=value|set by Claude UI/.test(e2.message) && !/branch/i.test(e2.message)) setShowVars(true);
     } finally {
       setBusy(false);
     }
@@ -86,11 +91,6 @@ export function EnvironmentDialog({ env, projects, onSaved, onDeleted, onClose, 
     <Modal as="form" onClose={(e) => (e.stopPropagation(), onClose())} overlayClassName="env-modal" className="env-dialog" onSubmit={save}>
       <ModalHead title={env ? 'Edit environment' : 'New environment'} onClose={onClose} />
       <div className="modal-body">
-        <div className="env-tabs" role="tablist">
-          <span role="tab" aria-selected="true" className="on">
-            Local
-          </span>
-        </div>
         <label className="env-label" htmlFor="env-name">
           Name
         </label>
@@ -108,20 +108,7 @@ export function EnvironmentDialog({ env, projects, onSaved, onDeleted, onClose, 
         {folders.length > 0 ? (
           <div className="env-box card">
             {folders.map((f, i) => (
-              <div key={f.path} className="env-folder" title={f.path}>
-                <FolderIcon />
-                <span className="ef-name">{base(f.path)}</span>
-                {i === 0 && folders.length > 1 && <span className="tag">main</span>}
-                <span className="ef-git muted">{!f.exists ? 'Missing' : f.git ? 'Git repository' : f.git === false ? 'Not a Git repository' : ''}</span>
-                {i > 0 && (
-                  <button type="button" className="link-btn" onClick={() => makeMain(f.path)} title="Claude starts in the main folder; the others are added to its workspace">
-                    Make main
-                  </button>
-                )}
-                <IconButton type="button" size="sm" onClick={() => remove(f.path)} aria-label={`Remove ${base(f.path)}`}>
-                  ✕
-                </IconButton>
-              </div>
+              <FolderRow key={f.path} f={f} main={i === 0 && folders.length > 1} canMakeMain={i > 0} onChange={(p) => patch(f.path, p)} onMakeMain={() => makeMain(f.path)} onRemove={() => remove(f.path)} />
             ))}
           </div>
         ) : (
@@ -149,8 +136,8 @@ export function EnvironmentDialog({ env, projects, onSaved, onDeleted, onClose, 
       </div>
       <div className="modal-foot">
         {env && (
-          <Button type="button" variant="ghost danger" onClick={del}>
-            Delete
+          <Button type="button" variant="danger" className="soft" onClick={del}>
+            Delete environment
           </Button>
         )}
         <span className="spacer" />
@@ -162,6 +149,70 @@ export function EnvironmentDialog({ env, projects, onSaved, onDeleted, onClose, 
         </Button>
       </div>
     </Modal>
+  );
+}
+
+/**
+ * One folder of an environment: name, branch picker (Current or a branch) and Worktree, like
+ * Claude Desktop. Without a worktree, a picked branch is checked out in the folder itself when a
+ * chat starts; with one, the chat's new branch starts from it.
+ */
+function FolderRow({ f, main, canMakeMain, onChange, onMakeMain, onRemove }) {
+  const [info, setInfo] = useState(null); // { git, current, branches }
+  useEffect(() => {
+    if (!f.exists) return;
+    let live = true;
+    api(`/api/git/branches?path=${encodeURIComponent(f.path)}`)
+      .then((r) => live && setInfo(r))
+      .catch(() => live && setInfo({ git: false, branches: [] }));
+    return () => {
+      live = false;
+    };
+  }, [f.path, f.exists]);
+  const git = info ? info.git : f.git;
+  const branches = info?.branches || [];
+  const shown = f.branch || info?.current || '';
+  return (
+    <div className="env-folder" title={f.path}>
+      <FolderIcon />
+      <span className="ef-name">{base(f.path)}</span>
+      {main && <span className="tag">main</span>}
+      {!f.exists ? (
+        <span className="ef-git muted">Missing</span>
+      ) : git ? (
+        <>
+          <label className="ef-branch" title={f.branch ? `Starts on ${f.branch}` : 'Uses whatever branch is checked out'}>
+            {shown && <span className="mono">{shown}</span>}
+            <span className="ef-branch-kind">{f.branch ? '' : 'Current'}</span>
+            <svg width="12" height="12" viewBox="0 0 16 16" aria-hidden="true">
+              <path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+            <select value={f.branch} onChange={(e) => onChange({ branch: e.target.value })} aria-label={`Branch for ${base(f.path)}`}>
+              <option value="">Current{info?.current ? ` (${info.current})` : ''}</option>
+              {f.branch && !branches.includes(f.branch) && <option value={f.branch}>{f.branch}</option>}
+              {branches.map((b) => (
+                <option key={b} value={b}>
+                  {b}
+                </option>
+              ))}
+            </select>
+          </label>
+          <Checkbox checked={f.worktree} onChange={(v) => onChange({ worktree: v })} title="Each chat gets its own copy of this repository on a new branch">
+            Worktree
+          </Checkbox>
+        </>
+      ) : (
+        <span className="ef-git muted">{info || f.git === false ? 'Not a Git repository' : ''}</span>
+      )}
+      {canMakeMain && (
+        <button type="button" className="link-btn" onClick={onMakeMain} title="Claude starts in the main folder; the others are added to its workspace">
+          Make main
+        </button>
+      )}
+      <IconButton type="button" size="sm" onClick={onRemove} aria-label={`Remove ${base(f.path)}`}>
+        ✕
+      </IconButton>
+    </div>
   );
 }
 

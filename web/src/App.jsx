@@ -1,7 +1,8 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { api, wsUrl } from './api.js';
 import Login from './Login.jsx';
-import Sidebar, { NewChatDialog, HistoryDialog } from './Sidebar.jsx';
+import Sidebar, { HistoryDialog } from './Sidebar.jsx';
+import NewChat from './NewChat.jsx';
 import TerminalView from './TerminalView.jsx';
 import ChatView from './chat/ChatView.jsx';
 import Settings, { Shortcuts } from './Settings.jsx';
@@ -10,7 +11,6 @@ import ArtifactsGallery from './ArtifactsGallery.jsx';
 import SigninWindow from './SigninWindow.jsx';
 import { setBrowserAvailable } from './chat/McpAuth.jsx';
 import Scheduled from './Scheduled.jsx';
-import { Button, IconButton } from './ui/index.jsx';
 
 function readHash() {
   const m = location.hash.match(/s=([0-9a-f-]{36})/i);
@@ -46,6 +46,7 @@ export default function App() {
   }, []);
   const [dialog, setDialog] = useState(null); // {type:'new'} | {type:'history', path} | {type:'settings'} | {type:'keys'}
   const [toast, setToast] = useState('');
+  const [newKey, setNewKey] = useState(0); // bumps to focus the New chat composer
   const eventsRef = useRef(null);
 
   const showError = useCallback((e) => {
@@ -137,6 +138,13 @@ export default function App() {
     [select, showError]
   );
 
+  // New chat is the home page (composer with the folder/environment picker under it).
+  const newChat = useCallback(() => {
+    setDialog(null);
+    select(null);
+    setNewKey((k) => k + 1);
+  }, [select]);
+
   const setSidebarHidden = (v) => {
     setCollapsed(v);
     try {
@@ -165,7 +173,7 @@ export default function App() {
         setDialog({ type: 'keys' });
       } else if (e.key === 'k') {
         e.preventDefault();
-        setDialog({ type: 'new' });
+        newChat();
       } else if (e.key === 'b') {
         e.preventDefault();
         setSidebarHidden(!collapsed);
@@ -173,7 +181,7 @@ export default function App() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [collapsed, dialog, sessions, activeId, select]);
+  }, [collapsed, dialog, sessions, activeId, select, newChat]);
 
   const active = sessions.find((s) => s.id === activeId) || null;
 
@@ -195,7 +203,7 @@ export default function App() {
         activeId={activeId}
         onSelect={select}
         onCreate={createSession}
-        onNewChat={() => setDialog({ type: 'new' })}
+        onNewChat={newChat}
         onHistory={(path) => setDialog({ type: 'history', path })}
         onSettings={() => (setDrawer(false), setDialog({ type: 'settings' }))}
         onCustomize={() => (setDrawer(false), setDialog({ type: 'settings', tab: 'plugins' }))}
@@ -216,19 +224,19 @@ export default function App() {
         ) : active ? (
           <TerminalView key={active.id} session={active} onCreate={createSession} onSelect={select} {...common} />
         ) : (
-          <Empty onMenu={openMenu} onNew={() => setDialog({ type: 'new' })} missing={!!activeId && sessions.length > 0} />
+          <NewChat
+            projects={projects}
+            sessions={sessions}
+            onCreate={createSession}
+            onReloadProjects={loadProjects}
+            onError={showError}
+            onHistory={(path) => setDialog({ type: 'history', path })}
+            onMenu={openMenu}
+            missing={!!activeId && sessions.length > 0}
+            focusKey={newKey}
+          />
         )}
       </main>
-      {dialog?.type === 'new' && (
-        <NewChatDialog
-          projects={projects}
-          onCreate={createSession}
-          onClose={() => setDialog(null)}
-          onReloadProjects={loadProjects}
-          onError={showError}
-          onHistory={(path) => setDialog({ type: 'history', path })}
-        />
-      )}
       {signin?.open && (
         <SigninWindow pages={signinPages} active={signin.active} infos={signinInfos} onPick={(id) => setSignin({ open: true, active: id })} onClose={closeSignin} onError={showError} />
       )}
@@ -259,31 +267,6 @@ export default function App() {
         />
       )}
       {toast && <div className="toast">{toast}</div>}
-    </div>
-  );
-}
-
-function greeting() {
-  const h = new Date().getHours();
-  return h < 5 ? 'Up late?' : h < 12 ? 'Good morning' : h < 18 ? 'Good afternoon' : 'Good evening';
-}
-
-function Empty({ onMenu, onNew, missing }) {
-  return (
-    <div className="empty">
-      <div className="topbar">
-        <IconButton className="menu-btn" onClick={onMenu} aria-label="Menu">
-          ☰
-        </IconButton>
-      </div>
-      <div className="empty-body">
-        <span className="mark">&gt;_</span>
-        <h2>{missing ? 'That chat no longer exists' : greeting()}</h2>
-        <p>Start a chat in one of your projects, or with no folder at all. Claude keeps working on the server when you close this tab, and you can pick it up from any device.</p>
-        <Button variant="primary" onClick={onNew}>
-          New chat
-        </Button>
-      </div>
     </div>
   );
 }

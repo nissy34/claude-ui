@@ -23,7 +23,7 @@ function show(render) {
   });
 }
 
-function ConfirmBox({ message, title, ok, danger, done }) {
+function ConfirmBox({ message, title, ok, danger, done, notice }) {
   return (
     <Modal onClose={() => done(false)} className="ask-dialog">
       <ModalHead title={title} onClose={() => done(false)} />
@@ -31,9 +31,11 @@ function ConfirmBox({ message, title, ok, danger, done }) {
         <p className="ask-text">{message}</p>
       </ModalBody>
       <ModalFoot>
-        <Button type="button" onClick={() => done(false)}>
-          Cancel
-        </Button>
+        {!notice && (
+          <Button type="button" onClick={() => done(false)}>
+            Cancel
+          </Button>
+        )}
         <Button type="button" variant={danger ? 'danger' : 'primary'} autoFocus onClick={() => done(true)}>
           {ok}
         </Button>
@@ -72,6 +74,11 @@ function PromptBox({ title, value, ok, placeholder, done }) {
 /** Resolves true when confirmed. danger: red confirm button (deletes and the like). */
 export function confirmDialog(message, { title = 'Are you sure?', ok = 'OK', danger = false } = {}) {
   return show((done) => <ConfirmBox message={message} title={title} ok={ok} danger={danger} done={done} />);
+}
+
+/** Tells the user something, with just an OK button. */
+export function noticeDialog(message, { title = 'Note', ok = 'OK' } = {}) {
+  return show((done) => <ConfirmBox message={message} title={title} ok={ok} notice done={done} />);
 }
 
 /** Resolves the entered text, or null when cancelled or left empty. */

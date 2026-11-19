@@ -152,20 +152,106 @@ export function readFileSafe(root, rel) {
   return { path: rel, content: buf.toString('utf8'), size: st.size };
 }
 
-export async function createWorktree(cwd, name) {
+async function revParse(cwd, ref) {
+  try {
+    return (await git(cwd, ['rev-parse', '--verify', '--quiet', ref])).trim();
+  } catch {
+    return '';
+  }
+}
+
+/** Local branches (most recently committed first) plus the checked-out one, for the branch pickers. */
+export async function listBranches(cwd) {
+  if (!(await isGitRepo(cwd))) return { git: false, current: '', branches: [] };
+  let current = '';
+  try {
+    current = (await git(cwd, ['symbolic-ref', '--short', '-q', 'HEAD'])).trim();
+  } catch {}
+  const fmt = (refs) => git(cwd, ['for-each-ref', '--sort=-committerdate', '--format=%(refname:short)', ...refs]).then((o) => o.split('\n').map((x) => x.trim()).filter(Boolean), () => []);
+  const branches = await fmt(['refs/heads']);
+  const heads = new Set(branches);
+  // Branches that exist only on a remote, by their short name (origin/feature -> feature).
+  for (const r of await fmt(['refs/remotes'])) {
+    if (r.endsWith('/HEAD') || !r.includes('/')) continue;
+    const short = r.replace(/^[^/]+\//, '');
+    if (!heads.has(short)) (heads.add(short), branches.push(short));
+  }
+  return { git: true, current, branches: branches.slice(0, 200) };
+}
+
+const slugify = (name) => (name || 'chat').toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 30).replace(/^-+|-+$/g, '') || 'chat';
+
+/**
+ * A fresh worktree on a new branch claude/<slug>-<id>, under <repo>/.claude/worktrees/.
+ * base: branch to start from (a local branch, or one only on a remote); default is the checked-out commit.
+ * Returns { path, branch, repo, base (commit it started at), from (base branch name) }.
+ */
+export async function createWorktree(cwd, name, { base } = {}) {
   if (!(await isGitRepo(cwd))) throw new Error('Worktrees need a git repository');
   const top = (await git(cwd, ['rev-parse', '--show-toplevel'])).trim();
-  const slug = (name || 'chat').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 30) || 'chat';
-  const id = `${slug}-${Date.now().toString(36)}`;
+  const id = `${slugify(name)}-${Date.now().toString(36)}`;
   const dir = path.join(top, '.claude', 'worktrees', id);
   const branch = `claude/${id}`;
+  let start = 'HEAD';
+  if (base) {
+    if (base.startsWith('-')) throw new Error('Bad branch name');
+    if (await revParse(top, `refs/heads/${base}`)) start = base;
+    else {
+      const remoteRef = (await git(top, ['for-each-ref', '--format=%(refname:short)', `refs/remotes/*/${base}`]).catch(() => '')).split('\n').filter(Boolean)[0];
+      if (!remoteRef) throw new Error(`No branch called ${base} in ${path.basename(top)}`);
+      start = remoteRef;
+    }
+  }
+  const baseSha = await revParse(top, `${start}^{commit}`);
   fs.mkdirSync(path.dirname(dir), { recursive: true });
-  await git(top, ['worktree', 'add', '-b', branch, dir]);
+  const args = ['worktree', 'add', '-b', branch, dir];
+  if (baseSha) args.push(start);
+  await git(top, args);
   // Keep worktrees out of the main checkout's status.
   try {
-    const exclude = path.join(top, '.git', 'info', 'exclude');
+    const common = path.resolve(top, (await git(top, ['rev-parse', '--git-common-dir'])).trim());
+    const exclude = path.join(common, 'info', 'exclude');
     const cur = fs.existsSync(exclude) ? fs.readFileSync(exclude, 'utf8') : '';
-    if (!cur.includes('.claude/worktrees/')) fs.appendFileSync(exclude, '\n.claude/worktrees/\n');
+    if (!cur.includes('.claude/worktrees/')) {
+      fs.mkdirSync(path.dirname(exclude), { recursive: true });
+      fs.appendFileSync(exclude, '\n.claude/worktrees/\n');
+    }
   } catch {}
-  return { path: fs.realpathSync(dir), branch };
+  return { path: fs.realpathSync(dir), branch, repo: top, base: baseSha, from: base || (await git(top, ['symbolic-ref', '--short', '-q', 'HEAD']).catch(() => '')).trim() || undefined };
+}
+
+/** Switches a normal checkout to another branch (fetching it from the remote if it is only there). */
+export async function checkoutBranch(cwd, branch) {
+  if (!branch || branch.startsWith('-')) throw new Error('Bad branch name');
+  const cur = (await git(cwd, ['symbolic-ref', '--short', '-q', 'HEAD']).catch(() => '')).trim();
+  if (cur === branch) return;
+  try {
+    await git(cwd, ['checkout', branch, '--']);
+  } catch (e) {
+    throw new Error(`Couldn't switch ${path.basename(cwd)} to ${branch}: ${e.message.split('\n').slice(0, 3).join(' ')}`);
+  }
+}
+
+/**
+ * Removes a chat's worktree when it is safe: never with uncommitted changes. Its branch goes too
+ * when it has no commits of its own; a branch with work on it is kept.
+ * Returns { removed, kept?: reason, branchDeleted }.
+ */
+export async function removeWorktree(wt) {
+  if (!wt?.path) return { removed: false };
+  if (!fs.existsSync(wt.path)) {
+    if (wt.repo && fs.existsSync(wt.repo)) await git(wt.repo, ['worktree', 'prune']).catch(() => {});
+    return { removed: true, branchDeleted: false };
+  }
+  const status = await git(wt.path, ['status', '--porcelain']).catch(() => null);
+  if (status === null) return { removed: false, kept: 'not a git worktree any more' };
+  if (status.trim()) return { removed: false, kept: 'it has uncommitted changes' };
+  const repo = wt.repo || (await git(wt.path, ['rev-parse', '--path-format=absolute', '--git-common-dir'])).trim().replace(/[\\/]\.git$/, '');
+  const head = await revParse(wt.path, 'HEAD');
+  await git(repo, ['worktree', 'remove', wt.path]);
+  let branchDeleted = false;
+  if (wt.branch && wt.base && head === wt.base) {
+    await git(repo, ['branch', '-D', wt.branch]).then(() => (branchDeleted = true)).catch(() => {});
+  }
+  return { removed: true, branchDeleted };
 }

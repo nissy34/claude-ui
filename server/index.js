@@ -8,7 +8,8 @@ import readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { WebSocketServer } from 'ws';
-import { listEnvironments, createEnvironment, updateEnvironment, deleteEnvironment, getEnvironment } from './environments.js';
+import { listEnvironments, createEnvironment, updateEnvironment, deleteEnvironment, getEnvironment, listFavorites, setFavorite } from './environments.js';
+import { prepareWorkspace, worktreesOf, cleanupWorktrees } from './workspace.js';
 import { checkClone, cloneRepo } from './clone.js';
 import { config, rootCaseWarning } from './config.js';
 import {
@@ -21,7 +22,7 @@ import {
   loginSucceeded,
 } from './auth.js';
 import { store, claudeProjectDir } from './sessions.js';
-import { getChanges, searchFiles, readFileSafe, createWorktree } from './git.js';
+import { getChanges, searchFiles, readFileSafe, createWorktree, listBranches } from './git.js';
 import * as browser from './browser.js';
 import { browserAvailable } from './browser.js';
 import { listArtifacts, publishArtifact, rawHandler, rawUrl } from './artifacts.js';
@@ -609,7 +610,16 @@ app.post('/api/projects/clone', (req, res) => {
 });
 
 // ---------- environments ----------
-app.get('/api/environments', (req, res) => res.json({ environments: listEnvironments() }));
+app.get('/api/environments', (req, res) => res.json({ environments: listEnvironments(), favorites: listFavorites() }));
+app.put(
+  '/api/environments-favorites',
+  wrap(async (req, res) => res.json({ favorites: setFavorite(req.body?.key, !!req.body?.on) }))
+);
+// Branches of a folder, for the branch picker in Edit environment.
+app.get(
+  '/api/git/branches',
+  wrap(async (req, res) => res.json(await listBranches(resolveDir(String(req.query.path || '')))))
+);
 app.post(
   '/api/environments',
   wrap(async (req, res) => res.json({ environment: createEnvironment(req.body, resolveDir) }))
@@ -691,19 +701,26 @@ app.get('/api/sessions', (req, res) => res.json({ sessions: store.list() }));
 app.post(
   '/api/sessions',
   wrap(async (req, res) => {
-    const { kind, name, resume, model, permissionMode, effort, worktree, parentId, envId } = req.body || {};
+    const { kind, name, resume, model, permissionMode, effort, worktree, parentId, envId, prompt } = req.body || {};
     let { cwd, noFolder } = req.body || {};
+    if (resume && resume !== 'continue' && !/^[0-9a-f-]{36}$/i.test(resume)) throw new Error('Bad resume id');
     // An environment's first folder is the working folder; with no folders it runs like "No folder".
+    // Each folder can pin a branch and ask for its own worktree; "worktree" here (the checkbox
+    // under the composer) puts the first folder in a worktree too.
     const environment = envId ? getEnvironment(envId) : null;
     if (envId && !environment) throw new Error('That environment no longer exists');
+    let folders;
     if (environment) {
-      cwd = environment.folders[0];
-      noFolder = !cwd;
+      folders = environment.folders.map((f, i) => ({ ...f, worktree: f.worktree || (i === 0 && !!worktree) }));
+      noFolder = !folders.length;
+    } else if (!noFolder) {
+      folders = [{ path: resolveDir(cwd), worktree: !!worktree, branch: typeof req.body?.branch === 'string' && req.body.branch ? req.body.branch : undefined }];
     }
-    const project = noFolder ? fs.realpathSync(config.scratchDir) : resolveDir(cwd);
-    const wt = worktree && !noFolder ? await createWorktree(project, name || 'chat') : null;
-    const dir = wt ? wt.path : project;
-    if (resume && resume !== 'continue' && !/^[0-9a-f-]{36}$/i.test(resume)) throw new Error('Bad resume id');
+    const label = name || (typeof prompt === 'string' && prompt.trim() ? prompt.trim().slice(0, 40) : 'chat');
+    const ws = noFolder ? null : await prepareWorkspace(folders, label);
+    const project = noFolder ? fs.realpathSync(config.scratchDir) : ws.project;
+    const dir = noFolder ? project : ws.cwd;
+    const wt = ws?.worktree || null;
     const s = store.create({ cwd: dir, kind, name: name ? String(name).slice(0, 80) : isScratch(project) ? 'New chat' : undefined, resume, model, permissionMode, effort, initialInput: req.body?.login && kind === 'claude' ? '/login\r' : undefined });
     // A resumed conversation starts with its Past conversations title, which may be just its first
     // message, so it can still get a short title (or the one Claude Code stored) after a reply.
@@ -712,11 +729,17 @@ app.post(
     s.meta.project = project;
     if (isScratch(project)) s.meta.noFolder = true;
     if (wt) s.meta.worktree = wt;
+    if (ws?.worktrees.length) s.meta.worktrees = ws.worktrees;
     if (environment) {
       s.meta.envId = environment.id;
       s.meta.envName = environment.name;
+      s.meta.addDirs = ws?.addDirs || [];
     }
     if (parentId && store.get(parentId)) s.meta.parentId = parentId;
+    // The first message, typed in the New chat composer.
+    if (typeof prompt === 'string' && prompt.trim() && s.meta.kind === 'chat') {
+      s.submit({ text: prompt });
+    }
     store.save();
     res.json({ session: s.toJSON() });
   })
@@ -760,6 +783,8 @@ app.post(
     const t = store.create({ cwd: m.cwd, kind: 'chat', name: `${m.name} (fork)`.slice(0, 80), model: m.model, permissionMode: m.permissionMode, effort: m.effort });
     t.meta.project = m.project || m.cwd;
     if (m.worktree) t.meta.worktree = m.worktree;
+    if (m.worktrees) t.meta.worktrees = m.worktrees;
+    if (m.addDirs) t.meta.addDirs = m.addDirs;
     if (m.envId) Object.assign(t.meta, { envId: m.envId, envName: m.envName });
     if (m.noFolder) t.meta.noFolder = true;
     t.meta.customName = true;
@@ -1085,9 +1110,13 @@ app.post(
 app.delete(
   '/api/sessions/:id',
   wrap(async (req, res) => {
+    const s = getSession(req);
+    const meta = { ...s.meta };
     store.remove(req.params.id);
     browser.closeTab(req.params.id);
-    res.json({ ok: true });
+    // Its worktrees go too, unless another chat uses them or they hold uncommitted work.
+    const worktrees = worktreesOf(meta).length && req.query.keepWorktrees !== '1' ? await cleanupWorktrees(meta, store.list()) : [];
+    res.json({ ok: true, worktrees });
   })
 );
 
