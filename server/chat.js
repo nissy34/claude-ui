@@ -41,6 +41,8 @@ const MCP_NOTES = path.join(path.dirname(fileURLToPath(import.meta.url)), 'mcp-n
 const MCP_SCHEDULE = path.join(path.dirname(fileURLToPath(import.meta.url)), 'mcp-schedule.js');
 
 /** How a message from another session is introduced to Claude. */
+const queueId = () => Math.random().toString(36).slice(2, 10);
+
 function fromLabel(f) {
   if (f.role === 'desktop')
     return f.kind === 'handoff'
@@ -273,7 +275,23 @@ export class ChatSession {
   }
 
   inboxSummary() {
-    return this.inbox.map((b) => ({ name: b.from?.name || 'another chat', role: b.from?.role, kind: b.from?.kind, preview: b.text.slice(0, 200), ts: b.ts }));
+    return this.inbox.map((b) => {
+      b.id ||= queueId();
+      return {
+        id: b.id,
+        mine: !b.from,
+        from: b.from ? { id: b.from.id, name: b.from.name, role: b.from.role, kind: b.from.kind } : undefined,
+        name: b.from?.name || 'you',
+        role: b.from?.role,
+        kind: b.from?.kind,
+        text: b.text.slice(0, 4000),
+        preview: b.text.slice(0, 200),
+        images: b.images || 0,
+        refs: b.refs?.length ? b.refs : undefined,
+        now: !!b.now,
+        ts: b.ts,
+      };
+    });
   }
 
   waitingSummary() {
@@ -664,27 +682,94 @@ export class ChatSession {
    * chat is mid-turn it waits in an inbox; at the end of the turn everything queued is delivered in
    * order as one turn, each part labelled with its sender, so nothing is dropped or lands mid-turn.
    */
-  deliver({ text, from }) {
-    if (this.turns > 0 || this.pending.size) {
-      this.inbox.push({ text, from, ts: Date.now() });
-      this.store.save();
-      this.broadcastState();
+  deliver({ text, from, steer }) {
+    if (this.isBusy()) {
+      const item = this.enqueue({ text, from });
+      // Steer: stop the current turn and send this right away (like Send now in the chat).
+      if (steer) {
+        this.sendQueuedNow(item.id).catch(() => {});
+        return { queued: 0, interrupted: true };
+      }
       return { queued: this.inbox.length };
     }
     if (this.send({ text, from })) return { queued: 0 };
     // Couldn't start a turn (e.g. the conversation is open in the terminal): keep it for later.
-    this.inbox.push({ text, from, ts: Date.now() });
-    this.store.save();
-    this.broadcastState();
+    this.enqueue({ text, from });
     return { queued: this.inbox.length, held: true };
   }
 
+  /** Mid-turn (or while Claude waits on a permission or a form), new messages wait in the queue. */
+  isBusy() {
+    return this.turns > 0 || this.pending.size > 0;
+  }
+
+  enqueue({ text, from, images, refs }) {
+    const item = { id: queueId(), text, from, ts: Date.now() };
+    // Images stay in memory only, so sessions.json doesn't fill up with base64.
+    if (images?.length) {
+      item.images = images.length;
+      (this.queuedImages ||= new Map()).set(item.id, images);
+    }
+    if (refs?.length) item.refs = refs;
+    this.inbox.push(item);
+    this.store.save();
+    this.broadcastState();
+    return item;
+  }
+
+  /**
+   * A message the user typed in the composer. Like Claude Desktop, while Claude is working it is
+   * queued (shown in the chat with Send now / Edit / Remove) and sent when the turn ends.
+   */
+  submit(msg) {
+    const images = Array.isArray(msg.images) ? msg.images : [];
+    const refs = (Array.isArray(msg.refs) ? msg.refs : [])
+      .map((id) => this.store.get(id))
+      .filter((c) => c && c !== this && c.meta.kind === 'chat')
+      .slice(0, 5)
+      .map((c) => ({ id: c.id, name: c.meta.name }));
+    if (this.isBusy()) {
+      if (typeof msg.text !== 'string' || (!msg.text.trim() && !images.length)) return false;
+      this.enqueue({ text: msg.text, images, refs });
+      return true;
+    }
+    return this.send(msg);
+  }
+
+  /** Send now: stop the current turn and send this queued message as soon as it has stopped. */
+  async sendQueuedNow(id) {
+    const item = this.inbox.find((b) => b.id === id);
+    if (!item) return;
+    item.now = true;
+    this.store.save();
+    this.broadcastState();
+    if (this.turns > 0 && this.proc) await this.interrupt();
+    else {
+      // Nothing to stop (e.g. only a permission prompt, or a message held while idle).
+      for (const reqId of [...this.pending.keys()]) this.answerPermission({ reqId, behavior: 'deny', message: 'The user sent a new message instead' });
+      this.flushInbox();
+    }
+  }
+
+  removeQueued(id) {
+    const before = this.inbox.length;
+    this.meta.inbox = this.inbox.filter((b) => b.id !== id);
+    this.queuedImages?.delete(id);
+    if (this.meta.inbox.length === before) return;
+    this.store.save();
+    this.broadcastState();
+  }
+
   flushInbox() {
-    if (!this.inbox.length || this.turns > 0 || this.pending.size) return;
-    const batch = this.meta.inbox;
-    this.meta.inbox = [];
-    const ok = batch.length === 1 ? this.send(batch[0]) : this.send({ text: batch.map((b) => b.text).join('\n\n'), batch });
-    if (!ok) this.meta.inbox = [...batch, ...this.meta.inbox];
+    if (!this.inbox.length || this.isBusy()) return;
+    // Send now picks those messages; otherwise everything queued goes together, in order.
+    const picked = this.inbox.some((b) => b.now) ? this.inbox.filter((b) => b.now) : this.inbox;
+    const rest = this.inbox.filter((b) => !picked.includes(b));
+    const batch = picked.map(({ now, ...b }) => ({ ...b, imageData: this.queuedImages?.get(b.id) || [] }));
+    this.meta.inbox = rest;
+    const ok = batch.length === 1 && batch[0].from ? this.send(batch[0]) : this.send({ batch });
+    if (ok) for (const b of batch) this.queuedImages?.delete(b.id);
+    else this.meta.inbox = [...picked.map(({ now, ...b }) => b), ...this.meta.inbox];
     this.store.save();
     this.broadcastState();
   }
@@ -724,6 +809,12 @@ export class ChatSession {
   }
 
   send({ text, images, refs, from, batch }) {
+    if (batch) {
+      // Several queued messages (yours and other sessions') sent as one turn, in order.
+      text = batch.map((b) => (b.from?.name ? `${fromLabel(b.from)}\n\n${b.text}` : b.text)).join('\n\n---\n\n');
+      images = batch.flatMap((b) => b.imageData || []);
+      refs = [...new Set(batch.flatMap((b) => (b.refs || []).map((r) => r.id)))];
+    }
     text = typeof text === 'string' ? text : '';
     const imgs = Array.isArray(images) ? images.filter((i) => i && /^image\/(png|jpeg|gif|webp)$/.test(i.media_type) && typeof i.data === 'string').slice(0, 10) : [];
     if (!text.trim() && !imgs.length) return false;
@@ -757,8 +848,7 @@ export class ChatSession {
       prompt = `The user ran these shell commands (output below) before this message:\n${this.shellContext.join('\n\n')}\n\n${prompt}`;
       this.shellContext = [];
     }
-    if (batch) prompt = batch.map((b) => `${fromLabel(b.from)}\n\n${b.text}`).join('\n\n---\n\n');
-    else if (from?.name) prompt = `${fromLabel(from)}\n\n${prompt}`;
+    if (!batch && from?.name) prompt = `${fromLabel(from)}\n\n${prompt}`;
     const content = imgs.length
       ? [...imgs.map((i) => ({ type: 'image', source: { type: 'base64', media_type: i.media_type, data: i.data } })), ...(prompt ? [{ type: 'text', text: prompt }] : [])]
       : prompt;
@@ -773,7 +863,7 @@ export class ChatSession {
       if (this.proc === proc && !this.heard && this.turns > 0) this.record({ k: 'error', resumable: true, text: "Claude hasn't responded for a minute. Press Resume to restart it and continue." });
     }, 60_000);
     this.watchdog.unref?.();
-    if (batch) for (const b of batch) this.record({ k: 'user', text: b.text, images: 0, from: b.from });
+    if (batch) for (const b of batch) this.record({ k: 'user', text: b.text, images: b.imageData?.length || 0, ...(b.refs?.length ? { refs: b.refs } : {}), ...(b.from ? { from: b.from } : {}) });
     else this.record({ k: 'user', text, images: imgs.length, ...(chats.length ? { refs: chats.map((c) => ({ id: c.id, name: c.meta.name })) } : {}), ...(from?.name ? { from } : {}) });
     clearTimeout(this.idleTimer);
     this.store.save();

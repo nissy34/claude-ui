@@ -145,7 +145,7 @@ app.post(
     const wait = !!req.body?.wait_for_reply;
     if (await s.runLocalCommand(text)) return res.json({ ok: true, ranCommand: true, session: sessionSummary(s) });
     if (!sender) {
-      s.send({ text });
+      s.submit({ text });
       return res.json({ ok: true, session: sessionSummary(s) });
     }
     // How the recipient sees the sender.
@@ -166,8 +166,10 @@ app.post(
       if (!wait) return res.json({ ok: true, note: `Delivered to "${s.meta.name}" as the reply it was waiting for; it carries on now.`, session: sessionSummary(s) });
     }
 
-    const r = replied ? { queued: 0 } : s.deliver({ text, from: { ...from, kind: wait ? 'question' : undefined } });
-    const where = r.held
+    const r = replied ? { queued: 0 } : s.deliver({ text, from: { ...from, kind: wait ? 'question' : undefined }, steer: !!req.body?.steer });
+    const where = r.interrupted
+      ? `Sent now: "${s.meta.name}" stopped its current turn and got your message.`
+      : r.held
       ? `Held for "${s.meta.name}" (it can't take messages right now); delivered when it can.`
       : r.queued
         ? `Queued for "${s.meta.name}": it is busy, ${r.queued} message(s) waiting, delivered in order when its current turn ends.`
@@ -1188,8 +1190,10 @@ function handleChat(ws, s) {
       if (msg.t === 'send') {
         if (!msg.images?.length && /^!\s*\S/.test(msg.text || '')) return s.runShell(msg.text.replace(/^!\s*/, ''));
         if (!(msg.images?.length) && (await s.runLocalCommand(msg.text))) return;
-        s.send(msg);
+        s.submit(msg);
       }
+      else if (msg.t === 'queue_now') await s.sendQueuedNow(msg.id);
+      else if (msg.t === 'queue_remove') s.removeQueued(msg.id);
       else if (msg.t === 'perm') s.answerPermission(msg);
       else if (msg.t === 'elicit') s.answerElicit(msg);
       else if (msg.t === 'interrupt') await s.interrupt();
@@ -1221,7 +1225,7 @@ if (config.schedules) schedules.startScheduler(async (t) => {
   s.meta.project = project;
   s.meta.scheduleId = t.id;
   if (wt) s.meta.worktree = wt;
-  s.send({ text: t.prompt });
+  s.submit({ text: t.prompt });
   store.save();
   return s.id;
 });

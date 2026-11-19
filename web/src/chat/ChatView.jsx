@@ -93,6 +93,64 @@ function splitAttachments(text) {
 const ROLE_NAME = { child: 'child chat', parent: 'parent chat' };
 const KIND_NAME = { question: 'Question from', reply: 'Reply from' };
 
+/** A message waiting for the current turn to end, shown in the chat like Claude Desktop does. */
+function QueuedMessage({ item, busy, onNow, onEdit, onRemove, onOpen }) {
+  const [quoted, body] = splitQuote(splitAttachments(item.text)[0]);
+  const [open, setOpen] = useState(false);
+  const long = item.text.length > 600 || item.text.split('\n').length > 8;
+  return (
+    <div className={`msg user queued ${item.mine ? '' : 'from-session'}`}>
+      {!item.mine && (
+        <div className="from-label">
+          {item.role === 'desktop' ? (
+            <>{item.kind === 'handoff' ? 'Handed off from' : 'From'} Claude Desktop</>
+          ) : (
+            <>
+              {KIND_NAME[item.kind] || 'From'} {ROLE_NAME[item.role] || 'chat'}{' '}
+              <button className="linklike" onClick={() => onOpen?.(item.from?.id)} title="Open that chat">
+                {item.name}
+              </button>
+              {item.kind === 'question' && <span className="from-hint"> · it is waiting for a reply</span>}
+            </>
+          )}
+        </div>
+      )}
+      <div className={`bubble ${long && !open ? 'clamped' : ''}`} onClick={long && !open ? () => setOpen(true) : undefined}>
+        {quoted && <div className="bubble-quote">{quoted}</div>}
+        {item.images > 0 && <div className="img-note">🖼 {item.images} image{item.images > 1 ? 's' : ''}</div>}
+        <Linkify text={body} />
+        {item.refs?.length > 0 && (
+          <div className="attach-row in-bubble">
+            {item.refs.map((r) => (
+              <span key={r.id} className="attach">
+                💬 {r.name}
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
+      <div className="queued-row">
+        <span className="queued-tag">{item.now ? 'Sending…' : busy ? 'Queued' : 'Waiting to send'}</span>
+        {!item.now && (
+          <>
+            <button className="btn small" onClick={onNow} title={busy ? 'Stop what Claude is doing and send this now' : 'Send this now'}>
+              Send now
+            </button>
+            {item.mine && !item.images && (
+              <button className="icon-btn" onClick={onEdit} title="Edit (moves it back to the message box)" aria-label="Edit">
+                ✎
+              </button>
+            )}
+            <button className="icon-btn" onClick={onRemove} title="Remove from the queue" aria-label="Remove">
+              ✕
+            </button>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function UserMessage({ item, canEdit, onEdit, onOpen, onFork }) {
   const [full, attached] = splitAttachments(item.text);
   const [quoted, body] = splitQuote(full);
@@ -285,7 +343,7 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
   const [deltas, setDeltas] = useState({});
   const [meta, setMeta] = useState(session);
   const [state, setState] = useState(session.state || 'idle');
-  const [turns, setTurns] = useState(0);
+  const [, setTurns] = useState(0);
   const [conn, setConn] = useState('connecting');
   const [loaded, setLoaded] = useState(false); // history received at least once
   const [hidden, setHidden] = useState(null); // rows not rendered yet at the top of a long chat
@@ -303,7 +361,7 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
   const [inbox, setInbox] = useState([]);
   const [waitingOn, setWaitingOn] = useState(null);
   const [oauth, setOauth] = useState(session.oauth || []);
-  const [inboxOpen, setInboxOpen] = useState(false);
+  const [insert, setInsert] = useState(null); // {text, key}: put a queued message back in the box
   const [side, setSide] = useState(null); // { q } while the side chat is open
   const [verbose, setVerbose] = useState(() => localStorage.getItem('cw.verbose') === '1');
   const [quote, setQuote] = useState(null); // passage quoted into the main message box
@@ -450,7 +508,6 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
     growRef.current = el.scrollHeight - el.scrollTop;
     setHidden(Math.max(0, start - PAGE_ROWS));
   };
-  const queued = Math.max(0, turns - 1);
   // Commands with descriptions when the CLI gave them, plus any other names it listed.
   const commandList = useMemo(() => {
     const info = meta.commandInfo || [];
@@ -474,7 +531,7 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
       el.scrollTop = el.scrollHeight - growRef.current;
       growRef.current = null;
     } else if (stick) el.scrollTop = el.scrollHeight;
-  }, [items, stick, start]);
+  }, [items, inbox, stick, start]);
   const onScroll = () => {
     const el = listRef.current;
     if (!el) return;
@@ -810,6 +867,20 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
                   {items.some((i) => i.type === 'elicit' && !i.done) ? 'Waiting for your input' : pendingPerms ? 'Waiting for your approval' : status === 'compacting' ? 'Compacting…' : 'Working…'}
                 </div>
               )}
+              {inbox.map((q) => (
+                <QueuedMessage
+                  key={q.id}
+                  item={q}
+                  busy={busy}
+                  onNow={() => send({ t: 'queue_now', id: q.id })}
+                  onRemove={() => send({ t: 'queue_remove', id: q.id })}
+                  onEdit={() => {
+                    if (!send({ t: 'queue_remove', id: q.id })) return;
+                    setInsert({ text: q.text, key: q.id });
+                  }}
+                  onOpen={(id) => sessions?.some((x) => x.id === id) && onSelect?.(id)}
+                />
+              ))}
             </div>
           </div>
 
@@ -842,26 +913,6 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
                 {waitingOn.name}
               </button>
               <span>. Claude carries on as soon as it answers.</span>
-            </div>
-          )}
-          {inbox.length > 0 && (
-            <div className={`inbox-bar ${inboxOpen ? 'open' : ''}`}>
-              <button className="inbox-head" onClick={() => setInboxOpen((v) => !v)} aria-expanded={inboxOpen}>
-                <span>
-                  ✉ {inbox.length} queued message{inbox.length === 1 ? '' : 's'} from {[...new Set(inbox.map((b) => b.name))].join(', ')}. Claude gets {inbox.length === 1 ? 'it' : 'them together, in order,'} when this turn ends.
-                </span>
-                <span className="chev">{inboxOpen ? '▾' : '▸'}</span>
-              </button>
-              {inboxOpen && (
-                <ol className="inbox-list">
-                  {inbox.map((b, i) => (
-                    <li key={i}>
-                      <b>{b.name}</b>
-                      {b.kind === 'question' ? ' asks' : ''}: {b.preview}
-                    </li>
-                  ))}
-                </ol>
-              )}
             </div>
           )}
           <QuoteReply
@@ -902,7 +953,7 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
             chats={mentionable}
             context={{ used: meta.contextTokens, window: meta.contextWindow }}
             onCompact={() => submit('/compact', [])}
-            queued={queued}
+            insert={insert}
             onError={onError}
           />
 

@@ -109,10 +109,14 @@ const TOOLS = [
   {
     name: 'send_message',
     description:
-      'Send a message to an existing chat to continue it (for example new instructions, or "continue with the next step"). If the chat is busy, the message is queued and delivered when its current turn ends. Check the result later with get_session.',
+      'Send a message to an existing chat to continue it (for example new instructions, or "continue with the next step"). If the chat is busy, the message is queued and delivered when its current turn ends, unless steer=true. Check the result later with get_session.',
     inputSchema: {
       type: 'object',
-      properties: { id: { type: 'string' }, message: { type: 'string' } },
+      properties: {
+        id: { type: 'string' },
+        message: { type: 'string' },
+        steer: { type: 'boolean', description: 'Steer immediately: if the chat is busy, stop its current turn and send this message right away (like the user pressing Send now) instead of queueing it. Use only when it must change what the chat is doing now, e.g. it is working from wrong information. Default false.' },
+      },
       required: ['id', 'message'],
     },
   },
@@ -327,8 +331,8 @@ export function createDesktopMcp({ store, resolveDir, createWorktree, getChanges
           s.meta.draft = undefined;
           s.deliver({ text: draft, from: { ...DESKTOP, kind: 'handoff' } });
         }
-        const r = s.deliver({ text, from: DESKTOP });
-        return { ok: true, session: summary(s), note: r.held ? "Held: the chat can't take messages right now (it may be open in the terminal); delivered when it can." : r.queued ? `Queued: the chat is busy; ${r.queued} message(s) are delivered in order when its turn ends.` : 'Delivered; it is working on it.' };
+        const r = s.deliver({ text, from: DESKTOP, steer: !!a.steer });
+        return { ok: true, session: summary(s), note: r.interrupted ? 'Sent now: the chat stopped its current turn and is working on your message.' : r.held ? "Held: the chat can't take messages right now (it may be open in the terminal); delivered when it can." : r.queued ? `Queued: the chat is busy; ${r.queued} message(s) are delivered in order when its turn ends.` : 'Delivered; it is working on it.' };
       }
       case 'stop_session':
         return { ...(await controlSession(store, chat(a.id), 'stop', a, 'Claude Desktop')), session: summary(chat(a.id)) };
