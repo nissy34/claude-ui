@@ -145,7 +145,7 @@ app.post(
     const wait = !!req.body?.wait_for_reply;
     if (await s.runLocalCommand(text)) return res.json({ ok: true, ranCommand: true, session: sessionSummary(s) });
     if (!sender) {
-      s.send({ text });
+      s.submit({ text });
       return res.json({ ok: true, session: sessionSummary(s) });
     }
     // How the recipient sees the sender.
@@ -1188,8 +1188,10 @@ function handleChat(ws, s) {
       if (msg.t === 'send') {
         if (!msg.images?.length && /^!\s*\S/.test(msg.text || '')) return s.runShell(msg.text.replace(/^!\s*/, ''));
         if (!(msg.images?.length) && (await s.runLocalCommand(msg.text))) return;
-        s.send(msg);
+        s.submit(msg);
       }
+      else if (msg.t === 'queue_now') await s.sendQueuedNow(msg.id);
+      else if (msg.t === 'queue_remove') s.removeQueued(msg.id);
       else if (msg.t === 'perm') s.answerPermission(msg);
       else if (msg.t === 'elicit') s.answerElicit(msg);
       else if (msg.t === 'interrupt') await s.interrupt();
@@ -1221,7 +1223,7 @@ if (config.schedules) schedules.startScheduler(async (t) => {
   s.meta.project = project;
   s.meta.scheduleId = t.id;
   if (wt) s.meta.worktree = wt;
-  s.send({ text: t.prompt });
+  s.submit({ text: t.prompt });
   store.save();
   return s.id;
 });

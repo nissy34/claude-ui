@@ -168,7 +168,7 @@ function ModelItem({ m, on, onPick }) {
   );
 }
 
-export default function Composer({ sessionId, disabled, busy, onSend, onStop, mode, onMode, model, activeModel, onModel, effort, onEffort, commands, footer, onError, placeholder, context, onCompact, queued, usage, mcpServers, onMcpSignIn, onMcpRefresh, onSettings, onBrowser, chats, initialDraft, quote, onClearQuote }) {
+export default function Composer({ sessionId, disabled, busy, onSend, onStop, mode, onMode, model, activeModel, onModel, effort, onEffort, commands, footer, onError, placeholder, context, onCompact, insert, usage, mcpServers, onMcpSignIn, onMcpRefresh, onSettings, onBrowser, chats, initialDraft, quote, onClearQuote }) {
   const draftKey = `cw.draft.${sessionId}`;
   const [text, setText] = useState(() => {
     try {
@@ -242,6 +242,12 @@ export default function Composer({ sessionId, disabled, busy, onSend, onStop, mo
   useEffect(() => {
     if (quote && !isTouch) taRef.current?.focus();
   }, [quote]);
+  // Edit on a queued message: it comes back into the box (after anything already typed).
+  useEffect(() => {
+    if (!insert) return;
+    setText((t) => (t.trim() ? `${t}\n\n${insert.text}` : insert.text));
+    taRef.current?.focus();
+  }, [insert]);
 
   // Close an open menu on an outside click.
   const barRef = useRef(null);
@@ -467,7 +473,6 @@ export default function Composer({ sessionId, disabled, busy, onSend, onStop, mo
             {suggest.items[sel].hint && <code>{suggest.items[sel].hint}</code>} {suggest.items[sel].desc}
           </div>
         )}
-        {queued > 0 && <div className="queued-note">{queued} message{queued > 1 ? 's' : ''} queued. Claude reads {queued > 1 ? 'them' : 'it'} when the current step finishes.</div>}
         {attachments.length > 0 && (
           <div className="attach-row">
             {attachments.map((a) => (
