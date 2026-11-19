@@ -11,6 +11,7 @@ import { splitQuote } from './quote.js';
 import Linkify from './Linkify.jsx';
 import { getPrefs } from '../prefs.js';
 import SidePanel from './SidePanel.jsx';
+import { isLive as taskLive, BackgroundPill } from './BackgroundTasks.jsx';
 import { ChatCtx } from './ctx.js';
 import SideChat from './SideChat.jsx';
 import TerminalView from '../TerminalView.jsx';
@@ -365,6 +366,19 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
   const [side, setSide] = useState(null); // { q } while the side chat is open
   const [verbose, setVerbose] = useState(() => localStorage.getItem('cw.verbose') === '1');
   const [quote, setQuote] = useState(null); // passage quoted into the main message box
+  const [tasks, setTasks] = useState([]); // background shells, Monitor watches and agents
+  const [taskFocus, setTaskFocus] = useState(null);
+  // Tool call id -> its background task, for the "Running in background" tag on tool cards.
+  // Keyed on a string so progress updates don't re-render every tool card.
+  const bgKey = tasks.map((t) => (t.toolUseId ? `${t.toolUseId}|${t.id}|${taskLive(t) ? 1 : 0}` : '')).join(',');
+  const bgTasks = useMemo(() => {
+    const m = {};
+    for (const s of bgKey.split(',')) {
+      const [tool, id, live] = s.split('|');
+      if (tool) m[tool] = { id, live: live === '1' };
+    }
+    return m;
+  }, [bgKey]);
   const wsRef = useRef(null);
   const listRef = useRef(null);
   const deltaOrder = useRef(0);
@@ -401,6 +415,7 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
           setInbox(m.inbox || []);
           setWaitingOn(m.waitingOn || null);
           setOauth(m.oauth || []);
+          setTasks(m.tasks || []);
           setDeltas({});
           setConn('open');
           setLoaded(true);
@@ -440,7 +455,8 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
           setWaitingOn(m.waitingOn || null);
           setOauth(m.oauth || []);
           setMeta({ ...m.meta, live: m.live });
-        } else if (m.t === 'status') setStatus(m.status);
+        } else if (m.t === 'tasks') setTasks(m.tasks || []);
+        else if (m.t === 'status') setStatus(m.status);
         else if (m.t === 'reload') ws.close(4000, 'reload');
         else if (m.t === 'error') onError(new Error(m.error));
       };
@@ -494,6 +510,7 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
   const todos = useMemo(() => lastTodos(events), [events]);
   const pendingPerms = items.filter((i) => i.type === 'tool' && i.perm && !i.perm.done).length + items.filter((i) => (i.type === 'perm' || i.type === 'elicit') && !i.done).length;
   const busy = state === 'busy' || state === 'waiting';
+  const liveTasks = useMemo(() => tasks.filter(taskLive), [tasks]);
   // Resume shows on an exit error only while it is the latest thing in the chat.
   const lastResumable = busy ? -1 : rows.findLastIndex((r) => ['error', 'user', 'text', 'tool', 'group'].includes(r.type));
   // Rows added after the chat opened always show; only the history above them is held back.
@@ -580,11 +597,16 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
         openPanel(key);
       },
       openBrowser: () => openPanel('browser'),
+      openTask: (id) => {
+        setTaskFocus(id);
+        openPanel('tasks');
+      },
+      bgTasks,
       openSession: (id) => onSelect(id),
       parentId: meta.parentId || null,
       verbose,
     }),
-    [meta.cwd, meta.parentId, onSelect, verbose]
+    [meta.cwd, meta.parentId, onSelect, verbose, bgTasks]
   );
   useEffect(() => {
     const onKey = (e) => {
@@ -719,7 +741,7 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
               <button className={`icon-btn ${terminal ? 'on' : ''}`} title="Terminal" onClick={toggleTerminal}>
                 ›_
               </button>
-              <button className={`icon-btn ${panel ? 'on' : ''}`} title="Changes and files" onClick={() => (panel && panel !== 'browser' ? setPanel(null) : openPanel('changes'))}>
+              <button className={`icon-btn ${panel && panel !== 'browser' && panel !== 'tasks' ? 'on' : ''}`} title="Changes and files" onClick={() => (panel && panel !== 'browser' && panel !== 'tasks' ? setPanel(null) : openPanel('changes'))}>
                 ± <span className="lbl hide-mobile">Changes</span>
               </button>
               <button className={`icon-btn ${panel === 'browser' ? 'on' : ''}`} title="Browser" onClick={() => (panel === 'browser' ? setPanel(null) : openPanel('browser'))}>
@@ -731,6 +753,9 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
                 </button>
                 {menu && (
                   <div className="pop down">
+                    <button onClick={() => (setMenu(false), openPanel('tasks'))}>
+                      Background tasks{liveTasks.length > 0 && <span className="menu-count">{liveTasks.length}</span>}
+                    </button>
                     <button onClick={() => (setMenu(false), setInfo(true))}>Session info and usage</button>
                     <button onClick={openTui}>Open in Claude's terminal</button>
                     <button onClick={rename}>Rename</button>
@@ -925,6 +950,15 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
               listRef.current?.closest('.chat-view')?.querySelector('.composer textarea')?.focus();
             }}
           />
+          {liveTasks.length > 0 && panel !== 'tasks' && (
+            <BackgroundPill
+              tasks={liveTasks}
+              onOpen={(id) => {
+                setTaskFocus(id);
+                openPanel('tasks');
+              }}
+            />
+          )}
           <McpSignInBar sessionId={session.id} flows={oauth} onError={onError} />
           <Composer
             sessionId={session.id}
@@ -993,6 +1027,8 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
             onError={onError}
             wide={wide}
             onWide={() => setWide((w) => !w)}
+            tasks={tasks}
+            taskFocus={taskFocus}
           />
         )}
         {info && <InfoDialog meta={meta} onClose={() => setInfo(false)} onSignIn={signIn} />}

@@ -249,6 +249,8 @@ export default function ToolCard({ item, cwd, children }) {
   const summary = toolSummary(name, input, cwd);
   const body = open ? <ToolBody name={name} input={input} cwd={cwd} /> : null;
   const resultText = result?.text || '';
+  // Started in the background (run_in_background, Monitor, background agent): link to its row in Background tasks.
+  const bg = item.id && ctx.bgTasks?.[item.id];
   const hideResultByDefault = ['Read', 'Edit', 'Write', 'MultiEdit', 'TodoWrite', 'Glob', 'Grep'].includes(name);
 
   return (
@@ -274,6 +276,18 @@ export default function ToolCard({ item, cwd, children }) {
           <span className="tstats">
             {stats.add > 0 && <span className="add">+{stats.add}</span>}
             {stats.del > 0 && <span className="del">−{stats.del}</span>}
+          </span>
+        )}
+        {bg && (
+          <span
+            className={`tbg ${bg.live ? 'live' : ''}`}
+            title="Show in Background tasks"
+            onClick={(e) => {
+              e.stopPropagation();
+              ctx.openTask(bg.id);
+            }}
+          >
+            {bg.live ? 'Running in background' : 'Background'}
           </span>
         )}
         <span className={`tstate ${status}`}>{status === 'running' ? <span className="spinner" /> : status === 'error' ? '!' : status === 'waiting' ? '…' : '✓'}</span>

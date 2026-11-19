@@ -35,6 +35,7 @@ const commandCache = new Map(); // cwd -> commands with descriptions
 import { setModels } from './models.js';
 import { globalNotesPrompt } from './notes.js';
 import { firstExchange, generateTitle, queueTitle, transcriptTitle } from './chat-title.js';
+import { bgTaskMethods, isTaskMessage } from './bg-tasks.js';
 const MCP_BROWSER = path.join(path.dirname(fileURLToPath(import.meta.url)), 'mcp-browser.js');
 const MCP_UI = path.join(path.dirname(fileURLToPath(import.meta.url)), 'mcp-ui.js');
 const MCP_NOTES = path.join(path.dirname(fileURLToPath(import.meta.url)), 'mcp-notes.js');
@@ -314,6 +315,7 @@ export class ChatSession {
       events: this.events.slice(-MAX_EVENTS_SENT),
       truncated: Math.max(0, this.events.length - MAX_EVENTS_SENT),
       pending: [...this.pending.values()],
+      tasks: this.tasksSummary(),
     };
   }
 
@@ -430,6 +432,7 @@ export class ChatSession {
       for (const w of this.controlWaiters.values()) w.reject(new Error('process exited'));
       this.controlWaiters.clear();
       this.oauth.clear();
+      this.endTasksOnExit();
       clearTimeout(this.watchdog);
       if (this.quietExit) this.quietExit = false;
       else if (hadWork || (code && code !== 0 && !this.stopping)) {
@@ -466,8 +469,9 @@ export class ChatSession {
     if (!IDLE_MS) return;
     this.idleTimer = setTimeout(() => {
       // Free the process when nothing is happening; the next message resumes the same conversation.
-      // Keep the process (and its localhost OAuth listener) while an MCP sign-in is waiting.
-      if (this.proc && this.state === 'idle' && !this.oauthWaiting()) this.stop();
+      // Keep the process (and its localhost OAuth listener) while an MCP sign-in is waiting, and while
+      // background shells or agents run, since they end with it.
+      if (this.proc && this.state === 'idle' && !this.oauthWaiting() && !this.liveTaskCount()) this.stop();
       else if (this.proc) this.touchIdle();
     }, IDLE_MS);
     this.idleTimer.unref?.();
@@ -476,6 +480,12 @@ export class ChatSession {
   onMessage(msg) {
     const m = this.meta;
     m.lastActivity = Date.now();
+    if (isTaskMessage(msg)) return this.onTaskMessage(msg);
+    // A background task finishing makes Claude Code start a turn on its own: show the chat as working.
+    if ((msg.type === 'assistant' || msg.type === 'stream_event') && this.turns === 0 && !msg.parent_tool_use_id) {
+      this.turns = 1;
+      this.broadcastState();
+    }
     switch (msg.type) {
       case 'system':
         if (msg.subtype === 'init') {
@@ -1130,4 +1140,4 @@ export class ChatSession {
   }
 }
 
-Object.assign(ChatSession.prototype, mcpAuthMethods);
+Object.assign(ChatSession.prototype, mcpAuthMethods, bgTaskMethods);
