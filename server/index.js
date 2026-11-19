@@ -24,7 +24,7 @@ import { store, claudeProjectDir } from './sessions.js';
 import { getChanges, searchFiles, readFileSafe, createWorktree } from './git.js';
 import * as browser from './browser.js';
 import { browserAvailable } from './browser.js';
-import { listArtifacts, rawHandler, rawUrl } from './artifacts.js';
+import { listArtifacts, publishArtifact, rawHandler, rawUrl } from './artifacts.js';
 import * as admin from './claude-admin.js';
 import { McpAdmin, onSignedIn, stopAllAdmins } from './mcp-admin.js';
 import { getModels } from './models.js';
@@ -341,6 +341,19 @@ app.post(
     // Project notes default to the calling chat's project.
     const projectDir = b.project ? resolveDir(String(b.project)) : from?.meta.project || from?.meta.cwd;
     res.json(notes.notesOp(req.params.op, b, { projectDir, source: from ? `chat "${from.meta.name}"` : 'chat' }));
+  })
+);
+
+// publish_artifact from the built-in ui MCP: show a report in the chat's side panel and the
+// Artifacts gallery.
+app.post(
+  '/internal/artifacts/publish',
+  wrap(async (req, res) => {
+    const s = store.get(req.headers['x-cw-session']);
+    if (!s) throw new Error('No such session');
+    const out = publishArtifact(s, req.body || {});
+    store.save();
+    res.json({ published: true, path: out.path, title: out.title, note: 'Shown to the user in the side panel of this chat and listed under Artifacts, with its relative CSS, JS and images. Tell them it is open; no link is needed.' });
   })
 );
 

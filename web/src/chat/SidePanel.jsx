@@ -326,7 +326,7 @@ function FileView({ sessionId, path, refreshKey }) {
   );
 }
 
-export default function SidePanel({ sessionId, tab, files, onTab, onCloseFile, onClose, refreshKey, onOpenFile, onPrompt, busy, onError, wide, onWide, tasks = [], taskFocus }) {
+export default function SidePanel({ sessionId, tab, files, titles = {}, onTab, onCloseFile, onClose, refreshKey, onOpenFile, onPrompt, busy, onError, wide, onWide, tasks = [], taskFocus }) {
   const liveTasks = tasks.filter(isLive).length;
   return (
     <aside className={`side-panel ${wide ? 'wide' : ''}`}>
@@ -346,7 +346,7 @@ export default function SidePanel({ sessionId, tab, files, onTab, onCloseFile, o
           {files.map((f) => (
             <button key={f} className={`panel-tab ${tab === f ? 'on' : ''}`} onClick={() => onTab(f)} title={f.replace(/^art:/, '')}>
               {f.startsWith('art:') ? '◇ ' : ''}
-              {f.split(/[\\/]/).pop()}
+              {titles[f] || f.split(/[\\/]/).pop()}
               <span
                 style={{ marginLeft: 6, opacity: 0.6 }}
                 onClick={(e) => {

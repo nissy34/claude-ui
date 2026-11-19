@@ -127,6 +127,22 @@ export function planTodos(input) {
   return (input?.steps || []).map((x) => ({ content: String(x.step ?? x.title ?? x.content ?? ''), status: x.status || 'pending' }));
 }
 
+export const isPublishTool = (name) => name === 'mcp__ui__publish_artifact';
+// The published file's absolute path, from publish_artifact's JSON result.
+export function publishedPath(text) {
+  try {
+    return JSON.parse(text || '').path || null;
+  } catch {
+    return /"path"\s*:\s*"((?:[^"\\]|\\.)*)"/.exec(text || '')?.[1]?.replace(/\\(.)/g, '$1') || null;
+  }
+}
+export function publishedTitle(text) {
+  try {
+    return JSON.parse(text || '').title || null;
+  } catch {
+    return null;
+  }
+}
 export const isPlanTool = (name) => /^mcp__ui__update_plan$/.test(name || '');
 
 /** The chat's current task list: the latest update_plan or TodoWrite call. */

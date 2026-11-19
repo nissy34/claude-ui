@@ -49,9 +49,10 @@ export function rawUrl(sessionId, absPath) {
   return `/raw/${sessionId}/${sign(sessionId)}${toUrlPath(absPath).split('/').map(encodeURIComponent).join('/')}`;
 }
 
-// Files this session's tools wrote, newest last.
+// Files this session's tools wrote or Claude published (publish_artifact), newest last.
 function writtenFiles(s) {
   const out = new Map();
+  const published = new Map((s.meta.published || []).map((p) => [p.path, p]));
   for (const e of s.events || []) {
     if (e.k !== 'block' || e.block?.type !== 'tool_use' || !FILE_TOOLS.has(e.block.name)) continue;
     const p = e.block.input?.file_path || e.block.input?.notebook_path;
@@ -60,7 +61,48 @@ function writtenFiles(s) {
     out.delete(abs);
     out.set(abs, e.ts || 0);
   }
+  for (const p of published.values()) {
+    out.delete(p.path);
+    out.set(p.path, p.ts || 0);
+  }
   return out;
+}
+
+const KIND_EXT = { html: '.html', markdown: '.md', svg: '.svg', csv: '.csv' };
+const slug = (t) => String(t || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'artifact';
+
+// publish_artifact: show an existing file (path) or new content as an artifact of this chat.
+// Content goes to <dataDir>/artifacts/<session>/<title>.<ext>; the file is recorded in the
+// session's meta so the Artifacts gallery lists it and its folder may be served (so a report's
+// own CSS, JS and images load).
+export function publishArtifact(s, { path: p, content, format, title, description } = {}) {
+  let abs;
+  if (typeof p === 'string' && p.trim()) {
+    if (content != null) throw new Error('Give either path or content, not both.');
+    abs = path.resolve(s.meta.cwd, p.trim().replace(/^~(?=$|[\\/])/, process.env.HOME || '~'));
+    let st;
+    try {
+      st = fs.statSync(abs);
+    } catch {
+      throw new Error(`No file at ${abs}. Write the file first, or pass content instead.`);
+    }
+    if (!st.isFile()) throw new Error(`${abs} is a folder. Pass the report file itself, e.g. ${path.join(abs, 'report.html')}.`);
+    if (!ARTIFACT_EXT.test(abs)) throw new Error('Only HTML, Markdown, SVG, images, PDF and CSV files can be published.');
+  } else if (typeof content === 'string' && content.length) {
+    const fmt = String(format || (/^\s*</.test(content) ? 'html' : 'markdown')).toLowerCase().replace(/^md$/, 'markdown').replace(/^htm$/, 'html');
+    const ext = KIND_EXT[fmt];
+    if (!ext) throw new Error('format must be html, markdown, svg or csv.');
+    const dir = path.join(config.dataDir, 'artifacts', s.meta.id);
+    fs.mkdirSync(dir, { recursive: true });
+    const base = slug(title || (fmt === 'html' && /<title>([^<]*)<\/title>/i.exec(content)?.[1]) || (fmt === 'markdown' && /^#\s+(.+)$/m.exec(content)?.[1]));
+    abs = path.join(dir, base + ext);
+    fs.writeFileSync(abs, content);
+  } else {
+    throw new Error('Pass path (an existing file) or content (the HTML or Markdown to publish).');
+  }
+  const entry = { path: abs, title: String(title || '').slice(0, 200) || undefined, description: String(description || '').slice(0, 500) || undefined, ts: Date.now() };
+  s.meta.published = [...(s.meta.published || []).filter((x) => x.path !== abs), entry].slice(-100);
+  return { path: abs, name: path.basename(abs), title: entry.title || path.basename(abs), url: rawUrl(s.meta.id, abs) };
 }
 
 export function listArtifacts(sessions) {
@@ -75,7 +117,8 @@ export function listArtifacts(sessions) {
       } catch {
         continue;
       }
-      list.push({ path: abs, name: path.basename(abs), ext: path.extname(abs).slice(1).toLowerCase(), sessionId: s.meta.id, sessionName: s.meta.name, project: s.meta.project || s.meta.cwd, mtime: st.mtimeMs, size: st.size, ts, url: rawUrl(s.meta.id, abs) });
+      const pub = (s.meta.published || []).find((x) => x.path === abs);
+      list.push({ path: abs, name: path.basename(abs), title: pub?.title, description: pub?.description, published: !!pub, ext: path.extname(abs).slice(1).toLowerCase(), sessionId: s.meta.id, sessionName: s.meta.name, project: s.meta.project || s.meta.cwd, mtime: st.mtimeMs, size: st.size, ts, url: rawUrl(s.meta.id, abs) });
     }
   }
   return list.sort((a, b) => b.mtime - a.mtime);

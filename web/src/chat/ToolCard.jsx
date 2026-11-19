@@ -5,10 +5,11 @@ import { artifactKind } from './ArtifactView.jsx';
 import { diffLines } from 'diff';
 import { highlight, renderMarkdown } from './markdown.js';
 import Linkify from './Linkify.jsx';
-import { shortPath, isPlanTool, planTodos } from './model.js';
+import { shortPath, isPlanTool, planTodos, isPublishTool, publishedPath } from './model.js';
 import { Button } from '../ui/index.jsx';
 
 const ICONS = {
+  mcp__ui__publish_artifact: '◰',
   Bash: '›_',
   Read: '◱',
   Write: '✚',
@@ -235,6 +236,10 @@ export default function ToolCard({ item, cwd, children }) {
   const { name, input, result } = plan ? { ...item, name: 'TodoWrite', input: { todos: planTodos(item.input) } } : item;
   const ctx = useContext(ChatCtx);
   const filePath = FILE_TOOLS[name] && input?.[FILE_TOOLS[name]];
+  const publish = isPublishTool(name);
+  // What publish_artifact published: the server's path once done, else the file it was given.
+  const published = publish ? (result && !result.isError && publishedPath(result.text)) || input?.path || null : null;
+  const artPath = published || filePath;
   const isSessionTool = /^mcp__sessions__(start_session|send_to_session|read_session)$/.test(name);
   const parentId = ctx.parentId;
   const sendTarget = String(input?.id ?? input?.session_id ?? input?.to ?? '');
@@ -256,13 +261,13 @@ export default function ToolCard({ item, cwd, children }) {
   const resultText = result?.text || '';
   // Started in the background (run_in_background, Monitor, background agent): link to its row in Background tasks.
   const bg = item.id && ctx.bgTasks?.[item.id];
-  const hideResultByDefault = ['Read', 'Edit', 'Write', 'MultiEdit', 'TodoWrite', 'Glob', 'Grep'].includes(name);
+  const hideResultByDefault = publish || ['Read', 'Edit', 'Write', 'MultiEdit', 'TodoWrite', 'Glob', 'Grep'].includes(name);
 
   return (
     <div className={`tool ${status} ${open ? 'open' : ''}`}>
       <button className="tool-head" onClick={() => setOpen((o) => !o)}>
         <span className="ticon">{ICONS[name] || '⚙'}</span>
-        <span className="tname">{plan ? item.input?.title || 'Plan' : isSessionTool ? sessionLabel : name.replace(/^mcp__([^_]+)__/, '$1 · ')}</span>
+        <span className="tname">{plan ? item.input?.title || 'Plan' : publish ? 'Published artifact' : isSessionTool ? sessionLabel : name.replace(/^mcp__([^_]+)__/, '$1 · ')}</span>
         {filePath ? (
           <span
             className="tsum link"
@@ -275,7 +280,7 @@ export default function ToolCard({ item, cwd, children }) {
             {summary}
           </span>
         ) : (
-          <span className="tsum">{isSessionTool ? input?.name || input?.prompt?.slice(0, 80) || input?.message?.slice(0, 80) || summary : summary}</span>
+          <span className="tsum">{publish ? input?.title || (published || '').split(/[\\/]/).pop() || '' : isSessionTool ? input?.name || input?.prompt?.slice(0, 80) || input?.message?.slice(0, 80) || summary : summary}</span>
         )}
         {stats && (
           <span className="tstats">
@@ -327,12 +332,12 @@ export default function ToolCard({ item, cwd, children }) {
           ))}
         </div>
       )}
-      {filePath && name !== 'Read' && artifactKind(filePath) && status !== 'error' && (
-        <button className="artifact-card card interactive" onClick={() => ctx.openArtifact(filePath)}>
-          <span className="art-icon">{{ html: '◰', image: '▣', markdown: '¶', pdf: '▤', csv: '▦' }[artifactKind(filePath)]}</span>
+      {artPath && name !== 'Read' && artifactKind(artPath) && status !== 'error' && status !== 'stopped' && (!publish || status === 'done') && (
+        <button className="artifact-card card interactive" onClick={() => ctx.openArtifact(artPath, publish ? input?.title : undefined)} title={artPath}>
+          <span className="art-icon">{{ html: '◰', image: '▣', markdown: '¶', pdf: '▤', csv: '▦' }[artifactKind(artPath)]}</span>
           <span className="art-meta">
-            <b>{filePath.split(/[\\/]/).pop()}</b>
-            <span className="muted">{{ html: 'Web page', image: 'Image', markdown: 'Document', pdf: 'PDF', csv: 'Table' }[artifactKind(filePath)]} · click to open</span>
+            <b>{(publish && input?.title) || artPath.split(/[\\/]/).pop()}</b>
+            <span className="muted">{{ html: 'Web page', image: 'Image', markdown: 'Document', pdf: 'PDF', csv: 'Table' }[artifactKind(artPath)]} · click to open</span>
           </span>
           <span className="muted">↗</span>
         </button>
