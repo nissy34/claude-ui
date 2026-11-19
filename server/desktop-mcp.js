@@ -104,6 +104,16 @@ const PROJECT_TOOLS = [
     inputSchema: { type: 'object', properties: { project_id: { type: 'string' }, decision_id: { type: 'string' }, choice: { type: 'number', description: 'Option index from 0.' }, note: { type: 'string' } }, required: ['project_id', 'decision_id', 'choice'] },
   },
   {
+    name: 'project_answer_suggestion',
+    description: 'Start or dismiss a thread the coordinator suggested (openSuggestions in project_status), when the user told you to.',
+    inputSchema: { type: 'object', properties: { project_id: { type: 'string' }, suggestion_id: { type: 'string' }, action: { type: 'string', enum: ['start', 'dismiss'] } }, required: ['project_id', 'suggestion_id', 'action'] },
+  },
+  {
+    name: 'project_move_chat',
+    description: 'Move an existing regular chat (a session id from list_sessions) into a project as a thread. It keeps its folder, branch and history, and the coordinator is told.',
+    inputSchema: { type: 'object', properties: { project_id: { type: 'string' }, session_id: { type: 'string' } }, required: ['project_id', 'session_id'] },
+  },
+  {
     name: 'project_update',
     description: "Change a project's settings: name, goal, instructions, models per role, the running cap, proactivity (quiet/normal/chatty), or archive it.",
     inputSchema: {
@@ -119,6 +129,7 @@ const PROJECT_TOOLS = [
         thread_effort: { type: 'string', enum: ['low', 'medium', 'high', 'xhigh', 'max'] },
         max_running: { type: 'number' },
         proactivity: { type: 'string', enum: ['quiet', 'normal', 'chatty'] },
+        budget_usd: { type: 'number', description: 'Pause the project once it has cost this much (0 = no budget).' },
         archived: { type: 'boolean' },
       },
       required: ['project_id'],
@@ -322,6 +333,7 @@ function projectPatch(a) {
   const policy = {};
   if (a.max_running != null) policy.maxRunning = a.max_running;
   if (a.proactivity != null) policy.proactivity = a.proactivity;
+  if (a.budget_usd != null) policy.budgetUsd = a.budget_usd;
   if (Object.keys(policy).length) patch.policy = policy;
   return patch;
 }
@@ -370,8 +382,10 @@ export function createDesktopMcp({ store, resolveDir, createWorktree, getChanges
           project: { id: d.id, name: d.name, goal: d.goal, paused: d.paused?.reason || null, coordinatorWorking: d.coordinatorBusy, runningThreadTurns: d.running, cap: d.settings.policy.maxRunning, proactivity: d.settings.policy.proactivity, models: d.settings.models },
           threads: d.threads.map((t) => ({ thread_id: t.id, title: t.title, status: t.statusLabel, checklist: t.progress ? `${t.progress.done}/${t.progress.total}` : null, lastPost: t.lastPost ? { kind: t.lastPost.kind, text: t.lastPost.text.slice(0, 600), at: ago(t.lastPost.ts) } : null, branch: t.branch, pr: t.pr?.url || null, waitingForPermission: t.pendingPermissions > 0, cost: Number(t.cost.toFixed(4)) })),
           openDecisions: d.decisions.filter((x) => !x.answer).map((x) => ({ decision_id: x.id, thread: x.thread ? p.state.threads[x.thread]?.title : 'coordinator', question: x.question, options: x.options.map((o, i) => `${i}: ${o.label}${i === x.recommended ? ' (recommended)' : ''}${o.consequence ? ` - ${o.consequence}` : ''}`), irreversible: !!x.irreversible })),
+          openSuggestions: (d.suggestions || []).filter((x) => !x.answer).map((x) => ({ suggestion_id: x.id, title: x.title, reason: x.reason })),
           chat,
           usageUsd: Number(d.usage.total.toFixed(4)),
+          budgetUsd: d.settings.policy.budgetUsd || null,
         };
       }
       case 'project_send': {
@@ -394,6 +408,16 @@ export function createDesktopMcp({ store, resolveDir, createWorktree, getChanges
         if (!text) throw new Error('message is required');
         p.append({ type: 'session.message', from: { kind: 'desktop' }, trust: 'relay', thread: tid, body: { to: tid, text } });
         return { ok: true, status: p.threadSummary(p.state.threads[tid]).statusLabel };
+      }
+      case 'project_answer_suggestion': {
+        const p = proj(a.project_id);
+        const r = await engine.answerSuggestion(p, String(a.suggestion_id || ''), String(a.action || ''), { by: 'desktop' });
+        return { ok: true, ...r };
+      }
+      case 'project_move_chat': {
+        const p = proj(a.project_id);
+        const s = await engine.adoptChat(p, String(a.session_id || ''), { by: 'desktop' });
+        return { ok: true, thread: p.threadSummary(p.state.threads[s.id]).statusLabel, thread_id: s.id };
       }
       case 'project_answer_decision': {
         const p = proj(a.project_id);
@@ -534,7 +558,7 @@ export function createDesktopMcp({ store, resolveDir, createWorktree, getChanges
             capabilities: { tools: {} },
             serverInfo: { name: 'claude-ui', version: '1.0.0' },
             instructions:
-              "Connects to Claude Code running in the user's own web UI on their computer. Projects (a coordinator that runs parallel threads): projects_list, project_status, project_send, project_thread, project_message_thread, project_answer_decision, project_create, project_update. Use it to hand work off there (handoff), check what a chat did (list_sessions, get_session), continue or manage a chat (send_message, stop_session, rename_session, archive_session, set_session_options), and share notes both ways (list_notes, read_note, write_note).",
+              "Connects to Claude Code running in the user's own web UI on their computer. Projects (a coordinator that runs parallel threads): projects_list, project_status, project_send, project_thread, project_message_thread, project_answer_decision, project_answer_suggestion, project_move_chat, project_create, project_update. Use it to hand work off there (handoff), check what a chat did (list_sessions, get_session), continue or manage a chat (send_message, stop_session, rename_session, archive_session, set_session_options), and share notes both ways (list_notes, read_note, write_note).",
           });
         }
         case 'ping':

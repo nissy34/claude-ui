@@ -81,6 +81,26 @@ export function mountProjectRoutes(app, { engine, store, resolveDir, wrap }) {
     })
   );
 
+  // Start or dismiss a thread the coordinator suggested.
+  app.post(
+    '/api/cprojects/:id/suggestions/:sid',
+    wrap(async (req, res) => {
+      const p = project(req);
+      const r = await engine.answerSuggestion(p, req.params.sid, String(req.body?.action || ''));
+      res.json({ ...r, thread: r.thread ? p.threadSummary(p.state.threads[r.thread]) : null });
+    })
+  );
+
+  // Move an existing regular chat into the project as a thread.
+  app.post(
+    '/api/cprojects/:id/adopt',
+    wrap(async (req, res) => {
+      const p = project(req);
+      const s = await engine.adoptChat(p, String(req.body?.session || ''));
+      res.json({ thread: p.threadSummary(p.state.threads[s.id]) });
+    })
+  );
+
   // A thread the user starts by hand (from the Overview), like the coordinator's start_thread.
   app.post(
     '/api/cprojects/:id/threads',
@@ -127,6 +147,10 @@ export function mountProjectRoutes(app, { engine, store, resolveDir, wrap }) {
           const s = store.get(tid);
           if (s) await s.resume();
           break;
+        }
+        case 'side': {
+          const s = await engine.sideThread(p, tid, req.body?.question);
+          return res.json({ thread: p.threadSummary(p.state.threads[s.id]) });
         }
         case 'fork': {
           const t = p.state.threads[tid];

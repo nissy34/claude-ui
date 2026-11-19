@@ -56,6 +56,7 @@ export const DEFAULT_SETTINGS = {
     worktrees: true,
     checkInMinutes: 30,
     rotateTokens: 60_000,
+    budgetUsd: 0, // pause new turns once the project has cost this much (0 = no budget)
     quietHours: null, // { from: '23:00', to: '07:00' } holds browser notifications
     askRules: ['Bash(git push --force:*)', 'Bash(git push -f:*)', 'Bash(git push origin main:*)', 'Bash(git push origin master:*)', 'Bash(gh pr merge:*)', 'Bash(rm -rf /:*)'],
   },
@@ -124,6 +125,7 @@ export function cleanSettings(s) {
   p.worktrees = p.worktrees !== false;
   p.checkInMinutes = Math.min(Math.max(parseInt(p.checkInMinutes, 10) || 30, 5), 24 * 60);
   p.rotateTokens = Math.min(Math.max(parseInt(p.rotateTokens, 10) || 60_000, 20_000), 500_000);
+  p.budgetUsd = Math.max(Math.round((Number(p.budgetUsd) || 0) * 10_000) / 10_000, 0);
   p.askRules = (Array.isArray(p.askRules) ? p.askRules : []).map((r) => String(r).trim()).filter(Boolean).slice(0, 50);
   if (p.quietHours && !(/^\d\d:\d\d$/.test(p.quietHours.from) && /^\d\d:\d\d$/.test(p.quietHours.to))) p.quietHours = null;
   return out;
@@ -145,6 +147,8 @@ function initialState() {
     lastCoordinatorTurn: 0,
     coordinatorFresh: true, // next coordinator wake starts with a digest
     limit: null, // { until } while the account's usage limit is hit
+    suggestions: {}, // id -> { id, title, brief, reason, ts, answer }
+    budgetHit: 0, // the budget (USD) that last paused the project
   };
 }
 
@@ -184,6 +188,8 @@ export function reduce(st, ev) {
         effort: ev.body.effort || null,
         dependsOn: ev.body.dependsOn || [],
         forkedFrom: ev.body.forkedFrom || null,
+        sideOf: ev.body.sideOf || null,
+        adopted: !!ev.body.adopted,
         checklist: null,
         lastPost: null,
         progressPosts: 0,
@@ -320,6 +326,17 @@ export function reduce(st, ev) {
     case 'limit.reset':
       st.limit = null;
       break;
+    case 'thread.suggested':
+      (st.suggestions ||= {})[ev.body.id] = { id: ev.body.id, title: ev.body.title, brief: ev.body.brief, reason: ev.body.reason || '', ts: ev.ts, answer: null };
+      break;
+    case 'suggestion.answered': {
+      const sg = st.suggestions?.[ev.body.id];
+      if (sg) sg.answer = { action: ev.body.action, thread: ev.body.thread || null, ts: ev.ts, by: ev.from?.kind || 'user' };
+      break;
+    }
+    case 'budget.reached':
+      st.budgetHit = ev.body.budget;
+      break;
   }
   return st;
 }
@@ -455,6 +472,7 @@ export class Project {
       case 'thread.started':
         return [{ s: ev.thread }];
       case 'thread.post':
+        if (this.state.threads[ev.thread]?.sideOf) return []; // a side question: the answer is for the user, in its own thread
         if (ev.body.kind === 'progress') return pro === 'chatty' ? coord({ batch: true }) : [];
         if (ev.body.kind === 'result') return pro === 'quiet' ? [] : coord({ batch: true });
         return coord({ batch: true }); // blocker, question
@@ -462,7 +480,12 @@ export class Project {
         if (ev.body.to === c) return coord({ batch: ev.from?.kind === 'thread' && !ev.body.urgent });
         return [{ s: ev.body.to }];
       case 'thread.resolved':
-        return ev.from?.kind === 'thread' && pro !== 'quiet' ? coord({ batch: true }) : [];
+        return ev.from?.kind === 'thread' && pro !== 'quiet' && !this.state.threads[ev.thread]?.sideOf ? coord({ batch: true }) : [];
+      case 'thread.suggested':
+      case 'budget.reached':
+        return [];
+      case 'suggestion.answered':
+        return ev.body.action === 'dismiss' ? coord({ batch: true }) : []; // a start shows up as the new thread
       case 'session.error':
         return ev.body.final && ev.body.session !== c ? coord() : [];
       case 'reminder.due':
@@ -485,9 +508,18 @@ export class Project {
   }
 
   afterEvent(ev) {
+    if (ev.type === 'turn.ended') this.checkBudget();
     if (ev.type === 'thread.resolved') setTimeout(() => this.engine.cleanupWorktree(this, ev.thread).catch((e) => console.warn('worktree cleanup:', e.message)), 2000).unref?.();
     // Follow-ups: the coordinator asked to hear when these threads change state.
     if (['turn.ended', 'thread.post', 'thread.resolved', 'decision.requested', 'session.error'].includes(ev.type)) this.checkFollowUps();
+  }
+
+  /** Over the budget: pause once per budget value (a message from the user, or Resume, continues). */
+  checkBudget() {
+    const budget = this.settings.policy.budgetUsd;
+    if (!budget || this.state.cost < budget || this.state.budgetHit === budget) return;
+    this.append({ type: 'budget.reached', body: { budget, total: Math.round(this.state.cost * 100) / 100 } });
+    if (!this.state.paused) this.append({ type: 'project.paused', body: { reason: `Paused: the project reached its $${budget.toFixed(2)} budget ($${this.state.cost.toFixed(2)} used). Send a message or press Resume to continue, or raise the budget in Settings.` } });
   }
 
   checkFollowUps() {
@@ -711,6 +743,7 @@ export class Project {
       case 'user.message':
         return b.text;
       case 'thread.started':
+        if (b.adopted && sid !== e.thread) return `The user moved an existing chat into the project as thread "${b.title}" (thread_id ${e.thread}${b.branch ? `, branch ${b.branch}` : ''}). Read it with read_thread if you need its history.`;
         return `You are thread "${b.title}" (thread_id ${e.thread}). Your brief:\n\n${b.brief}`;
       case 'session.message':
         return b.text;
@@ -745,6 +778,10 @@ export class Project {
         return `Thread "${this.state.threads[e.thread]?.title}" resolved itself. Last post: ${this.state.threads[e.thread]?.lastPost?.text || '(none)'}`;
       case 'pr.updated':
         return `${b.summary || 'Your pull request changed.'}${b.pr?.url ? ` ${b.pr.url}` : ''}`;
+      case 'suggestion.answered': {
+        const sg = this.state.suggestions?.[b.id];
+        return `The user dismissed your suggested thread "${sg?.title || b.id}". Don't start it.`;
+      }
       default:
         return JSON.stringify(b);
     }
@@ -763,6 +800,11 @@ export class Project {
     if (open.length) {
       lines.push('\nOpen decision cards:');
       for (const d of open) lines.push(`- ${d.id} ${d.thread ? `(thread ${this.state.threads[d.thread]?.title})` : '(yours)'}: ${d.question}`);
+    }
+    const sugg = Object.values(this.state.suggestions || {}).filter((x) => !x.answer);
+    if (sugg.length) {
+      lines.push('\nThreads you suggested that the user has not started or dismissed yet:');
+      for (const x of sugg) lines.push(`- ${x.id}: ${x.title}`);
     }
     const fu = Object.values(this.state.followUps);
     if (fu.length) {
@@ -931,6 +973,8 @@ export class Project {
       queuedWakes: (this.state.queue[t.id] || []).length,
       stuck: this.isStuck(t, s),
       forkedFrom: t.forkedFrom,
+      sideOf: t.sideOf || null,
+      adopted: !!t.adopted,
     };
   }
 
@@ -955,7 +999,7 @@ export class Project {
       lastActivity: this.events[this.events.length - 1]?.ts || this.settings.createdAt,
       counts,
       threadCount: threads.length,
-      attention: (counts.waiting || 0) + (counts.review || 0) + (coordinatorDecisions(this.state) ? 1 : 0),
+      attention: (counts.waiting || 0) + (counts.review || 0) + (coordinatorDecisions(this.state) ? 1 : 0) + (this.state.paused ? 1 : 0),
       openDecisions,
       coordinatorBusy: !!coord && coord.turns > 0,
       paused: this.state.paused,
@@ -964,7 +1008,7 @@ export class Project {
   }
 
   detail({ limit = 300 } = {}) {
-    const chatTypes = new Set(['user.message', 'chat.post', 'thread.started', 'decision.requested', 'decision.answered', 'decision.withdrawn', 'thread.resolved', 'project.paused', 'project.resumed', 'limit.hit', 'limit.reset', 'policy.changed', 'notice', 'coordinator.rotated', 'thread.post', 'pr.updated', 'notice']);
+    const chatTypes = new Set(['user.message', 'chat.post', 'thread.started', 'decision.requested', 'decision.answered', 'decision.withdrawn', 'thread.resolved', 'project.paused', 'project.resumed', 'limit.hit', 'limit.reset', 'policy.changed', 'notice', 'coordinator.rotated', 'thread.post', 'pr.updated', 'thread.suggested', 'suggestion.answered', 'budget.reached']);
     const feed = this.events.filter((e) => chatTypes.has(e.type) && (e.type !== 'user.message' || e.body.where === 'chat') && (e.type !== 'thread.post' || e.body.kind !== 'progress')).slice(-limit);
     const coord = this.session(this.state.coordinator);
     return {
@@ -974,6 +1018,7 @@ export class Project {
       coordinator: coord ? { id: coord.id, busy: coord.turns > 0, live: coord.running, contextTokens: coord.meta.contextTokens || 0, model: coord.meta.model, effort: coord.meta.effort, queued: (this.state.queue[coord.id] || []).length } : null,
       threads: Object.values(this.state.threads).map((t) => this.threadSummary(t)),
       decisions: Object.values(this.state.decisions).sort((a, b) => a.ts - b.ts),
+      suggestions: Object.values(this.state.suggestions || {}).sort((a, b) => a.ts - b.ts),
       followUps: Object.values(this.state.followUps),
       reactions: this.state.reactions,
       feed,
@@ -1181,7 +1226,7 @@ export class ProjectEngine {
   }
 
   // ------------------------------------------------------------------ threads
-  async startThread(p, { title, brief, cites = [], model, effort, dependsOn = [], startedBy = 'coordinator', forkFrom } = {}) {
+  async startThread(p, { title, brief, cites = [], model, effort, dependsOn = [], startedBy = 'coordinator', forkFrom, sideOf } = {}) {
     title = clipText(String(title || '').trim().split('\n')[0], 80);
     brief = String(brief || '').trim();
     if (!title) throw new Error('title is required');
@@ -1189,7 +1234,9 @@ export class ProjectEngine {
     const folder = p.settings.folders[0]?.path;
     let cwd = folder && fs.existsSync(folder) ? folder : null;
     let wt = null;
-    if (cwd && p.settings.policy.worktrees && (await isGitRepo(cwd))) {
+    const parent = sideOf ? this.store.get(sideOf) : null;
+    if (parent && fs.existsSync(parent.meta.cwd)) cwd = parent.meta.cwd; // a side question looks at the parent's own worktree
+    else if (cwd && p.settings.policy.worktrees && (await isGitRepo(cwd))) {
       wt = await createWorktree(cwd, title);
       cwd = wt.path;
     }
@@ -1220,8 +1267,53 @@ export class ProjectEngine {
       from: by,
       trust: by.kind === 'user' ? 'principal' : 'relay',
       cites: valid,
-      body: { title, brief: brief || `Continue the work from the forked thread "${src?.meta.name}".`, branch: wt?.branch || null, cwd, model: s.meta.model, effort: s.meta.effort, dependsOn: deps, forkedFrom: forkFrom || null },
+      body: { title, brief: brief || `Continue the work from the forked thread "${src?.meta.name}".`, branch: wt?.branch || null, cwd, model: s.meta.model, effort: s.meta.effort, dependsOn: deps, forkedFrom: forkFrom || null, sideOf: sideOf || null },
       ...(src && !brief ? { to: [] } : {}),
+    });
+    return s;
+  }
+
+  /** A side question (/btw): a fork of a thread, in its worktree, that answers the user without waking the coordinator. */
+  async sideThread(p, tid, question) {
+    const t = p.state.threads[tid];
+    if (!t) throw new Error('No such thread');
+    question = String(question || '').trim();
+    if (!question) throw new Error('question is required');
+    const brief = `Side question from the user, asked from the thread "${t.title}". You start from that thread's conversation and look at its working folder. Answer the question; do not edit files, commit or push unless the question asks for it, because the main thread owns this worktree. Post your answer with post_message(kind "result"), then resolve.\n\nQuestion: ${question}`;
+    return this.startThread(p, { title: clipText(`Side: ${question.split('\n')[0]}`, 80), brief, forkFrom: tid, sideOf: tid, startedBy: 'user' });
+  }
+
+  /** Start or dismiss a thread the coordinator suggested. */
+  async answerSuggestion(p, id, action, { by = 'user' } = {}) {
+    const sg = p.state.suggestions?.[id];
+    if (!sg) throw new Error('No such suggestion');
+    if (sg.answer) throw new Error(`That suggestion was already ${sg.answer.action === 'start' ? 'started' : 'dismissed'}`);
+    if (action !== 'start' && action !== 'dismiss') throw new Error('action must be start or dismiss');
+    let thread = null;
+    if (action === 'start') thread = (await this.startThread(p, { title: sg.title, brief: sg.brief, startedBy: by })).id;
+    p.append({ type: 'suggestion.answered', from: { kind: by }, trust: by === 'user' ? 'principal' : 'relay', body: { id, action, thread } });
+    return { action, thread };
+  }
+
+  /** Move an existing regular chat into a project as a thread. It keeps its folder, branch and history. */
+  async adoptChat(p, sid, { by = 'user' } = {}) {
+    const s = this.store.get(sid);
+    if (!s || s.meta.kind !== 'chat') throw new Error('No such chat');
+    if (s.meta.cproject) throw new Error(s.meta.cproject === p.id ? 'That chat is already in this project' : 'That chat already belongs to another project');
+    if (s.isBusy()) throw new Error('Wait for the chat to finish its turn (or stop it) before moving it');
+    // Its next turn must start with the project's prompt, tools and MCP server.
+    if (s.proc) await s.stopAndWait();
+    const title = clipText(String(s.meta.name || 'Moved chat').trim().split('\n')[0], 80);
+    Object.assign(s.meta, { cproject: p.id, role: 'thread', customName: true, hidden: true, project: s.meta.project || s.meta.cwd });
+    this.store.save();
+    const c = p.state.coordinator;
+    p.append({
+      type: 'thread.started',
+      thread: s.id,
+      from: { kind: by },
+      trust: by === 'user' ? 'principal' : 'relay',
+      body: { title, brief: `Moved into the project from a regular chat ("${title}"). Its earlier conversation is its own history.`, branch: s.meta.worktree?.branch || null, cwd: s.meta.cwd, model: s.meta.model, effort: s.meta.effort, dependsOn: [], forkedFrom: null, adopted: true },
+      to: c ? [{ s: c, batch: true }] : [],
     });
     return s;
   }
@@ -1448,6 +1540,14 @@ export class ProjectEngine {
         const capFull = p.runningThreadTurns() >= p.settings.policy.maxRunning && p.statusOf(tt.id) === 'queued';
         return { ok: true, thread_id: tt.id, status: capFull ? STATUS_LABEL.queued : STATUS_LABEL.working, branch: tt.meta.worktree?.branch || null, note: capFull ? `Queued: ${p.settings.policy.maxRunning} thread turns are already running (the cap). It starts when a slot frees up.` : 'Started. Its results, blockers and questions reach you as events; no need to poll.' };
       }
+      case 'suggest_thread': {
+        const title = clipText(String(a.title || '').trim().split('\n')[0], 80);
+        const brief = String(a.brief || '').trim();
+        if (!title || !brief) throw new Error('title and brief are required');
+        const id = newId('sg');
+        p.append({ type: 'thread.suggested', from: me, trust: 'relay', body: { id, title, brief: clipText(brief, 20_000), reason: clipText(String(a.reason || ''), 500) } });
+        return { ok: true, suggestion_id: id, note: 'Shown to the user as a card with Start and Dismiss. If they start it, the thread appears in your thread table; a dismissal reaches you as an event.' };
+      }
       case 'message_thread': {
         const to = threadArg(a.thread_id ?? a.id);
         if (!isCoord) {
@@ -1532,8 +1632,8 @@ export class ProjectEngine {
   }
 }
 
-const MUTATING = new Set(['start_thread', 'message_thread', 'message_coordinator', 'post_message', 'request_decision', 'follow_up']);
-export const COORDINATOR_TOOLS = ['post_message', 'start_thread', 'message_thread', 'list_threads', 'read_thread', 'stop_thread', 'resolve_thread', 'request_decision', 'react', 'follow_up', 'set_policy', 'set_reminder', 'memory_list', 'memory_read', 'memory_write', 'memory_delete'];
+const MUTATING = new Set(['suggest_thread', 'start_thread', 'message_thread', 'message_coordinator', 'post_message', 'request_decision', 'follow_up']);
+export const COORDINATOR_TOOLS = ['post_message', 'start_thread', 'suggest_thread', 'message_thread', 'list_threads', 'read_thread', 'stop_thread', 'resolve_thread', 'request_decision', 'react', 'follow_up', 'set_policy', 'set_reminder', 'memory_list', 'memory_read', 'memory_write', 'memory_delete'];
 export const THREAD_TOOLS = ['post_message', 'update_checklist', 'request_decision', 'message_coordinator', 'message_thread', 'react', 'set_reminder', 'resolve', 'list_threads', 'memory_list', 'memory_read', 'memory_write', 'memory_delete'];
 
 function parseSteps(a) {

@@ -1,7 +1,8 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { api, timeAgo } from '../api.js';
 import { Button, IconButton, Input, Modal, ModalBody, ModalFoot, ModalHead, Pill, Segmented, Spinner, Textarea } from '../ui/index.jsx';
-import { DecisionCard, Md, StatusPill, ThreadCard } from './ProjectCards.jsx';
+import { DecisionCard, Md, StatusPill, SuggestionCard, ThreadCard } from './ProjectCards.jsx';
+import { promptDialog } from '../ui/dialogs.jsx';
 import ProjectSettings from './ProjectSettings.jsx';
 import { ProjectLibrary, ProjectMemory } from './ProjectFiles.jsx';
 import { STATUS_LABEL, STATUS_ORDER, useProject } from './useProject.js';
@@ -205,6 +206,14 @@ function FeedItem({ e, project, threads, decisions, onSelect, onError }) {
           <ThreadCard projectId={project.id} thread={threads[e.thread]} onOpen={onSelect} onError={onError} actions={false} />
         </div>
       );
+    case 'thread.suggested': {
+      const sg = project.suggestions?.find((x) => x.id === b.id);
+      return <SuggestionCard projectId={project.id} suggestion={sg} threadTitle={sg?.answer?.thread ? threads[sg.answer.thread]?.title : ''} onError={onError} onOpenThread={onSelect} />;
+    }
+    case 'suggestion.answered':
+      return null;
+    case 'budget.reached':
+      return <div className="pj-notice warn">Budget reached: ${Number(b.total).toFixed(2)} of ${Number(b.budget).toFixed(2)}</div>;
     case 'decision.requested':
       return <DecisionCard projectId={project.id} decision={decisions[b.id]} threadTitle={threads[e.thread]?.title} onError={onError} onOpenThread={onSelect} />;
     case 'thread.post':
@@ -409,6 +418,18 @@ export function ThreadBar({ session, onSelect, onError, view = 'log', setView })
           </button>
         )}
         <span className="spacer" />
+        <Button size="sm" variant="ghost" title="Ask a quick question in a side thread that starts from this conversation, without interrupting it" onClick={async () => {
+            const q = await promptDialog('Side question', '', { ok: 'Ask', placeholder: 'What do you want to know?' });
+            if (!q?.trim()) return;
+            try {
+              const r = await api(`/api/cprojects/${project.id}/threads/${t.id}/side`, { method: 'POST', body: { question: q } });
+              onSelect?.(r.thread.id);
+            } catch (e) {
+              onError(e);
+            }
+          }}>
+          Side question
+        </Button>
         {setView && (
           <Segmented
             value={view}
@@ -553,5 +574,61 @@ export function ThreadConversation({ session, onSelect, onError }) {
         })}
       </div>
     </div>
+  );
+}
+
+// ---------------------------------------------------------------- move a regular chat into a project
+export function MoveToProjectDialog({ session, onClose, onError, onMoved }) {
+  const [list, setList] = useState(null);
+  const [pick, setPick] = useState('');
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    api('/api/cprojects')
+      .then((r) => {
+        const open = r.projects.filter((p) => !p.archived);
+        setList(open);
+        setPick(open[0]?.id || '');
+      })
+      .catch(onError);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const move = async (e) => {
+    e.preventDefault();
+    setBusy(true);
+    try {
+      await api(`/api/cprojects/${pick}/adopt`, { method: 'POST', body: { session: session.id } });
+      onMoved?.(pick);
+    } catch (err) {
+      onError(err);
+    }
+    setBusy(false);
+  };
+  return (
+    <Modal as="form" onSubmit={move} onClose={onClose}>
+      <ModalHead title="Move into a project" onClose={onClose} />
+      <ModalBody className="fields">
+        {!list ? (
+          <Spinner />
+        ) : list.length === 0 ? (
+          <div className="muted">No projects yet. Create one from the sidebar first.</div>
+        ) : (
+          <>
+            <div className="muted small">"{session.name}" becomes a thread of the project. It keeps its folder, branch and history, and the project's coordinator is told about it.</div>
+            {list.map((p) => (
+              <label key={p.id} className="pj-move-row">
+                <input type="radio" name="pj-move" checked={pick === p.id} onChange={() => setPick(p.id)} /> <b>{p.name}</b> {p.goal && <span className="muted small">{p.goal}</span>}
+              </label>
+            ))}
+          </>
+        )}
+      </ModalBody>
+      <ModalFoot>
+        <Button type="button" variant="ghost" onClick={onClose}>
+          Cancel
+        </Button>
+        <Button variant="primary" disabled={!pick || busy}>
+          Move
+        </Button>
+      </ModalFoot>
+    </Modal>
   );
 }

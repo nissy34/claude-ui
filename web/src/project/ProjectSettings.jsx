@@ -105,6 +105,10 @@ function SettingsFields({ s, set, projects, full }) {
           <Input type="number" min={1} max={20} value={p.maxRunning} onChange={(e) => setP({ maxRunning: e.target.value })} />
         </label>
         <label>
+          Budget, USD <span className="muted small">(pauses at this total; 0 = none)</span>
+          <Input type="number" min={0} step={1} value={p.budgetUsd || 0} onChange={(e) => setP({ budgetUsd: e.target.value })} />
+        </label>
+        <label>
           Thread permission mode
           <Select value={p.threadPermissionMode} onChange={(e) => setP({ threadPermissionMode: e.target.value })}>
             {MODES.map(([v, l]) => (
@@ -176,7 +180,7 @@ const DEFAULTS = {
   instructions: '',
   folders: [{ path: '' }],
   models: { coordinator: { model: 'sonnet', effort: 'low' }, thread: { model: 'opus', effort: 'high' } },
-  policy: { maxRunning: 3, proactivity: 'normal', threadPermissionMode: 'auto', worktrees: true, checkInMinutes: 30, rotateTokens: 60000, quietHours: null, askRules: [] },
+  policy: { maxRunning: 3, budgetUsd: 0, proactivity: 'normal', threadPermissionMode: 'auto', worktrees: true, checkInMinutes: 30, rotateTokens: 60000, quietHours: null, askRules: [] },
 };
 
 const clean = (s) => ({ ...s, folders: s.folders.filter((f) => f.path.trim()), policy: { ...s.policy, askRules: (s.policy.askRules || []).map((r) => r.trim()).filter(Boolean) } });
@@ -254,7 +258,8 @@ export default function ProjectSettings({ project, onSelect, onError, reload, on
           <div className="pj-model-label">Usage</div>
           <div className="pj-usage">
             <div>
-              Total <b>${project.usage.total.toFixed(2)}</b> · coordinator ${project.usage.coordinator.toFixed(2)}
+              Total <b>${project.usage.total.toFixed(2)}</b>
+              {project.settings.policy.budgetUsd > 0 && <> of ${project.settings.policy.budgetUsd.toFixed(2)} budget</>} · coordinator ${project.usage.coordinator.toFixed(2)}
               {project.coordinator && <> · coordinator context {Math.round(project.coordinator.contextTokens / 1000)}k tokens</>}
             </div>
             {byCost.slice(0, 12).map((t) => (

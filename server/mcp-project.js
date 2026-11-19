@@ -70,6 +70,19 @@ const COORDINATOR = [
       required: ['title', 'brief'],
     },
   },
+  {
+    name: 'suggest_thread',
+    description: 'Suggest a thread instead of starting it: the user sees a card with Start and Dismiss. Use it for optional or speculative work you noticed (a follow-up cleanup, a test gap, a risky refactor) that the user did not ask for. Work the user asked for gets start_thread.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        title: { type: 'string', description: 'Goal-first title, 3 to 6 words.' },
+        brief: { type: 'string', description: 'The self-contained brief the thread would get.' },
+        reason: { type: 'string', description: 'One line on why it is worth doing, shown on the card.' },
+      },
+      required: ['title', 'brief'],
+    },
+  },
   { name: 'message_thread', description: 'Send a message to an existing thread (more work in its area, an answer, a correction). Delivered when the thread is idle; reopens a resolved thread.', inputSchema: { type: 'object', properties: { thread_id: { type: 'string' }, text: { type: 'string' }, cite_ids: cite }, required: ['thread_id', 'text'] } },
   listThreads,
   { name: 'read_thread', description: "Read a thread's transcript (its messages and replies, tools left out). Only when its posts don't tell you enough.", inputSchema: { type: 'object', properties: { thread_id: { type: 'string' }, max_chars: { type: 'number' } }, required: ['thread_id'] } },

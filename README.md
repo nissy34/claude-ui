@@ -179,6 +179,10 @@ A **Project** is one conversation with a coordinator that hands work to parallel
 - **Project chat**: you talk to the coordinator. It answers quick questions itself (it can read the code but has no shell or edit tools) and starts threads for real work. Thread cards and decision cards show up inline, with live status.
 - **Threads** are ordinary chats in their own git worktree and branch, started with a brief and the exact words you wrote (cited, not paraphrased). Open one to talk to it directly, answer its permission prompts, or watch it work. A checklist and decision cards sit above its chat.
 - **Overview** groups threads by status: Waiting on you, Ready for review, Working, Queued, Landing, Snoozed, Idle, Resolved. Stop, resolve, snooze or fork a thread from its card.
+- **Suggested threads**: work you didn't ask for but may want (a missing test, a cleanup) arrives as a card with Start and Dismiss instead of a thread.
+- **Side question** (in a thread's bar) forks the thread into a side thread that looks at the same worktree and answers you there, without interrupting the thread or waking the coordinator.
+- **Move into a project…** (a regular chat's ⋯ menu) turns an existing chat into a thread of a project, keeping its folder, branch and history.
+- **Budget** (project Settings): the project pauses once it has cost that much; a message from you or Resume continues.
 - **Models per role**: coordinator default Sonnet at low effort, threads Opus at high effort. Change them in the project's Settings; the coordinator can pick a cheaper model per thread for small jobs.
 
 How it works (server/cprojects.js): code, not a model, owns the project. Every input becomes an event in an append-only log (`~/.claude-web/cprojects/<id>/events.jsonl`); a reducer derives statuses; a router decides which session to wake; the engine delivers queued events to an idle session as one labelled envelope per turn and marks it delivered when the CLI echoes it. So:
@@ -190,7 +194,7 @@ How it works (server/cprojects.js): code, not a model, owns the project. Every i
 - Restarts replay the log: queued wakes are delivered, wakes in flight are re-sent unless the transcript shows them, and turns cut off get a "check what was already done" wake. A session woken more than 20 times in 10 minutes pauses the project.
 - Project memory (`memory/`, one file per subject, versioned writes, generated MEMORY.md) and a shared library folder are given to every session.
 
-The handoff MCP has project tools too: `projects_list`, `project_status`, `project_send`, `project_thread`, `project_message_thread`, `project_answer_decision`, `project_create`, `project_update`.
+The handoff MCP has project tools too: `projects_list`, `project_status`, `project_send`, `project_thread`, `project_message_thread`, `project_answer_decision`, `project_answer_suggestion`, `project_move_chat`, `project_create`, `project_update`.
 
 Tests: `node scripts/test-projects.mjs` runs the engine end to end against a scripted fake CLI (`scripts/fake-claude.mjs`).
 

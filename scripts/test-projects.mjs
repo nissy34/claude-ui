@@ -226,6 +226,53 @@ async function main() {
   const got = await until(() => fs.readFileSync(env.FAKE_CLAUDE_LOG, 'utf8').includes('Your last turn was interrupted'), 10_000, 'interrupted wake').catch(() => false);
   check(got, 'interrupted thread got the "check before repeating" wake');
 
+  console.log('Suggested threads, side questions, moving a chat in, budget');
+  const { project: q } = await api('/api/cprojects', { method: 'POST', body: { name: 'Extras', folders: [repo], policy: { maxRunning: 3 } } });
+  const sugBrief = call('post_message', { kind: 'result', text: 'suggested done' });
+  await api(`/api/cprojects/${q.id}/messages`, { method: 'POST', body: { text: [call('suggest_thread', { title: 'Suggested one', brief: sugBrief, reason: 'worth it' }), call('suggest_thread', { title: 'Suggested two', brief: 'never' }), call('post_message', { text: 'suggested two' })].join('\n') } });
+  let qd = await until(async () => {
+    const d = await detail(q.id);
+    return d.suggestions?.length === 2 && d;
+  }, 10_000, 'two suggestions');
+  check(qd.threads.length === 0 && qd.feed.filter((e) => e.type === 'thread.suggested').length === 2, 'suggest_thread shows cards and starts nothing', qd.suggestions);
+  const s1 = qd.suggestions.find((x) => x.title === 'Suggested one');
+  const s2 = qd.suggestions.find((x) => x.title === 'Suggested two');
+  const started = await api(`/api/cprojects/${q.id}/suggestions/${s1.id}`, { method: 'POST', body: { action: 'start' } });
+  check(started.thread?.title === 'Suggested one', 'Start turns a suggestion into a thread', started);
+  const again2 = await api(`/api/cprojects/${q.id}/suggestions/${s1.id}`, { method: 'POST', body: { action: 'start' }, allowError: true });
+  check(/already started/.test(again2.error || ''), 'a suggestion starts only once', again2);
+  await api(`/api/cprojects/${q.id}/suggestions/${s2.id}`, { method: 'POST', body: { action: 'dismiss' } });
+  await until(() => fs.readFileSync(env.FAKE_CLAUDE_LOG, 'utf8').includes('dismissed your suggested thread'), 8000, 'dismissal reaches the coordinator');
+  check(true, 'a dismissal reaches the coordinator');
+  const T1 = await until(async () => {
+    const d = await detail(q.id);
+    const t = d.threads.find((x) => x.id === started.thread.id);
+    return t?.lastPost?.text === 'suggested done' && t;
+  }, 10_000, 'suggested thread ran');
+  const side = await api(`/api/cprojects/${q.id}/threads/${T1.id}/side`, { method: 'POST', body: { question: `what is up?\n${call('post_message', { kind: 'result', text: 'side answer' })}` } });
+  check(side.thread?.sideOf === T1.id && side.thread.cwd === T1.cwd, 'a side question forks the thread and uses its worktree', side.thread);
+  qd = await until(async () => {
+    const d = await detail(q.id);
+    return d.threads.find((x) => x.id === side.thread.id)?.lastPost?.text === 'side answer' && d;
+  }, 10_000, 'side answer');
+  const sidePost = qd.feed.find((e) => e.type === 'thread.post' && e.thread === side.thread.id);
+  check(sidePost && !(sidePost.to || []).length, "a side thread's answer does not wake the coordinator", sidePost);
+  const plain = (await api('/api/sessions', { method: 'POST', body: { cwd: repo, kind: 'chat', name: 'Old chat' } })).session;
+  const adopted = await api(`/api/cprojects/${q.id}/adopt`, { method: 'POST', body: { session: plain.id } });
+  check(adopted.thread?.adopted && adopted.thread.title === 'Old chat', 'an existing chat moves into the project as a thread', adopted);
+  const plainNow = (await api('/api/sessions')).sessions.find((x) => x.id === plain.id);
+  check(plainNow.cproject === q.id && plainNow.role === 'thread', 'the moved chat is now a project thread', plainNow);
+  const twice = await api(`/api/cprojects/${q.id}/adopt`, { method: 'POST', body: { session: plain.id }, allowError: true });
+  check(/already in this project/.test(twice.error || ''), 'a chat moves in only once', twice);
+  const spent = (await detail(q.id)).usage.total;
+  await api(`/api/cprojects/${q.id}`, { method: 'PATCH', body: { policy: { budgetUsd: Math.round((spent + 0.0005) * 10_000) / 10_000 } } });
+  await api(`/api/cprojects/${q.id}/messages`, { method: 'POST', body: { text: 'one more' } });
+  qd = await until(async () => {
+    const d = await detail(q.id);
+    return d.paused && d;
+  }, 10_000, 'budget pause');
+  check(/budget/.test(qd.paused.reason) && qd.feed.some((e) => e.type === 'budget.reached'), 'reaching the budget pauses the project', qd.paused);
+
   await stop();
   console.log(`\n${passes} passed, ${failures} failed`);
   if (!process.env.KEEP) fs.rmSync(tmp, { recursive: true, force: true });

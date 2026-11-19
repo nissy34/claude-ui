@@ -138,4 +138,8 @@
 .pj-overview-bar .spacer { flex: 1; }
 @media (max-width: 860px) { .pj-tabs button { padding: 5px var(--sp-2); } .pj-memrow .pj-memdesc { display: none; } }
 .messages.is-hidden { display: none; }
+.pj-suggestion { border-color: var(--blue); border-style: dashed; }
+.pj-suggestion.answered { border-color: var(--line); }
+.pj-suggestion-actions { display: flex; gap: var(--sp-2); align-items: center; }
+.pj-move-row { display: flex; gap: var(--sp-2); align-items: baseline; padding: var(--sp-1) 0; cursor: pointer; }
 .pj-threadbar .seg button { padding: 3px var(--sp-2h); font-size: var(--fs-sm); }

@@ -11,7 +11,7 @@ import ArtifactsGallery from './ArtifactsGallery.jsx';
 import SigninWindow from './SigninWindow.jsx';
 import { setBrowserAvailable } from './chat/McpAuth.jsx';
 import Scheduled from './Scheduled.jsx';
-import ProjectView, { ThreadBar, ThreadConversation } from './project/ProjectView.jsx';
+import ProjectView, { MoveToProjectDialog, ThreadBar, ThreadConversation } from './project/ProjectView.jsx';
 import { NewProjectDialog } from './project/ProjectSettings.jsx';
 
 function readHash() {
@@ -259,6 +259,7 @@ export default function App() {
             onSettings={(tab) => setDialog({ type: 'settings', tab })}
             projectBar={active.cproject ? ({ view, setView }) => <ThreadBar session={active} onSelect={select} onError={showError} view={view} setView={active.role === 'thread' ? setView : null} /> : null}
             projectConversation={active.cproject && active.role === 'thread' ? <ThreadConversation session={active} onSelect={select} onError={showError} /> : null}
+            onMoveToProject={active.cproject ? null : () => setDialog({ type: 'move-project', session: active })}
             {...common}
           />
         ) : active ? (
@@ -283,6 +284,7 @@ export default function App() {
       {dialog?.type === 'history' && <HistoryDialog path={dialog.path} onCreate={createSession} onClose={() => setDialog(null)} onError={showError} />}
       {dialog?.type === 'settings' && <Settings initialTab={dialog.tab} projects={projects} activeCwd={active?.cwd} onClose={() => setDialog(null)} onError={showError} onKeys={() => setDialog({ type: 'keys' })} />}
       {dialog?.type === 'keys' && <Shortcuts onClose={() => setDialog(null)} />}
+      {dialog?.type === 'move-project' && <MoveToProjectDialog session={dialog.session} onClose={() => setDialog(null)} onError={showError} onMoved={() => setDialog(null)} />}
       {dialog?.type === 'new-project' && (
         <NewProjectDialog
           projects={projects}
