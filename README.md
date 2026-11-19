@@ -172,6 +172,28 @@ Set `CW_TRUST_PROXY=1`. WebSockets pass through Caddy without extra config; on n
 
 Then use "Add to Home Screen" for a full-screen app.
 
+## Projects (coordinator + threads)
+
+A **Project** is one conversation with a coordinator that hands work to parallel **threads**, like Projects in Claude Code. Create one with **＋** next to *Projects* in the sidebar: pick folders, the models for each role and how many threads may run at once.
+
+- **Project chat**: you talk to the coordinator. It answers quick questions itself (it can read the code but has no shell or edit tools) and starts threads for real work. Thread cards and decision cards show up inline, with live status.
+- **Threads** are ordinary chats in their own git worktree and branch, started with a brief and the exact words you wrote (cited, not paraphrased). Open one to talk to it directly, answer its permission prompts, or watch it work. A checklist and decision cards sit above its chat.
+- **Overview** groups threads by status: Waiting on you, Ready for review, Working, Queued, Landing, Snoozed, Idle, Resolved. Stop, resolve, snooze or fork a thread from its card.
+- **Models per role**: coordinator default Sonnet at low effort, threads Opus at high effort. Change them in the project's Settings; the coordinator can pick a cheaper model per thread for small jobs.
+
+How it works (server/cprojects.js): code, not a model, owns the project. Every input becomes an event in an append-only log (`~/.claude-web/cprojects/<id>/events.jsonl`); a reducer derives statuses; a router decides which session to wake; the engine delivers queued events to an idle session as one labelled envelope per turn and marks it delivered when the CLI echoes it. So:
+
+- Thread results are batched for the coordinator (held 10 s after the last one, at most 60 s, sent at once when no other thread is working). Ten threads finishing together cost one coordinator turn.
+- The running cap is enforced (thread turns, not threads; your own messages bypass it). Proactivity (quiet / normal / chatty) changes routing rules, so it is enforced too; limits you tell the coordinator ("at most two at a time") are saved as settings.
+- Every message carries a trust label stamped by the server (principal = you, relay = another Claude, system = the engine) inside a per-session random marker, so a thread's text can't pose as you. Decision cards for steps that can't be undone can only be answered in the web UI. "Always ask before" rules (project Settings > Advanced) still prompt in Auto mode.
+- The coordinator's context is reset to a digest (recent chat, thread table, open cards and promises) past a token threshold; promises it makes ("I'll tell you when both are done") are recorded with `follow_up` and survive the reset.
+- Restarts replay the log: queued wakes are delivered, wakes in flight are re-sent unless the transcript shows them, and turns cut off get a "check what was already done" wake. A session woken more than 20 times in 10 minutes pauses the project.
+- Project memory (`memory/`, one file per subject, versioned writes, generated MEMORY.md) and a shared library folder are given to every session.
+
+The handoff MCP has project tools too: `projects_list`, `project_status`, `project_send`, `project_thread`, `project_message_thread`, `project_answer_decision`, `project_create`, `project_update`.
+
+Tests: `node scripts/test-projects.mjs` runs the engine end to end against a scripted fake CLI (`scripts/fake-claude.mjs`).
+
 ## Claude Desktop handoff
 
 The server is also an MCP server that the Claude Desktop app can use, so the two can hand work to each other. From Desktop you can say "continue this tonight on my machine" (starts a chat here, or leaves the brief in a new chat's message box for you to send later), ask "what did that chat do?", send a chat new instructions, and keep **notes** that every chat here can read and write too (the built-in `notes` tools).

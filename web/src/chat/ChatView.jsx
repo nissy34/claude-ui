@@ -200,7 +200,8 @@ function UserMessage({ item, canEdit, onEdit, onOpen, onFork, chats }) {
           {item.from.kind === 'handoff' ? 'Handed off from' : 'From'} Claude Desktop
         </div>
       )}
-      {item.from && item.from.role !== 'desktop' && (
+      {item.from?.role === 'project' && <div className="from-label">{item.from.name === 'You (project)' ? 'From you, via the project' : `From the project · ${item.from.name}`}</div>}
+      {item.from && item.from.role !== 'desktop' && item.from.role !== 'project' && (
         <div className="from-label">
           {KIND_NAME[item.from.kind] || 'From'} {ROLE_NAME[item.from.role] || 'chat'}{' '}
           <button className="linklike" onClick={() => onOpen?.(item.from.id)} title="Open that chat">
@@ -340,7 +341,7 @@ function InfoDialog({ meta, onClose, onSignIn }) {
   );
 }
 
-export default function ChatView({ session, sessions, onSelect, onCreate, onMenu, onError, onDeleted, onSettings }) {
+export default function ChatView({ session, sessions, onSelect, onCreate, onMenu, onError, onDeleted, onSettings, projectBar }) {
   const [events, setEvents] = useState([]);
   const [offset, setOffset] = useState(0);
   const [deltas, setDeltas] = useState({});
@@ -797,6 +798,7 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
             </div>
           </div>
 
+          {projectBar}
           <div className="messages" ref={listRef} onScroll={onScroll}>
             <div className="messages-inner">
               {!loaded && conn !== 'gone' && <LoadingTranscript />}

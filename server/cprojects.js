@@ -715,7 +715,11 @@ export class Project {
       case 'thread.post': {
         const t = this.state.threads[e.thread];
         const cl = t?.checklist?.steps?.length ? ` · checklist ${t.checklist.steps.filter((x) => x.status === 'completed').length}/${t.checklist.steps.length}` : '';
-        return `[${b.kind}${b.auto ? ', taken from its final reply' : ''}] status now: ${this.statusOf(e.thread)}${cl}\n${b.text}`;
+        // Cards the user answered in this thread since its last post, so the coordinator knows the choice.
+        const prev = [...this.events].reverse().find((x) => x.thread === e.thread && x.type === 'thread.post' && x.id < e.id);
+        const answered = Object.values(this.state.decisions).filter((d) => d.thread === e.thread && d.answer && !d.answer.withdrawn && (!prev || d.answer.ts > prev.ts));
+        const dec = answered.map((d) => `\nThe user answered this thread's card "${d.question}": "${d.answer.label}"${d.answer.note ? ` (note: ${d.answer.note})` : ''}${d.answer.by?.kind === 'user' ? '' : ' (via Claude Desktop)'}.`).join('');
+        return `[${b.kind}${b.auto ? ', taken from its final reply' : ''}] status now: ${this.statusOf(e.thread)}${cl}${dec}\n${b.text}`;
       }
       case 'decision.answered': {
         const d = this.state.decisions[b.id];
