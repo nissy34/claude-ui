@@ -277,6 +277,7 @@ All settings are environment variables; see [`.env.example`](.env.example).
 | `CW_AUTO_TITLES` | `1` | Give chats a short title after the first reply, from one quick no-tools call to `CW_TITLE_MODEL` (about $0.001 per chat). A rename always wins; `0` keeps the first line of the first message |
 | `CW_TITLE_MODEL` | `haiku` | Model for chat titles |
 | `CW_CHILD_SESSIONS` | `1` | `0` turns off the built-in sessions tools (child sessions) |
+| `CW_PROMPT_SUGGESTIONS` | `1` | `0` stops asking the CLI for a suggested next message after each turn |
 | `CW_DESKTOP_MCP` | `1` | `0` turns off the Claude Desktop handoff server (`/mcp`) and the shared notes tools |
 | `CW_PUBLIC_URL` | | Address other computers use to reach the server (e.g. `http://myserver:8787` or your Tailscale URL), used in the Claude Desktop setup snippets. Set it when running in Docker, where the hostname is the container id |
 | `CW_MCP_TOKEN` | generated | Fixed bearer token for `/mcp` instead of the generated one |

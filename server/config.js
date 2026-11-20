@@ -75,6 +75,8 @@ export const config = {
   browser: env.CW_BROWSER !== '0',
   browserPath: env.CW_BROWSER_PATH || '',
   childSessions: env.CW_CHILD_SESSIONS !== '0',
+  // The CLI's predicted next message after each turn, shown as gray text in the composer.
+  promptSuggestions: env.CW_PROMPT_SUGGESTIONS !== '0',
   // Short chat titles from a quick call to a small model after the first reply (like Claude Desktop).
   autoTitles: env.CW_AUTO_TITLES !== '0',
   titleModel: env.CW_TITLE_MODEL || 'haiku',

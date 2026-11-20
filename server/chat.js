@@ -344,6 +344,7 @@ export class ChatSession {
       truncated: Math.max(0, this.events.length - MAX_EVENTS_SENT),
       pending: [...this.pending.values()],
       tasks: this.tasksSummary(),
+      nextPrompt: this.nextPrompt || null,
     };
   }
 
@@ -360,6 +361,7 @@ export class ChatSession {
       '--replay-user-messages',
       ...config.claudeArgs,
     ];
+    if (config.promptSuggestions) args.push('--prompt-suggestions');
     const builtin = {};
     // A session in a Project gets the project tools, its role prompt and the project's folders.
     const proj = m.cproject ? this.store.projectLaunch?.(this) : null;
@@ -413,7 +415,10 @@ export class ChatSession {
     let proc;
     try {
       const cmd = resolveCommand(config.claudeBin, args);
-      proc = spawn(cmd.file, cmd.args, { cwd: m.cwd, env: childEnv(m.id, envx.env), stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+      const env = childEnv(m.id, envx.env);
+      // Our own switch decides; an inherited CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=0 would silence them.
+      if (config.promptSuggestions) delete env.CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION;
+      proc = spawn(cmd.file, cmd.args, { cwd: m.cwd, env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
     } catch (e) {
       this.record({ k: 'error', text: `Could not start ${config.claudeBin}: ${e.message}` });
       return;
@@ -632,6 +637,13 @@ export class ChatSession {
         if (msg.value?.effective_window) {
           m.compactWindow = msg.value.effective_window;
           m.compactAt = msg.value.threshold;
+        }
+        break;
+      case 'prompt_suggestion':
+        // Ephemeral: not logged. Dropped as soon as anything is sent.
+        if (typeof msg.suggestion === 'string' && msg.suggestion.trim() && this.turns === 0) {
+          this.nextPrompt = msg.suggestion.trim().slice(0, 500);
+          this.broadcast({ t: 'suggestion', text: this.nextPrompt });
         }
         break;
       case 'rate_limit_event':
@@ -874,6 +886,10 @@ export class ChatSession {
       refs = [...new Set(batch.flatMap((b) => (b.refs || []).map((r) => r.id)))];
     }
     text = typeof text === 'string' ? text : '';
+    if (this.nextPrompt) {
+      this.nextPrompt = null;
+      this.broadcast({ t: 'suggestion', text: null });
+    }
     const imgs = Array.isArray(images) ? images.filter((i) => i && /^image\/(png|jpeg|gif|webp)$/.test(i.media_type) && typeof i.data === 'string').slice(0, 10) : [];
     if (!text.trim() && !imgs.length) return false;
     const m = this.meta;
