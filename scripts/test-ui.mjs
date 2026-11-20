@@ -122,6 +122,7 @@ async function main() {
       const replied = await page.getByText(`ok: hello from ${vp.name}`).first().waitFor({ timeout: 15_000 }).then(() => true).catch(() => false);
       check(replied, 'sending a message shows the reply');
     }
+    if (hasBox && !vp.isMobile) await ownPages(page, cookie);
     check(errors.length === 0, 'no page errors', errors.join(' | '));
     if (failures && process.env.SCREENSHOT_DIR) {
       fs.mkdirSync(process.env.SCREENSHOT_DIR, { recursive: true });
@@ -129,6 +130,35 @@ async function main() {
     }
     await ctx.close();
   }
+}
+
+// Pages Claude writes open in the artifact panel and stay there while it checks them in the
+// browser; the Browser panel only takes over for other sites. pin_view opens the pinned page.
+async function ownPages(page, cookie) {
+  const res = await fetch(base + '/api/sessions', { method: 'POST', headers: { 'content-type': 'application/json', cookie }, body: JSON.stringify({ cwd: repo, kind: 'chat', name: 'Own pages' }) });
+  const { session } = await res.json();
+  await page.goto(`${base}/#s=${session.id}`);
+  const box = page.locator('[contenteditable][data-placeholder]').first();
+  await box.waitFor({ timeout: 10_000 });
+  const activeTab = () => page.locator('.panel-tab.on').first().textContent({ timeout: 5_000 }).catch(() => '');
+  const send = async (text, until) => {
+    await box.click();
+    await page.keyboard.insertText(text);
+    await page.keyboard.press('Enter');
+    await page.getByText(until, { exact: true }).first().waitFor({ timeout: 15_000 });
+    await sleep(600); // the panel opens 200ms after the tool result
+  };
+  const dash = path.join(repo, 'dash.html');
+  const url = 'file://' + dash.split(path.sep).map(encodeURIComponent).join('/').replace(/^(?!\/)/, '/');
+  // The sleep stands in for the model's pause between steps (the page opens 200ms after it is written).
+  await send(['@@writetool dash.html <h1>Dash</h1>', '@@sleep 600', `@@call browser__navigate {"url":"${url}"}`, '@@call browser__click {"ref":"e1"}', '@@say checked dash'].join('\n'), 'checked dash');
+  check(/dash\.html/.test(await activeTab()), 'a page Claude checks in the browser stays in the artifact panel', await activeTab());
+
+  await send(['@@call browser__navigate {"url":"https://example.com/"}', '@@say went out'].join('\n'), 'went out');
+  check(/Browser/.test(await activeTab()), 'navigating to another site shows the Browser panel', await activeTab());
+
+  await send(['@@writetool view.html <h1>View</h1>', '@@call project__pin_view {"path":"view.html","title":"Project view"}', '@@say pinned'].join('\n'), 'pinned');
+  check(/Project view/.test(await activeTab()), 'a pinned Custom view opens in the artifact panel', await activeTab());
 }
 
 async function cleanup() {
