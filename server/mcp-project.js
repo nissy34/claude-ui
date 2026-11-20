@@ -45,6 +45,7 @@ const decision = {
       recommended: { type: 'number', description: 'Index of the recommended option, from 0.' },
       reason: { type: 'string', description: 'Why you recommend it, one sentence.' },
       irreversible: { type: 'boolean', description: 'True when an option starts a step that cannot be undone. Then only the user, in the web UI, can answer it.' },
+      distinct: { type: 'boolean', description: "Coordinator only: true to ask although a thread has an open card, because your question is a different one. Never re-ask a thread's question." },
     },
     required: ['question', 'options', 'recommended'],
   },

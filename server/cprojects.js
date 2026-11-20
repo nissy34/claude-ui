@@ -48,6 +48,8 @@ const SIBLING_MAX_MS = Number(process.env.CW_PROJECT_SIBLING_MAX_MS) || 5 * 60_0
 // resolved this recently so the coordinator can send the follow-up to the thread that has the context.
 const RECENT_RESOLVED_MS = 3 * 60 * 60_000;
 const IDEMPOTENT_MS = 10 * 60_000;
+// A thread's unanswered card this recent blocks the coordinator from asking again (it would ask twice).
+const OPEN_CARD_MS = 60 * 60_000;
 const MAX_PROGRESS_POSTS = 2;
 /** The sender of messages the engine itself sends a session (retries, nudges, limit resets). */
 export const PROJECT_FROM = { role: 'project', name: 'Project', kind: 'project' };
@@ -1216,7 +1218,9 @@ export class Project {
         const prev = [...this.events].reverse().find((x) => x.thread === e.thread && x.type === 'thread.post' && x.id < e.id);
         const answered = Object.values(this.state.decisions).filter((d) => d.thread === e.thread && d.answer && !d.answer.withdrawn && (!prev || d.answer.ts > prev.ts));
         const dec = answered.map((d) => `\nThe user answered this thread's card "${d.question}": "${d.answer.label}"${d.answer.note ? ` (note: ${d.answer.note})` : ''}${d.answer.by?.kind === 'user' ? '' : ' (via Claude Desktop)'}.`).join('');
-        return `[${b.kind}${b.auto ? ', taken from its final reply' : ''}] status now: ${this.statusOf(e.thread)}${cl}${dec}\n${b.text}`;
+        const open = Object.values(this.state.decisions).filter((d) => d.thread === e.thread && !d.answer);
+        const asked = open.map((d) => `\nThis thread already asked the user with decision card ${d.id}: "${d.question}". The card is shown in the project chat and the answer goes to the thread. Don't ask it again.`).join('');
+        return `[${b.kind}${b.auto ? ', taken from its final reply' : ''}] status now: ${this.statusOf(e.thread)}${cl}${dec}${asked}\n${b.text}`;
       }
       case 'decision.answered': {
         const d = this.state.decisions[b.id];
@@ -2262,6 +2266,17 @@ export class ProjectEngine {
         if (!question) throw new Error('question is required');
         if (options.length < 2) throw new Error('Give 2 to 4 options, each {label, consequence}.');
         const rec = Number.isInteger(a.recommended) && a.recommended >= 0 && a.recommended < options.length ? a.recommended : 0;
+        if (isCoord && !a.distinct) {
+          // A thread's card is already in the project chat: asking again shows the user the same question twice.
+          const open = Object.values(p.state.decisions).filter((d) => d.thread && !d.answer && Date.now() - d.ts < OPEN_CARD_MS);
+          if (open.length)
+            return {
+              ok: false,
+              asked: false,
+              open_cards: open.map((d) => ({ decision_id: d.id, thread_id: d.thread, thread: p.state.threads[d.thread]?.title, question: d.question })),
+              note: "Not asked. These threads' decision cards are already shown to the user in the project chat; their answers go to those threads. Don't ask the same thing again: relay the rest of the news with post_message, and mention the card if it helps. If your question is a different one, call request_decision again with distinct: true.",
+            };
+        }
         info.posted = true;
         const id = newId('dec');
         p.append({ type: 'decision.requested', from: me, trust: 'relay', thread: isCoord ? undefined : s.id, body: { id, question: clipText(question, 300), options: options.map((o) => ({ label: clipText(o.label, 60), consequence: clipText(o.consequence, 240) })), recommended: rec, reason: clipText(a.reason || '', 300), irreversible: !!a.irreversible } });
