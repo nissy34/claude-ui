@@ -241,7 +241,7 @@ function Row({ label, hint, children, stack }) {
 export function ProjectSettingsModal({ project, section, setSection, onClose, onSelect, onError, reload, onDeleted, projects }) {
   const [s, set] = useState(() => ({ ...project.settings, folders: project.settings.folders.length ? project.settings.folders : [{ path: '' }] }));
   const [saved, setSaved] = useState(false);
-  useEffect(() => setSaved(false), [s]);
+  useEffect(() => setSaved(false), [s, section]);
   const p = s.policy;
   const setP = (patch) => set({ ...s, policy: { ...p, ...patch } });
   const save = async (patch) => {
@@ -274,9 +274,10 @@ export function ProjectSettingsModal({ project, section, setSection, onClose, on
   const total = project.usage.total || 0;
   const share = (c) => (total > 0 ? `${Math.round((c / total) * 100)}%` : '');
   const post = (what) => api(`/api/cprojects/${project.id}/${what}`, { method: 'POST' }).then(reload).catch(onError);
-  const SaveBar = () => (
+  // Only tabs with editable fields (General, Environment, Advanced) render this.
+  const SaveBar = ({ note }) => (
     <div className="pjs-save">
-      {saved && <span className="muted small">Saved. Model changes apply to the coordinator now and to threads started from now on.</span>}
+      {saved && <span className="muted small">Saved.{note ? ` ${note}` : ''}</span>}
       <Button variant="primary" onClick={() => save()}>
         Save
       </Button>
@@ -315,7 +316,7 @@ export function ProjectSettingsModal({ project, section, setSection, onClose, on
               <Row label="Continue threads automatically when usage limits reset">
                 <Toggle value={p.continueOnReset !== false} onChange={(v) => setP({ continueOnReset: v })} label="Continue on reset" />
               </Row>
-              <SaveBar />
+              <SaveBar note="Model changes apply to the coordinator now and to threads started from now on." />
               <Row label="Archive project" hint="Hidden from the sidebar; nothing is deleted">
                 <Button onClick={archive}>{project.archived ? 'Unarchive' : 'Archive'}</Button>
               </Row>
@@ -380,7 +381,6 @@ export function ProjectSettingsModal({ project, section, setSection, onClose, on
                 <b>${project.usage.total.toFixed(2)}</b>
                 <span className="muted small"> · coordinator ${project.usage.coordinator.toFixed(2)}{project.coordinator ? ` · context ${Math.round(project.coordinator.contextTokens / 1000)}k tokens` : ''}</span>
               </Row>
-              <SaveBar />
               <h4>By thread</h4>
               <div className="pj-usage">
                 {byCost.length === 0 && <div className="muted small">No threads yet.</div>}
