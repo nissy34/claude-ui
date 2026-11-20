@@ -237,6 +237,17 @@ export async function checkoutBranch(cwd, branch) {
  * when it has no commits of its own; a branch with work on it is kept.
  * Returns { removed, kept?: reason, branchDeleted }.
  */
+/** True when removing the worktree loses no commits: it has none of its own, or they are all in its repo's checked-out branch. */
+export async function worktreeMerged(wt) {
+  if (!wt?.path || !fs.existsSync(wt.path)) return false;
+  const repo = wt.repo || (await git(wt.path, ['rev-parse', '--path-format=absolute', '--git-common-dir']).catch(() => '')).trim().replace(/[\\/]\.git$/, '');
+  if (!repo) return false;
+  const head = await revParse(wt.path, 'HEAD').catch(() => null);
+  if (!head) return false;
+  if (head === wt.base) return true; // no commits of its own
+  return git(repo, ['merge-base', '--is-ancestor', head, 'HEAD']).then(() => true, () => false);
+}
+
 export async function removeWorktree(wt) {
   if (!wt?.path) return { removed: false };
   if (!fs.existsSync(wt.path)) {

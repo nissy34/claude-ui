@@ -341,7 +341,9 @@ function InfoDialog({ meta, onClose, onSignIn }) {
   );
 }
 
-export default function ChatView({ session, sessions, onSelect, onCreate, onMenu, onError, onDeleted, onSettings, projectBar }) {
+export default function ChatView({ session, sessions, onSelect, onCreate, onMenu, onError, onDeleted, onSettings, projectBar, projectConversation }) {
+  // A Project thread can show its Conversation (posts and cards) instead of the full Work log.
+  const [projectView, setProjectView] = useState('log');
   const [events, setEvents] = useState([]);
   const [offset, setOffset] = useState(0);
   const [deltas, setDeltas] = useState({});
@@ -798,8 +800,9 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
             </div>
           </div>
 
-          {projectBar}
-          <div className="messages" ref={listRef} onScroll={onScroll}>
+          {typeof projectBar === 'function' ? projectBar({ view: projectView, setView: setProjectView }) : projectBar}
+          {projectView === 'conversation' && projectConversation}
+          <div className={`messages ${projectView === 'conversation' && projectConversation ? 'is-hidden' : ''}`} ref={listRef} onScroll={onScroll}>
             <div className="messages-inner">
               {!loaded && conn !== 'gone' && <LoadingTranscript />}
               {start > 0 && (

@@ -137,3 +137,5 @@
 .pj-memfile { padding: var(--sp-3) var(--sp-4); display: flex; flex-direction: column; gap: var(--sp-2); }
 .pj-overview-bar .spacer { flex: 1; }
 @media (max-width: 860px) { .pj-tabs button { padding: 5px var(--sp-2); } .pj-memrow .pj-memdesc { display: none; } }
+.messages.is-hidden { display: none; }
+.pj-threadbar .seg button { padding: 3px var(--sp-2h); font-size: var(--fs-sm); }

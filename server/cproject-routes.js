@@ -91,6 +91,18 @@ export function mountProjectRoutes(app, { engine, store, resolveDir, wrap }) {
     })
   );
 
+  // A thread's Conversation: its brief, your messages, its posts and cards (the transcript is the Work log).
+  app.get(
+    '/api/cprojects/:id/threads/:tid/feed',
+    wrap(async (req, res) => {
+      const p = project(req);
+      const tid = thread(p, req);
+      const types = new Set(['thread.started', 'user.message', 'thread.post', 'decision.requested', 'session.message', 'reminder.set', 'reminder.due', 'thread.resolved', 'thread.reopened', 'pr.updated', 'notice']);
+      const feed = p.events.filter((e) => types.has(e.type) && (e.thread === tid || (e.type === 'session.message' && e.from?.id === tid)));
+      res.json({ feed });
+    })
+  );
+
   app.post(
     '/api/cprojects/:id/threads/:tid/:action',
     wrap(async (req, res) => {

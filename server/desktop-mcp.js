@@ -60,7 +60,7 @@ const PROJECT_TOOLS = [
   },
   {
     name: 'project_create',
-    description: 'Create a Project. folders: folder names from list_projects (the first is where threads work, each in its own git worktree). Optionally send the first message to its coordinator.',
+    description: 'Create a Project. folders: folder names from list_folders (the first is where threads work, each in its own git worktree). Optionally send the first message to its coordinator.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -129,8 +129,8 @@ const PROJECT_TOOLS = [
 const TOOLS = [
   ...PROJECT_TOOLS,
   {
-    name: 'list_projects',
-    description: 'List the folders (code repositories) on the Claude Code machine. Use a folder name (or full path) as "project" in handoff. Not the same as Projects (coordinator + threads): see projects_list.',
+    name: 'list_folders',
+    description: 'List the folders (code repositories) on the Claude Code machine. Use a folder name (or full path) as "folder" in handoff and the note tools. Not the same as Projects (coordinator + threads): see projects_list.',
     inputSchema: { type: 'object', properties: {} },
   },
   {
@@ -172,7 +172,7 @@ const TOOLS = [
         task: { type: 'string', description: 'What to do, in one or two sentences.' },
         context: { type: 'string', description: 'Everything the new chat needs to know: what was decided, what was tried, relevant files, links, constraints.' },
         next_steps: { type: 'string', description: 'Concrete next steps, one per line.' },
-        project: { type: 'string', description: 'Project folder name (from list_projects) or absolute path. Required.' },
+        folder: { type: 'string', description: 'Folder name (from list_folders) or absolute path. Required.' },
         name: { type: 'string', description: 'Short chat title shown in the sidebar.' },
         start_now: { type: 'boolean', description: 'Start working now (default true), or leave the brief for the user to send.' },
         worktree: { type: 'boolean', description: 'Run in a fresh git worktree on its own branch.' },
@@ -180,7 +180,7 @@ const TOOLS = [
         effort: { type: 'string', enum: EFFORTS },
         permission_mode: { type: 'string', enum: MODES, description: 'Default "default" (asks the user before edits and commands, so an unattended chat stops at the first prompt). Use acceptEdits or auto only if the user asked for it.' },
       },
-      required: ['task', 'project'],
+      required: ['task', 'folder'],
     },
   },
   {
@@ -229,22 +229,22 @@ const TOOLS = [
   {
     name: 'list_notes',
     description:
-      "List notes. With project: that project's notes, which live in Claude Code's memory for the project (every Claude Code session there loads them, and they include what Claude remembered on its own), plus global notes. Without project: only global notes (preferences and things that span projects). Check them when the user refers to earlier work.",
-    inputSchema: { type: 'object', properties: { project: { type: 'string', description: 'Project folder name (from list_projects) or path.' }, query: { type: 'string', description: 'Words to search for.' }, tag: { type: 'string' }, limit: { type: 'number' } } },
+      "List notes. With folder: that folder's notes, which live in Claude Code's memory for the folder (every Claude Code session there loads them, and they include what Claude remembered on its own), plus global notes. Without folder: only global notes (preferences and things that span folders). Check them when the user refers to earlier work.",
+    inputSchema: { type: 'object', properties: { folder: { type: 'string', description: 'Folder name (from list_folders) or path.' }, query: { type: 'string', description: 'Words to search for.' }, tag: { type: 'string' }, limit: { type: 'number' } } },
   },
   {
     name: 'read_note',
-    description: 'Read one note in full, by id or title. With project, looks in that project first, then global notes.',
-    inputSchema: { type: 'object', properties: { id: { type: 'string', description: 'Note id or title.' }, project: { type: 'string' } }, required: ['id'] },
+    description: 'Read one note in full, by id or title. With folder, looks in that folder first, then global notes.',
+    inputSchema: { type: 'object', properties: { id: { type: 'string', description: 'Note id or title.' }, folder: { type: 'string' } }, required: ['id'] },
   },
   {
     name: 'write_note',
     description:
-      "Create or update a note. With project, it goes into that project's Claude Code memory, so every future session in that project sees it. Without project it is a global note (use for preferences and things that span projects). A note with the same title (or id) is replaced, or added to with append=true.",
+      "Create or update a note. With folder, it goes into that folder's Claude Code memory, so every future session there sees it. Without folder it is a global note (use for preferences and things that span folders). A note with the same title (or id) is replaced, or added to with append=true.",
     inputSchema: {
       type: 'object',
       properties: {
-        project: { type: 'string', description: 'Project folder name (from list_projects) or path. Leave out for a global note.' },
+        folder: { type: 'string', description: 'Folder name (from list_folders) or path. Leave out for a global note.' },
         title: { type: 'string' },
         content: { type: 'string', description: 'Markdown.' },
         description: { type: 'string', description: 'One line for the memory index (defaults to the first line of content).' },
@@ -257,8 +257,8 @@ const TOOLS = [
   },
   {
     name: 'delete_note',
-    description: 'Delete a note by id or title. With project, from that project (then global).',
-    inputSchema: { type: 'object', properties: { id: { type: 'string' }, project: { type: 'string' } }, required: ['id'] },
+    description: 'Delete a note by id or title. With folder, from that folder (then global).',
+    inputSchema: { type: 'object', properties: { id: { type: 'string' }, folder: { type: 'string' } }, required: ['id'] },
   },
 ];
 
@@ -405,7 +405,8 @@ export function createDesktopMcp({ store, resolveDir, createWorktree, getChanges
         engine.update(p, projectPatch(a), { by: 'desktop' });
         return { ok: true, settings: p.settings };
       }
-      case 'list_projects':
+      case 'list_folders':
+      case 'list_projects': // old name, still accepted
         return listProjects();
       case 'list_sessions': {
         const words = String(a.query || '').toLowerCase().split(/\s+/).filter(Boolean);
@@ -444,10 +445,11 @@ export function createDesktopMcp({ store, resolveDir, createWorktree, getChanges
       case 'handoff': {
         const task = String(a.task || '').trim();
         if (!task) throw new Error('task is required');
-        if (!a.project) throw new Error('project is required: a folder name from list_projects, or an absolute path.');
+        const folder = a.folder || a.project; // "project" is the old name
+        if (!folder) throw new Error('folder is required: a folder name from list_folders, or an absolute path.');
         if (a.permission_mode && !MODES.includes(a.permission_mode)) throw new Error(`permission_mode must be one of ${MODES.join(', ')}`);
         if (a.effort && !EFFORTS.includes(a.effort)) throw new Error(`effort must be one of ${EFFORTS.join(', ')}`);
-        const dir = resolveDir(String(a.project));
+        const dir = resolveDir(String(folder));
         const title = String(a.name || task).trim().split('\n')[0].slice(0, 80);
         const wt = a.worktree ? await createWorktree(dir, title) : null;
         let brief = task;
@@ -509,9 +511,9 @@ export function createDesktopMcp({ store, resolveDir, createWorktree, getChanges
       case 'read_note':
       case 'write_note':
       case 'delete_note': {
-        const projectDir = a.project ? resolveDir(String(a.project)) : null;
+        const projectDir = a.folder || a.project ? resolveDir(String(a.folder || a.project)) : null;
         const res = notes.notesOp(name.split('_')[0], a, { projectDir, source: 'Claude Desktop' });
-        if (name === 'list_notes' && !projectDir) res.note = 'Global notes only. Pass project to include that project\'s notes (its Claude Code memory).';
+        if (name === 'list_notes' && !projectDir) res.note = 'Global notes only. Pass folder to include that folder\'s notes (its Claude Code memory).';
         return res;
       }
       default:
