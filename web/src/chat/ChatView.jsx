@@ -13,6 +13,7 @@ import Linkify from './Linkify.jsx';
 import { MentionText, chatToken } from './mentions.jsx';
 import { getPrefs } from '../prefs.js';
 import SidePanel from './SidePanel.jsx';
+import SessionRail from './SessionRail.jsx';
 import { isLive as taskLive, BackgroundPill } from './BackgroundTasks.jsx';
 import { ChatCtx } from './ctx.js';
 import SideChat from './SideChat.jsx';
@@ -358,6 +359,32 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
   const [stick, setStick] = useState(true);
   const [showTodos, setShowTodos] = useState(true);
   const [panel, setPanel] = useState(() => (window.matchMedia('(min-width: 1200px)').matches && localStorage.getItem('cw.panel') === 'open' ? 'changes' : null));
+  // Session details rail (Desktop's right-hand column). Open by default on wide screens.
+  const [rail, setRail] = useState(() => {
+    try {
+      const v = localStorage.getItem('cw.rail');
+      return v ? v === 'open' : window.matchMedia('(min-width: 1400px)').matches;
+    } catch {
+      return false;
+    }
+  });
+  const toggleRail = (v) =>
+    setRail((r) => {
+      const next = typeof v === 'boolean' ? v : !r;
+      try {
+        localStorage.setItem('cw.rail', next ? 'open' : 'closed');
+      } catch {}
+      return next;
+    });
+  // Rail and side panel side by side need a wide window; below that the open panel wins and
+  // showing the rail closes the panel (phones show either as an overlay).
+  const [roomy, setRoomy] = useState(() => window.matchMedia('(min-width: 1600px), (max-width: 860px)').matches);
+  useEffect(() => {
+    const mq = window.matchMedia('(min-width: 1600px), (max-width: 860px)');
+    const on = () => setRoomy(mq.matches);
+    mq.addEventListener?.('change', on);
+    return () => mq.removeEventListener?.('change', on);
+  }, []);
   const [files, setFiles] = useState([]);
   const [wide, setWide] = useState(false);
   const [changesKey, setChangesKey] = useState(0);
@@ -557,6 +584,7 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
   const lastError = [...items].reverse().find((i) => i.type === 'error' || i.type === 'result');
   const authProblem = lastError && (lastError.type === 'error' || lastError.isError) && AUTH_RE.test(lastError.text || '');
   const parent = meta.parentId && sessions.find((s) => s.id === meta.parentId);
+  const showRail = rail && !projectConversation && (!panel || roomy);
   const children = sessions.filter((s) => s.parentId === session.id && s.kind === 'chat');
   const drawerSession = sessions.find((s) => s.parentId === session.id && s.kind === 'shell');
 
@@ -768,6 +796,18 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
               </IconButton>
               <IconButton className={`${panel === 'browser' ? 'on' : ''}`} title="Browser" onClick={() => (panel === 'browser' ? setPanel(null) : openPanel('browser'))}>
                 ◎ <span className="lbl hide-mobile">Browser</span>
+              </IconButton>
+              <IconButton
+                className={`${showRail ? 'on' : ''}`}
+                title="Session details"
+                aria-pressed={showRail}
+                onClick={() => {
+                  if (showRail) return toggleRail(false);
+                  toggleRail(true);
+                  if (panel && !roomy) setPanel(null);
+                }}
+              >
+                ▤ <span className="lbl hide-mobile">Details</span>
               </IconButton>
               <div className="menu-wrap" ref={moreRef}>
                 <IconButton title="More" onClick={() => setMenu((m) => !m)}>
@@ -1031,6 +1071,29 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
             </div>
           )}
         </div>
+        {showRail && (
+          <SessionRail
+            sessionId={session.id}
+            meta={meta}
+            state={state}
+            conn={conn}
+            refreshKey={changesKey}
+            busy={busy}
+            liveTasks={liveTasks}
+            parent={parent}
+            onSelect={onSelect}
+            onOpenArtifact={(p, t) => ctx.openArtifact(p, t)}
+            onOpenChanges={() => openPanel('changes')}
+            onOpenTasks={() => openPanel('tasks')}
+            onAllOutputs={() => setGallery(true)}
+            onCompact={() => submit('/compact', [])}
+            onPrompt={(t) => submit(t, [])}
+            onSignIn={signIn}
+            onInfo={() => setInfo(true)}
+            onClose={() => toggleRail(false)}
+            onError={onError}
+          />
+        )}
         {panel && (
           <SidePanel
             sessionId={session.id}

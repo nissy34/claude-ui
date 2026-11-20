@@ -82,7 +82,7 @@ function fmtSize(n) {
 // Window: what the CLI reported for the chat's model. Before it has (older CLIs, or a chat from
 // before this was tracked) guess from the model name, and never claim a window smaller than the
 // tokens already in it.
-function contextWindowFor({ used, window: win, compactWindow, model }) {
+export function contextWindowFor({ used, window: win, compactWindow, model }) {
   if (win) return win;
   const guess = /\[1m\]/i.test(model || '') ? 1_000_000 : 200_000;
   const known = compactWindow ? Math.max(compactWindow, guess) : guess;
