@@ -66,7 +66,7 @@ const pinView = {
 };
 
 const COORDINATOR = [
-  { name: 'post_message', description: 'Post a message to the user in the project chat. This is the only way the user sees what you say. Lead with the outcome or the ask; keep it short.', inputSchema: { type: 'object', properties: { text: { type: 'string', description: 'Markdown.' }, thread_id: { type: 'string', description: 'The thread this post is about, if one: the chat labels it with that thread.' }, cite_ids: cite }, required: ['text'] } },
+  { name: 'post_message', description: 'Post a message to the user in the project chat. This is the only way the user sees what you say. Lead with the outcome or the ask; keep it short.', inputSchema: { type: 'object', properties: { text: { type: 'string', description: 'Markdown.' }, thread_id: { type: 'string', description: 'The thread this post is about, if one: the chat labels it with that thread.' }, thread_ids: { type: 'array', items: { type: 'string' }, description: 'Several threads this post is about (a joint report): labeled "N threads".' }, cite_ids: cite }, required: ['text'] } },
   {
     name: 'start_thread',
     description:
