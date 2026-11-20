@@ -144,8 +144,15 @@ async function main() {
   }, 10_000, 'coordinator woken for results');
   const posts = ev.filter((e) => e.type === 'thread.post').map((e) => e.body.text);
   check(posts.includes('A is done') && posts.includes('B is done'), 'thread results recorded', posts);
-  const delivered = ev.filter((e) => e.type === 'wake.delivered').length;
-  const sent = ev.filter((e) => e.type === 'wake.sent').length;
+  // The last wake can be sent a moment before its echo lands: wait for the log to settle, then compare.
+  let delivered = 0;
+  let sent = 0;
+  await until(() => {
+    const log = fs.readFileSync(path.join(env.CW_DATA_DIR, 'cprojects', id, 'events.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+    delivered = log.filter((e) => e.type === 'wake.delivered').length;
+    sent = log.filter((e) => e.type === 'wake.sent').length;
+    return delivered === sent;
+  }, 5000, 'wake echoes').catch(() => {});
   check(delivered === sent, `every wake was acknowledged by the CLI echo (${delivered}/${sent})`);
   const readPrompts = () => fs.readFileSync(env.FAKE_CLAUDE_LOG, 'utf8').trim().split('\n').map((l) => JSON.parse(l)).filter((x) => x.prompt);
   const coordPrompt = await until(() => readPrompts().find((x) => x.prompt.includes('[result] status now') && x.prompt.includes('A is done')), 8000, 'coordinator prompt with results').catch(() => null);
@@ -290,6 +297,7 @@ async function main() {
   await siblings();
   await rotation();
   await aboutLabel();
+  await noDoubleAsk();
 
   await stop();
   console.log(`\n${passes} passed, ${failures} failed`);
@@ -362,6 +370,26 @@ async function rotation() {
   check(d.coordinator.context?.used === 400010, "the coordinator's context is in the project for the ring", d.coordinator.context);
   await api(`/api/cprojects/${r.id}/messages`, { method: 'POST', body: { text: `@@ratelimit {"five_hour":{"utilization":0.12,"resetsAt":${Math.floor(Date.now() / 1000) + 3600}}}\n${call('post_message', { text: 'limits' })}` } });
   await until(async () => (await detail(r.id)).rateLimit?.five_hour?.utilization === 0.12, 8000, 'plan limits in the project');
+}
+
+// A thread that already asked with a card: the coordinator relaying its report must not ask the user again.
+async function noDoubleAsk() {
+  console.log('One question, one card');
+  const opts = [{ label: 'Fix brim only', consequence: 'x' }, { label: 'Fix and clean up', consequence: 'y' }];
+  const coordAsk = call('request_decision', { question: 'Fix the brim and clean up?', options: opts, recommended: 0 });
+  const brief = [call('request_decision', { question: 'Fix the brim, clean up, or both?', options: opts, recommended: 0 }), call('post_message', { kind: 'result', text: `Two things need fixing.\n${coordAsk}\n` })].join('\n');
+  const { project: r } = await api('/api/cprojects', { method: 'POST', body: { name: 'Ask once', folders: [repo], prompt: `check it\n${call('start_thread', { title: 'Check the files', brief, new: true })}\n${call('post_message', { text: 'on it' })}` } });
+  const refused = await until(() => fakeLog().find((l) => l.call === 'project__request_decision' && l.input?.question === 'Fix the brim and clean up?'), 12_000, 'coordinator tries to ask');
+  const d = await detail(r.id);
+  const cards = d.feed.filter((e) => e.type === 'decision.requested');
+  check(cards.length === 1 && cards[0].thread, "the coordinator's duplicate card is refused: the user sees only the thread's card", cards.map((c) => c.body.question));
+  check(/Not asked/.test(refused.result) && refused.result.includes('Fix the brim, clean up, or both?'), 'the refusal names the open card', refused.result.slice(0, 400));
+  const wake = fakeLog().find((l) => l.prompt?.includes('<project-wake') && l.prompt.includes('from thread "Check the files"') && l.prompt.includes('Two things need fixing'));
+  check(wake?.prompt.includes('This thread already asked the user with decision card'), "the coordinator's wake says the thread already asked", wake?.prompt.slice(0, 1500));
+  // A different question is still possible on purpose.
+  await api(`/api/cprojects/${r.id}/messages`, { method: 'POST', body: { text: call('request_decision', { question: 'Also rename the project?', options: opts, recommended: 0, distinct: true }) } });
+  await until(async () => (await detail(r.id)).feed.filter((e) => e.type === 'decision.requested').length === 2, 8000, 'distinct card');
+  check(true, 'distinct: true asks a different question while a thread card is open');
 }
 
 // The label under a coordinator post names the thread it is about. A thread's news sharing a wake with a
