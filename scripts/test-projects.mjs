@@ -287,6 +287,7 @@ async function main() {
   await steering();
   console.log('Threads started for one request report together');
   await siblings();
+  await aboutLabel();
 
   await stop();
   console.log(`\n${passes} passed, ${failures} failed`);
@@ -325,6 +326,31 @@ async function siblings() {
   await until(() => fakeLog().some((l) => l.prompt?.includes('which part was slower?') && l.prompt.includes('recently finished threads')), 10_000, 'recent threads hint');
   const w = fakeLog().find((l) => l.prompt?.includes('which part was slower?'));
   check(w.prompt.includes('"Slow part"') && w.prompt.includes('message_thread'), 'a user message wake lists recently finished threads to send follow-ups to', w.prompt.slice(-900));
+}
+
+// The label above a coordinator post names the thread it is about. A thread's news sharing a wake with a
+// user message (queued while the coordinator was busy) must not label the answer to that message.
+async function aboutLabel() {
+  console.log('Coordinator post labels');
+  const { project: r } = await api('/api/cprojects', { method: 'POST', body: { name: 'Labels', folders: [repo], prompt: '@@sleep 2500\n@@say busy' } });
+  await until(async () => (await detail(r.id)).coordinatorBusy, 8000, 'coordinator busy');
+  const T = (await api(`/api/cprojects/${r.id}/threads`, { method: 'POST', body: { title: 'Summarize the repo', brief: call('resolve', { summary: 'LABEL-SUMMARY', learned: [] }) } })).thread;
+  await until(async () => (await detail(r.id)).threads.find((t) => t.id === T.id)?.status === 'resolved', 8000, 'T resolved');
+  await api(`/api/cprojects/${r.id}/messages`, { method: 'POST', body: { text: [call('start_thread', { title: 'Funny custom view', brief: '@@say view done', new: true }), call('post_message', { text: 'LABEL-ON-IT' })].join('\n') } });
+  const d = await until(async () => { const x = await detail(r.id); return x.feed.some((e) => e.type === 'chat.post' && e.body.text === 'LABEL-ON-IT') && x; }, 12_000, 'coordinator answer');
+  const wake = fakeLog().find((l) => l.prompt?.includes('LABEL-ON-IT') && l.prompt.includes('<project-wake'));
+  check(wake?.prompt.includes('Summarize the repo'), "the user's message and the resolved thread's news reach the coordinator in one wake", wake?.prompt.slice(0, 1500));
+  check(wake?.prompt.includes(`finished work from "Summarize the repo" (${T.id})`), "that wake asks the coordinator to relay the finished thread's result too", wake?.prompt.slice(-700));
+  const post = d.feed.find((e) => e.type === 'chat.post' && e.body.text === 'LABEL-ON-IT');
+  check(!post.body.about, "the answer to the user's message is not labeled with the resolved thread", { about: post.body.about, title: d.threads.find((t) => t.id === post.body.about)?.title });
+  // A wake with only one thread's news still labels the post with that thread.
+  await until(() => fakeLog().some((l) => l.prompt?.includes('<project-wake') && l.prompt.includes('from thread "Funny custom view"')), 12_000, 'new thread reported');
+  await until(async () => { const x = await detail(r.id); return !x.coordinatorBusy && !x.coordinator?.queued; }, 12_000, 'coordinator idle');
+  // (The thread's result text is a directive line, which the fake coordinator runs when the wake relays it.)
+  await api(`/api/cprojects/${r.id}/threads/${T.id}/message`, { method: 'POST', body: { text: call('post_message', { kind: 'result', text: `\n${call('post_message', { text: 'LABEL-RELAY' })}\n` }) } });
+  const d2 = await until(async () => { const x = await detail(r.id); return x.feed.some((e) => e.type === 'chat.post' && e.body.text === 'LABEL-RELAY') && x; }, 12_000, 'relay post');
+  const relay = d2.feed.find((e) => e.type === 'chat.post' && e.body.text === 'LABEL-RELAY');
+  check(relay.body.about === T.id, "a post in a wake with only one thread's news is labeled with that thread", { about: relay.body.about, wake: fakeLog().filter((l) => l.prompt?.includes('LABEL-RELAY') && l.prompt.includes('<project-wake')).map((l) => l.prompt.slice(-1500)) });
 }
 
 async function steering() {

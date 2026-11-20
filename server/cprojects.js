@@ -1145,8 +1145,11 @@ export class Project {
       const delta = this.boardDelta({ full: fresh });
       if (delta && !fresh) out.push(`\n⟦${marker}⟧ board changes since your last turn · trust: system\n${esc(delta)}`);
     }
+    // Thread results that share a wake with a user message are easy to skip while answering the message.
+    const finished = userAsked ? [...new Set(evs.filter((e) => e.thread && (e.type === 'thread.resolved' || (e.type === 'thread.post' && e.body?.kind === 'result'))).map((e) => e.thread))].filter((tid) => this.state.threads[tid]) : [];
+    const relayAsk = finished.length ? ` This wake also carries finished work from ${finished.map((tid) => `"${esc(this.state.threads[tid].title)}" (${tid})`).join(', ')}: relay each result to the user in its own post_message with thread_id set, besides answering the message.` : '';
     const coordFooter = userAsked
-      ? "\nThe user wrote: answer with post_message (or react when the work comes first). Then end your turn without further text."
+      ? `\nThe user wrote: answer with post_message (or react when the work comes first).${relayAsk} Then end your turn without further text.`
       : '\nPost to the user only when they need to know or decide something; saying nothing is fine. End your turn without further text.';
     out.push(sid === this.state.coordinator ? coordFooter : '\nReport with post_message (result, blocker, question). The user may also type to you here directly.');
     out.push('</project-wake>');
@@ -2192,7 +2195,10 @@ export class ProjectEngine {
         info.posted = true;
         if (isCoord) {
           // Which thread the post is about: named by the coordinator, or the one thread whose news woke it.
-          const about = (a.thread_id && p.state.threads[a.thread_id] ? a.thread_id : null) || (info.threads?.length === 1 && p.state.threads[info.threads[0]] ? info.threads[0] : null);
+          // Inferred only for a turn woken by thread news alone: when the user wrote (in the wake or mid-turn) or the
+          // coordinator started a thread this turn, the post answers the user, not the thread that happened to share the wake.
+          const inferred = !info.user && !info.started && info.threads?.length === 1 && p.state.threads[info.threads[0]] ? info.threads[0] : null;
+          const about = (a.thread_id && p.state.threads[a.thread_id] ? a.thread_id : null) || inferred;
           const ev = p.append({ type: 'chat.post', from: me, trust: 'relay', cites: a.cite_ids, body: { text: clipText(text, 20_000), ...(about ? { about } : {}) } });
           return { ok: true, event_id: ev.id, note: 'Posted to the project chat.' };
         }
@@ -2248,6 +2254,7 @@ export class ProjectEngine {
         let cites = a.cite_ids;
         if (!(Array.isArray(cites) ? cites.length : cites) && isCoord) cites = (p.wakeEvents.get(s.id) || []).filter((id) => p.byId.get(id)?.type === 'user.message');
         const tt = await this.startThread(p, { title: a.title, brief: a.brief, cites, model: a.model, effort: a.effort, dependsOn: a.depends_on });
+        info.started = true;
         return { ok: true, thread_id: tt.id, status: STATUS_LABEL.working, branch: tt.meta.worktree?.branch || null, note: 'Started. Its results, blockers and questions reach you as events; no need to poll.' };
       }
       case 'suggest_thread': {
