@@ -72,7 +72,6 @@ const PROJECT_TOOLS = [
         coordinator_effort: { type: 'string', enum: ['low', 'medium', 'high', 'xhigh', 'max'] },
         thread_model: { type: 'string', description: 'e.g. opus (default), sonnet.' },
         thread_effort: { type: 'string', enum: ['low', 'medium', 'high', 'xhigh', 'max'] },
-        max_running: { type: 'number', description: 'Thread turns at once (default 3).' },
         message: { type: 'string', description: 'First message to the coordinator.' },
       },
       required: ['name'],
@@ -115,7 +114,7 @@ const PROJECT_TOOLS = [
   },
   {
     name: 'project_update',
-    description: "Change a project's settings: name, goal, instructions, models per role, the running cap, proactivity (quiet/normal/chatty), or archive it.",
+    description: "Change a project's settings: name, goal, instructions, models per role, proactivity (quiet/normal/chatty), or archive it.",
     inputSchema: {
       type: 'object',
       properties: {
@@ -127,9 +126,7 @@ const PROJECT_TOOLS = [
         coordinator_effort: { type: 'string', enum: ['low', 'medium', 'high', 'xhigh', 'max'] },
         thread_model: { type: 'string' },
         thread_effort: { type: 'string', enum: ['low', 'medium', 'high', 'xhigh', 'max'] },
-        max_running: { type: 'number' },
         proactivity: { type: 'string', enum: ['quiet', 'normal', 'chatty'] },
-        budget_usd: { type: 'number', description: 'Pause the project once it has cost this much (0 = no budget).' },
         archived: { type: 'boolean' },
       },
       required: ['project_id'],
@@ -331,9 +328,7 @@ function projectPatch(a) {
   if (a.thread_model != null || a.thread_effort != null) models.thread = { ...(a.thread_model != null ? { model: a.thread_model } : {}), ...(a.thread_effort != null ? { effort: a.thread_effort } : {}) };
   if (Object.keys(models).length) patch.models = models;
   const policy = {};
-  if (a.max_running != null) policy.maxRunning = a.max_running;
   if (a.proactivity != null) policy.proactivity = a.proactivity;
-  if (a.budget_usd != null) policy.budgetUsd = a.budget_usd;
   if (Object.keys(policy).length) patch.policy = policy;
   return patch;
 }
@@ -379,13 +374,12 @@ export function createDesktopMcp({ store, resolveDir, createWorktree, getChanges
         const n = Math.min(Math.max(Number(a.chat_messages) || 15, 0), 100);
         const chat = d.feed.filter((e) => e.type === 'user.message' || e.type === 'chat.post').slice(-n).map((e) => ({ id: e.id, at: ago(e.ts), from: e.type === 'chat.post' ? 'coordinator' : e.from?.kind === 'desktop' ? 'Claude Desktop' : 'user', text: e.body.text.slice(0, 2000) }));
         return {
-          project: { id: d.id, name: d.name, goal: d.goal, paused: d.paused?.reason || null, coordinatorWorking: d.coordinatorBusy, runningThreadTurns: d.running, cap: d.settings.policy.maxRunning, proactivity: d.settings.policy.proactivity, models: d.settings.models },
+          project: { id: d.id, name: d.name, goal: d.goal, paused: d.paused?.reason || null, coordinatorWorking: d.coordinatorBusy, runningThreadTurns: d.running, proactivity: d.settings.policy.proactivity, models: d.settings.models },
           threads: d.threads.map((t) => ({ thread_id: t.id, title: t.title, status: t.statusLabel, checklist: t.progress ? `${t.progress.done}/${t.progress.total}` : null, lastPost: t.lastPost ? { kind: t.lastPost.kind, text: t.lastPost.text.slice(0, 600), at: ago(t.lastPost.ts) } : null, branch: t.branch, pr: t.pr?.url || null, waitingForPermission: t.pendingPermissions > 0, cost: Number(t.cost.toFixed(4)) })),
           openDecisions: d.decisions.filter((x) => !x.answer).map((x) => ({ decision_id: x.id, thread: x.thread ? p.state.threads[x.thread]?.title : 'coordinator', question: x.question, options: x.options.map((o, i) => `${i}: ${o.label}${i === x.recommended ? ' (recommended)' : ''}${o.consequence ? ` - ${o.consequence}` : ''}`), irreversible: !!x.irreversible })),
           openSuggestions: (d.suggestions || []).filter((x) => !x.answer).map((x) => ({ suggestion_id: x.id, title: x.title, reason: x.reason })),
           chat,
           usageUsd: Number(d.usage.total.toFixed(4)),
-          budgetUsd: d.settings.policy.budgetUsd || null,
         };
       }
       case 'project_send': {

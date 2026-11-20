@@ -12,16 +12,16 @@ export default function ProjectView({ projectId, tab: initialTab, thread: initia
   const [project, reload] = useProject(projectId, onError);
   const narrow = useNarrow();
   // Right panel: Threads or Context; a thread opens in place. On a phone the panel is a view of its own.
-  const [panel, setPanelState] = useState(initialTab === 'context' ? 'context' : 'threads');
+  const [panel, setPanelState] = useState(['context', 'view'].includes(initialTab) ? initialTab : 'threads');
   const [threadId, setThreadId] = useState(initialThread || null);
-  const [mobileView, setMobileView] = useState(initialThread ? 'panel' : initialTab === 'context' || initialTab === 'threads' ? 'panel' : 'chat');
+  const [mobileView, setMobileView] = useState(initialThread ? 'panel' : ['context', 'threads', 'view'].includes(initialTab) ? 'panel' : 'chat');
   const [settings, setSettings] = useState(initialTab === 'settings' ? 'general' : null);
   const [showNew, setShowNew] = useState(false);
   useEffect(() => {
     setThreadId(initialThread || null);
     if (initialTab === 'settings') setSettings('general');
   }, [projectId, initialThread, initialTab]);
-  const writeHash = (p, t) => history.replaceState(null, '', `#p=${projectId}${p === 'context' ? '&tab=context' : ''}${t ? `&t=${t}` : ''}`);
+  const writeHash = (p, t) => history.replaceState(null, '', `#p=${projectId}${p === 'context' || p === 'view' ? `&tab=${p}` : ''}${t ? `&t=${t}` : ''}`);
   const setPanel = (p) => {
     setPanelState(p);
     writeHash(p, threadId);
@@ -135,6 +135,16 @@ function ProjectChat({ project, openThread, onError }) {
     }
   });
   const [sending, setSending] = useState(false);
+  // "Ask Claude" elsewhere on the page (the Custom view tab) puts a draft here.
+  useEffect(() => {
+    const on = (e) => {
+      if (e.detail?.project !== project.id) return;
+      saveDraft(e.detail.text);
+      setTimeout(() => listRef.current?.closest('.pj-chat')?.querySelector('textarea')?.focus(), 0);
+    };
+    window.addEventListener('cw-pj-draft', on);
+    return () => window.removeEventListener('cw-pj-draft', on);
+  }, [project.id]); // eslint-disable-line react-hooks/exhaustive-deps
   const threads = useMemo(() => Object.fromEntries(project.threads.map((t) => [t.id, t])), [project.threads]);
   const decisions = useMemo(() => Object.fromEntries(project.decisions.map((d) => [d.id, d])), [project.decisions]);
   useLayoutEffect(() => {
@@ -160,7 +170,10 @@ function ProjectChat({ project, openThread, onError }) {
     }
     setSending(false);
   };
-  const items = project.feed.filter((e) => !(e.type === 'decision.answered' || e.type === 'decision.withdrawn'));
+  // A thread's result shows once: when Claude relays it in the chat afterwards, the raw post is hidden.
+  const relayed = new Map();
+  for (const e of project.feed) if (e.type === 'chat.post' && e.body?.about) relayed.set(e.body.about, e.ts);
+  const items = project.feed.filter((e) => !(e.type === 'decision.answered' || e.type === 'decision.withdrawn') && !(e.type === 'thread.post' && e.body?.kind === 'result' && relayed.get(e.thread) >= e.ts));
   const cm = project.settings.models.coordinator;
   return (
     <div className="pj-chat">
@@ -176,7 +189,14 @@ function ProjectChat({ project, openThread, onError }) {
           {items.length === 0 && (
             <div className="pj-intro">
               <div className="pj-intro-title">{project.name}</div>
-              <p className="muted">{project.goal || 'Tell the coordinator what you want done. It answers quick questions itself and hands real work to threads that run in parallel, each in its own worktree.'}</p>
+              <p className="muted">{project.goal || 'Tell Claude what you want done. Each piece of work gets its own thread, running in parallel in its own worktree; follow-ups go to the thread that did the work.'}</p>
+              <div className="pj-starters">
+                {STARTERS.map(([label, prompt]) => (
+                  <button key={label} className="pj-starter" onClick={() => (saveDraft(prompt), listRef.current?.closest('.pj-chat')?.querySelector('textarea')?.focus())}>
+                    {label}
+                  </button>
+                ))}
+              </div>
             </div>
           )}
           {items.map((e) => (
@@ -209,7 +229,7 @@ function ProjectChat({ project, openThread, onError }) {
         </div>
         <div className="pj-composer-foot">
           <span className="muted small">
-            {project.running}/{project.settings.policy.maxRunning} threads running · ${project.usage.total.toFixed(2)}
+            {project.running} thread{project.running === 1 ? '' : 's'} running · ${project.usage.total.toFixed(2)}
           </span>
           <span className="spacer" />
           <span className="muted small">
@@ -221,6 +241,12 @@ function ProjectChat({ project, openThread, onError }) {
     </div>
   );
 }
+
+const STARTERS = [
+  ['Explain this repo', 'What does this repo do?'],
+  ['Make a plan', 'Make a plan for '],
+  ['Pick up recent work', 'Look at the recent commits and open branches and tell me what is in progress.'],
+];
 
 const modelName = (m) => (!m ? 'Default model' : m.length < 10 ? m[0].toUpperCase() + m.slice(1) : m);
 
@@ -269,8 +295,6 @@ function FeedItem({ e, project, threads, decisions, onSelect, onError }) {
     }
     case 'suggestion.answered':
       return null;
-    case 'budget.reached':
-      return <div className="pj-notice warn">Budget reached: ${Number(b.total).toFixed(2)} of ${Number(b.budget).toFixed(2)}</div>;
     case 'decision.requested':
       return <DecisionCard projectId={project.id} decision={decisions[b.id]} threadTitle={threads[e.thread]?.title} onError={onError} onOpenThread={onSelect} />;
     case 'thread.post':
@@ -299,14 +323,15 @@ function FeedItem({ e, project, threads, decisions, onSelect, onError }) {
     case 'policy.changed':
       return (
         <div className="pj-notice">
-          Settings changed by the coordinator: at most {b.policy.maxRunning} running, {b.policy.proactivity} updates{b.reason ? ` (${b.reason})` : ''}
+          Settings changed by the coordinator: {b.policy.proactivity} updates{b.reason ? ` (${b.reason})` : ''}
         </div>
       );
     case 'coordinator.rotated':
-      return <div className="pj-notice">Coordinator context reset to a digest</div>;
+      return <div className="pj-notice">{b.manual ? 'Coordinator restarted' : 'Coordinator context reset to a digest'}</div>;
     case 'notice':
       return <div className="pj-notice">{b.text}</div>;
     case 'pr.updated':
+      if (b.quiet) return null;
       return (
         <div className={`pj-notice ${b.wake ? 'warn' : ''}`}>
           <button className="linklike" onClick={() => onSelect(e.thread)}>

@@ -54,7 +54,8 @@ app.disable('x-powered-by');
 // Library uploads (base64 in JSON) may be bigger than everything else.
 const jsonSmall = express.json({ limit: '1mb' });
 const jsonBig = express.json({ limit: '40mb' });
-app.use((req, res, next) => (req.method === 'POST' && /^\/api\/cprojects\/[^/]+\/library$/.test(req.path) ? jsonBig : jsonSmall)(req, res, next));
+// The project hook (after every tool call of a thread) needs no body, which can be a large tool result.
+app.use((req, res, next) => (req.path === '/internal/cproject/hook' ? next() : req.method === 'POST' && /^\/api\/cprojects\/[^/]+\/library$/.test(req.path) ? jsonBig(req, res, next) : jsonSmall(req, res, next)));
 app.use((req, res, next) => {
   res.setHeader('X-Frame-Options', 'DENY');
   res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -403,6 +404,15 @@ if (config.desktopMcp) {
 
 // Artifact files, authorised by a per-session signature in the path (no cookie: sandboxed
 // HTML artifacts load their own CSS/JS from here with an opaque origin).
+// Live project data for Custom view pages (sandboxed, opaque origin): signed per project, read-only.
+app.get('/view-data/:pid/:file', (req, res) => {
+  const sig = String(req.params.file).replace(/\.json$/, '');
+  const p = engine.projects.get(req.params.pid);
+  if (!p || !p.viewDataOk(sig)) return res.status(404).json({ error: 'not found' });
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Cache-Control', 'no-store');
+  res.json(p.viewData());
+});
 app.get('/raw/:sid/:sig/*', (req, res, next) => {
   try {
     rawHandler(store)(req, res);

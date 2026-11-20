@@ -299,3 +299,49 @@
   .pjs-control .pj-model { min-width: 0; width: 100%; }
   .pj-composer2 { padding: var(--sp-2) var(--sp-3) calc(var(--sp-2) + env(safe-area-inset-bottom)); }
 }
+
+/* ---- coordination activity: notes and signals ---- */
+.pjp-act { text-align: left; }
+.pjp-act-k { font-weight: 600; color: var(--text-2, inherit); margin-right: 4px; }
+.pjp-act-line { margin-top: 2px; padding-left: 14px; }
+.pjp-act-row { align-items: flex-start; }
+.pjp-act-text { flex: 1; min-width: 0; line-height: 1.4; overflow-wrap: anywhere; }
+.pjp-kind { flex: none; font-size: 11px; padding: 1px 6px; border-radius: 999px; background: var(--surface-2, rgba(0,0,0,.06)); color: var(--text-2, inherit); margin-top: 1px; white-space: nowrap; }
+.pjp-kind.k-warning, .pjp-kind.k-signal { background: color-mix(in srgb, var(--warn, #c77700) 18%, transparent); }
+.pjp-kind.k-decision { background: color-mix(in srgb, var(--accent, #c96442) 18%, transparent); }
+
+/* ---- memory screen: MEMORY.md, pinned part, file fields ---- */
+.pj-mem-sec { font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: var(--sp-2) 0 var(--sp-1); }
+.pj-memindex { padding: var(--sp-3) var(--sp-4); display: flex; flex-direction: column; gap: var(--sp-2); margin-bottom: var(--sp-3); }
+.pj-memindex-head { display: flex; align-items: center; gap: var(--sp-2); }
+.pj-membar { height: 4px; border-radius: 2px; background: var(--surface-2, rgba(0,0,0,.08)); overflow: hidden; }
+.pj-membar > span { display: block; height: 100%; background: var(--accent); }
+.pj-membar > span.warn { background: var(--warn); }
+.pj-pinned { display: flex; flex-direction: column; gap: 2px; padding: var(--sp-2); border: 1px dashed var(--border); border-radius: var(--r-sm, 6px); cursor: pointer; }
+.pj-memfield { display: grid; grid-template-columns: 96px 1fr; gap: var(--sp-2); align-items: baseline; }
+.pj-membody { border-top: 1px solid var(--border); padding-top: var(--sp-2); margin-top: var(--sp-1); }
+.pj-memask { display: flex; gap: var(--sp-2); align-items: flex-end; margin-top: var(--sp-3); }
+.pj-memask textarea { flex: 1; }
+.pjp-diffstat { font-family: var(--font-mono, monospace); font-size: var(--fs-xs, 12px); }
+.pjp-diffstat .add { color: var(--green); }
+.pjp-diffstat .del { color: var(--red, #d33); }
+.pjp-prbar-branch { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 14em; opacity: .85; }
+.pj-starters { display: flex; flex-wrap: wrap; gap: var(--sp-2); margin-top: var(--sp-3); }
+.pj-starter { border: 1px solid var(--border); background: var(--bg-raised, transparent); color: var(--text); border-radius: var(--r-md, 8px); padding: 6px 10px; font-size: var(--fs-sm); cursor: pointer; }
+.pj-starter:hover { background: var(--bg-hover, rgba(127,127,127,.12)); }
+.pj-activity-stats { display: flex; gap: var(--sp-6, 24px); margin: var(--sp-2) 0 var(--sp-4); }
+.pj-activity-stats b { display: block; font-size: 22px; font-weight: 600; }
+.pj-activity-stats .add { color: var(--green); } .pj-activity-stats .del { color: var(--red, #d33); }
+.pj-usage-row .share { width: 3.5em; text-align: right; }
+.pjp-tab-add { background: none; border: 0; color: var(--text-muted, inherit); cursor: pointer; padding: 2px 8px; font-size: var(--fs-sm); }
+.pjp-view { display: flex; flex-direction: column; padding: 0; }
+.pjp-view-empty { margin: auto; text-align: center; max-width: 320px; display: flex; flex-direction: column; align-items: center; gap: var(--sp-2); padding: var(--sp-6, 24px); }
+.pjp-view-ico { font-size: 26px; opacity: .6; }
+.pjp-view-actions { display: flex; gap: var(--sp-2); }
+.pjp-view-bar { display: flex; align-items: center; gap: var(--sp-2); padding: var(--sp-2) var(--sp-4); border-bottom: 1px solid var(--border); }
+.pjp-view-bar .spacer { flex: 1; }
+.pjp-view-title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pjp-view-frame { flex: 1; width: 100%; border: 0; background: #fff; min-height: 300px; }
+.pjp-pick-list { display: flex; flex-direction: column; gap: 4px; margin-top: var(--sp-3); max-height: 50vh; overflow: auto; }
+.pjp-pick { display: flex; flex-direction: column; align-items: flex-start; text-align: left; border: 1px solid var(--border); background: none; color: var(--text); border-radius: var(--r-md, 8px); padding: 8px 10px; cursor: pointer; }
+.pjp-pick:hover { background: var(--bg-hover, rgba(127,127,127,.12)); }

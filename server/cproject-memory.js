@@ -8,6 +8,8 @@ import crypto from 'node:crypto';
 
 const MAX_FILE = 4096;
 const MAX_FILES = 200;
+export const MAX_INDEX = 16 * 1024; // MEMORY.md: the file lines plus the pinned part
+const TYPES = ['user', 'feedback', 'project', 'reference'];
 
 const version = (text) => crypto.createHash('sha256').update(text).digest('hex').slice(0, 12);
 
@@ -26,9 +28,9 @@ function parse(text) {
   return { meta, body: m[2] };
 }
 
-function render(name, description, body) {
+function render(name, description, body, type) {
   const oneLine = (s) => String(s || '').replace(/\s+/g, ' ').trim();
-  return `---\nname: ${name}\ndescription: ${oneLine(description)}\n---\n\n${String(body || '').trim()}\n`;
+  return `---\nname: ${name}\ndescription: ${oneLine(description)}${type ? `\ntype: ${type}` : ''}\n---\n\n${String(body || '').trim()}\n`;
 }
 
 export class ProjectMemory {
@@ -52,14 +54,44 @@ export class ProjectMemory {
       const text = fs.readFileSync(path.join(this.dir, f), 'utf8');
       const { meta } = parse(text);
       const st = fs.statSync(path.join(this.dir, f));
-      return { name: f.slice(0, -3), description: meta.description || '', size: Buffer.byteLength(text), version: version(text), modified: st.mtimeMs, by: meta.by || null };
+      return { name: f.slice(0, -3), description: meta.description || '', type: meta.type || null, size: Buffer.byteLength(text), version: version(text), modified: st.mtimeMs, by: meta.by || null };
     });
   }
 
-  index() {
+  /** Free text the user pins in MEMORY.md (facts and links with no file of their own). */
+  pinned() {
+    try {
+      return fs.readFileSync(path.join(this.dir, '.pinned'), 'utf8').trim();
+    } catch {
+      return '';
+    }
+  }
+
+  fileLines() {
     return this.entries()
       .map((e) => `- [${e.name}](${e.name}.md): ${e.description || '(no description)'}`)
       .join('\n');
+  }
+
+  /** MEMORY.md: the engine owns the file lines; the Pinned part is the user's. */
+  index() {
+    const pin = this.pinned();
+    return [this.fileLines(), pin ? `## Pinned\n${pin}` : ''].filter(Boolean).join('\n\n');
+  }
+
+  setPinned(text, { by } = {}) {
+    text = String(text || '').trim();
+    const size = Buffer.byteLength(this.fileLines()) + Buffer.byteLength(text) + 20;
+    if (size > MAX_INDEX) throw new Error(`MEMORY.md would be ${Math.ceil(size / 1024)} KB; the limit is 16 KB. Shorten the pinned part.`);
+    fs.writeFileSync(path.join(this.dir, '.pinned'), text ? `${text}\n` : '');
+    this.writeIndex();
+    this.onChange({ name: 'MEMORY.md', action: 'pinned', by });
+    return this.indexInfo();
+  }
+
+  indexInfo() {
+    const text = this.index();
+    return { size: Buffer.byteLength(text), cap: MAX_INDEX, pinned: this.pinned(), lines: this.fileLines() };
   }
 
   writeIndex() {
@@ -67,7 +99,7 @@ export class ProjectMemory {
   }
 
   list() {
-    return { files: this.entries().map(({ name, description, size, version: v, modified }) => ({ name, description, size, version: v, modified: new Date(modified).toISOString() })), note: 'memory_read a file for its text and version; memory_write with base_version to change it.' };
+    return { files: this.entries().map(({ name, description, type, size, version: v, modified }) => ({ name, description, type, size, version: v, modified: new Date(modified).toISOString() })), index: this.indexInfo(), note: 'memory_read a file for its text and version; memory_write with base_version to change it.' };
   }
 
   read(name) {
@@ -76,13 +108,14 @@ export class ProjectMemory {
     if (!slug || !fs.existsSync(file)) throw new Error(`No memory file "${name}". memory_list shows them.`);
     const text = fs.readFileSync(file, 'utf8');
     const { meta, body } = parse(text);
-    return { name: slug, description: meta.description || '', content: body.trim(), version: version(text) };
+    return { name: slug, description: meta.description || '', type: meta.type || null, modified: new Date(fs.statSync(file).mtimeMs).toISOString(), content: body.trim(), version: version(text) };
   }
 
   /** Create or replace a file. baseVersion is required to change an existing file. */
-  write({ name, description, content, baseVersion, by }) {
+  write({ name, description, content, baseVersion, by, type }) {
     const slug = memorySlug(name);
     if (!slug) throw new Error('name is required (a short kebab-case subject, e.g. "deploy-process")');
+    if (slug === 'memory') throw new Error('"memory" is reserved for the index (MEMORY.md); pick a name for the subject.');
     if (!String(description || '').trim()) throw new Error('description is required: one line saying what the file covers');
     if (/(api[_-]?key|password|secret|token)\s*[:=]\s*\S{8,}/i.test(content || '')) throw new Error('This looks like it contains a secret. Never store credentials in project memory.');
     const file = path.join(this.dir, `${slug}.md`);
@@ -94,7 +127,9 @@ export class ProjectMemory {
     } else if (this.files().length >= MAX_FILES) {
       throw new Error(`Memory holds ${MAX_FILES} files, the limit. Merge related files first.`);
     }
-    const text = render(slug, description, content);
+    let kind = TYPES.includes(type) ? type : null;
+    if (!kind && exists) kind = parse(fs.readFileSync(file, 'utf8')).meta.type || null; // keep the type it had
+    const text = render(slug, description, content, kind);
     if (Buffer.byteLength(text) > MAX_FILE) throw new Error(`Too long (${Buffer.byteLength(text)} bytes; the limit is ${MAX_FILE}). Summarise it, or split it into files by subject.`);
     fs.writeFileSync(file, text);
     this.writeIndex();

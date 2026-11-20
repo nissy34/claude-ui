@@ -2,7 +2,7 @@
 // (instructions, memory, files). The project chat stays on the left.
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { api, timeAgo } from '../api.js';
-import { Button, IconButton, Menu, Modal, ModalBody, ModalHead, Spinner, Textarea } from '../ui/index.jsx';
+import { Button, IconButton, Input, Menu, MenuSeparator, Modal, ModalBody, ModalHead, Spinner, Textarea } from '../ui/index.jsx';
 import { confirmDialog, promptDialog } from '../ui/dialogs.jsx';
 import { DecisionCard, Md } from './ProjectCards.jsx';
 import { ProjectMemory } from './ProjectFiles.jsx';
@@ -113,6 +113,16 @@ export default function ProjectPanel({ project, tab, setTab, threadId, openThrea
           <button role="tab" className={tab === 'context' ? 'on' : ''} onClick={() => setTab('context')}>
             Context
           </button>
+          {project.view && (
+            <button role="tab" className={tab === 'view' ? 'on' : ''} onClick={() => setTab('view')}>
+              Custom view
+            </button>
+          )}
+          {!project.view && (
+            <button className="pjp-tab-add" title="Add a Custom view: a page Claude keeps up to date, like a dashboard or a checklist" onClick={() => api(`/api/cprojects/${project.id}/view`, { method: 'POST', body: {} }).then(() => (reload(), setTab('view'))).catch(onError)}>
+              ＋
+            </button>
+          )}
         </div>
         <span className="spacer" />
         {tab === 'threads' && (
@@ -121,8 +131,96 @@ export default function ProjectPanel({ project, tab, setTab, threadId, openThrea
           </IconButton>
         )}
       </div>
-      {tab === 'threads' ? <ThreadsList project={project} openThread={openThread} /> : <ContextTab project={project} onError={onError} reload={reload} />}
+      {tab === 'view' && project.view ? <ViewTab project={project} onError={onError} reload={reload} onRemoved={() => setTab('threads')} /> : tab === 'context' ? <ContextTab project={project} onError={onError} reload={reload} /> : <ThreadsList project={project} openThread={openThread} />}
     </div>
+  );
+}
+
+// ---------------------------------------------------------------- custom view
+function ViewTab({ project, onError, reload, onRemoved }) {
+  const v = project.view;
+  const [picking, setPicking] = useState(false);
+  const [menu, setMenu] = useState(false);
+  const ask = () => window.dispatchEvent(new CustomEvent('cw-pj-draft', { detail: { project: project.id, text: 'Make a custom view for this project: ' } }));
+  const post = (body) => api(`/api/cprojects/${project.id}/view`, { method: 'POST', body }).then(reload).catch(onError);
+  return (
+    <div className="pjp-body pjp-view">
+      {v.empty ? (
+        <div className="pjp-view-empty">
+          <div className="pjp-view-ico">◰</div>
+          <b>Nothing here yet</b>
+          <p className="muted small">Pin a page to see it here, or ask Claude to make one, like a dashboard, a checklist or a weekly digest.</p>
+          <div className="pjp-view-actions">
+            <Button size="sm" onClick={() => setPicking(true)}>
+              Pin a page
+            </Button>
+            <Button size="sm" onClick={ask}>
+              Ask Claude
+            </Button>
+          </div>
+          <button className="linklike small muted" onClick={() => post({ remove: true }).then(onRemoved)}>
+            Remove this tab
+          </button>
+        </div>
+      ) : (
+        <>
+          <div className="pjp-view-bar">
+            <span className="pjp-view-title" title={v.path}>
+              {v.title}
+            </span>
+            <span className="spacer" />
+            {v.url && (
+              <a className="small" href={v.url} target="_blank" rel="noreferrer">
+                Open ↗
+              </a>
+            )}
+            <div className="menu-wrap">
+              <IconButton size="sm" title="More" onClick={() => setMenu((m) => !m)}>
+                ⋯
+              </IconButton>
+              {menu && (
+                <Menu place="down" align="end">
+                  <button onClick={() => (setMenu(false), setPicking(true))}>Pin another page…</button>
+                  <button onClick={() => (setMenu(false), ask())}>Ask Claude to change it</button>
+                  <button onClick={() => (setMenu(false), post({ remove: true }).then(onRemoved))}>Remove the Custom view</button>
+                </Menu>
+              )}
+            </div>
+          </div>
+          {v.missing ? <div className="pjp-ctx-row muted">The pinned file is gone: {v.path}</div> : <iframe key={v.mtime} className="pjp-view-frame" src={v.url} title={v.title} sandbox="allow-scripts allow-popups allow-forms allow-modals allow-downloads" />}
+        </>
+      )}
+      {picking && <PinPicker project={project} onClose={() => setPicking(false)} onPick={(a) => (setPicking(false), post({ session: a.sessionId, path: a.path, title: a.title || a.name }))} onError={onError} />}
+    </div>
+  );
+}
+
+function PinPicker({ project, onClose, onPick, onError }) {
+  const [arts, setArts] = useState(null);
+  const [q, setQ] = useState('');
+  useEffect(() => {
+    api(`/api/artifacts?cproject=${encodeURIComponent(project.id)}`)
+      .then((r) => setArts(r.artifacts.filter((a) => /^(html?|svg|md)$/.test(a.ext))))
+      .catch(onError);
+  }, [project.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  const shown = (arts || []).filter((a) => !q || `${a.title || ''} ${a.name}`.toLowerCase().includes(q.toLowerCase()));
+  return (
+    <Modal onClose={onClose}>
+      <ModalHead onClose={onClose}>Pin a page</ModalHead>
+      <ModalBody>
+        <Input autoFocus placeholder="Search pages" value={q} onChange={(e) => setQ(e.target.value)} />
+        {!arts && <Spinner />}
+        {arts?.length === 0 && <p className="muted small">This project has no pages yet. Ask Claude to make one.</p>}
+        <div className="pjp-pick-list">
+          {shown.map((a) => (
+            <button key={a.sessionId + a.path} className="pjp-pick" onClick={() => onPick(a)}>
+              <b>{a.title || a.name}</b>
+              <span className="muted small">{project.threads.find((t) => t.id === a.sessionId)?.title || a.sessionName || ''}</span>
+            </button>
+          ))}
+        </div>
+      </ModalBody>
+    </Modal>
   );
 }
 
@@ -231,6 +329,11 @@ function ThreadPane({ project, threadId, onBack, onSelect, openThread, onError }
   const decisions = Object.fromEntries(project.decisions.map((d) => [d.id, d]));
   const lastChecklist = feed ? [...feed].reverse().find((e) => e.type === 'checklist.updated')?.id : null;
   const threadTitle = (id) => project.threads.find((x) => x.id === id)?.title;
+  // Previous / next in the order the Threads list shows (most recent activity first).
+  const order = [...project.threads].sort((a, b) => (b.lastActivity || 0) - (a.lastActivity || 0)).map((x) => x.id);
+  const at = order.indexOf(threadId);
+  const prevId = at > 0 ? order[at - 1] : null;
+  const nextId = at >= 0 && at < order.length - 1 ? order[at + 1] : null;
   return (
     <div className="pjp">
       <div className="pjp-head">
@@ -257,6 +360,9 @@ function ThreadPane({ project, threadId, onBack, onSelect, openThread, onError }
           </IconButton>
           {menu && (
             <Menu place="down">
+              <button disabled={!prevId} onClick={() => (setMenu(false), openThread(prevId))}>Previous thread</button>
+              <button disabled={!nextId} onClick={() => (setMenu(false), openThread(nextId))}>Next thread</button>
+              <MenuSeparator />
               <button onClick={side}>Side question…</button>
               <button onClick={remind}>{t.reminder ? 'Change reminder…' : 'Remind me…'}</button>
               {t.reminder && <button onClick={() => (setMenu(false), act('remind', {}))}>Clear reminder</button>}
@@ -324,6 +430,7 @@ function ThreadPane({ project, threadId, onBack, onSelect, openThread, onError }
             case 'decision.requested':
               return <DecisionCard key={e.id} projectId={project.id} decision={decisions[b.id]} threadTitle={t.title} onError={onError} />;
             case 'pr.updated':
+              if (b.quiet) return null;
               return (
                 <div key={e.id} className="pjp-note">
                   {b.summary}
@@ -354,6 +461,40 @@ function ThreadPane({ project, threadId, onBack, onSelect, openThread, onError }
                   {b.text}
                 </div>
               );
+            // What passed between threads: notes this thread shared, notes handed to it, signals about it.
+            case 'note.shared':
+              return (
+                <div key={e.id} className="pjp-note pjp-act" title={b.files?.length ? b.files.join(', ') : undefined}>
+                  <span className="pjp-act-k">↗ Shared {NOTE_LABEL[b.kind] || b.kind}</span> {b.text}
+                  <span className="muted">
+                    {' '}
+                    · {(b.pushTo || []).filter((x) => x !== project.coordinatorId).length ? `handed to ${(b.pushTo || []).filter((x) => x !== project.coordinatorId).map((x) => threadTitle(x) || 'a thread').join(', ')}` : 'searchable'}
+                  </span>
+                </div>
+              );
+            case 'notes.delivered':
+              return (
+                <div key={e.id} className="pjp-note pjp-act">
+                  <span className="pjp-act-k">↘ {b.via === 'tool' ? 'Handed notes mid-turn' : 'Handed notes'}</span>
+                  {b.notes.map((n) => (
+                    <div key={n.id} className="pjp-act-line">
+                      {NOTE_LABEL[n.kind] || n.kind} from {n.from}: {n.text}
+                    </div>
+                  ))}
+                </div>
+              );
+            case 'memory.changed':
+              return (
+                <div key={e.id} className="pjp-note pjp-act">
+                  <span className="pjp-act-k">{b.action === 'delete' ? 'Removed from project memory' : 'Updated project memory'}</span> {(b.names || [b.name]).join(', ')}
+                </div>
+              );
+            case 'signal':
+              return (
+                <div key={e.id} className="pjp-note pjp-act warn">
+                  <span className="pjp-act-k">⚑ {SIGNAL_LABEL[b.kind] || b.kind}</span> {b.text}
+                </div>
+              );
             default:
               return null;
           }
@@ -374,8 +515,14 @@ function ThreadPane({ project, threadId, onBack, onSelect, openThread, onError }
       </div>
       {t.pr?.url && (
         <a className={`pjp-prbar ${t.pr.state === 'MERGED' ? 'merged' : t.pr.state === 'CLOSED' ? 'closed' : 'open'}`} href={t.pr.url} target="_blank" rel="noreferrer">
-          <PrIcon merged={t.pr.state === 'MERGED'} /> <b>#{t.pr.number}</b> <span className="mono">{t.branch}</span>
+          <PrIcon merged={t.pr.state === 'MERGED'} /> <b>#{t.pr.number}</b> <span className="mono pjp-prbar-branch">{t.pr.head || t.branch}</span>
+          {t.pr.additions != null && (
+            <span className="pjp-diffstat">
+              <span className="add">+{t.pr.additions}</span> <span className="del">−{t.pr.deletions}</span>
+            </span>
+          )}
           <span className="spacer" />
+          {t.pr.summary && t.pr.summary.pass + t.pr.summary.fail + t.pr.summary.pending > 0 && !t.pr.summary.fail && <span className="muted small">{t.pr.summary.pending ? `${t.pr.summary.pending} checks running · ` : 'Checks pass · '}</span>}
           {t.pr.state === 'MERGED' ? 'Merged' : t.pr.state === 'CLOSED' ? 'Closed' : t.pr.summary?.fail ? `${t.pr.summary.fail} failing` : t.pr.review === 'APPROVED' ? 'Approved' : 'Open'}
         </a>
       )}
@@ -428,8 +575,55 @@ function ClampText({ text }) {
 }
 
 // ---------------------------------------------------------------- context
+const NOTE_LABEL = { fix: 'fix', gotcha: 'gotcha', reusable: 'reusable helper', fact: 'fact', warning: 'warning', decision: 'your decision' };
+const SIGNAL_LABEL = { overlap: 'File overlap', stuck: 'Possibly stuck', dependency_landed: 'Dependency landed' };
+
+function ActivityRow({ a, project, onRetract }) {
+  const title = (id) => project.threads.find((t) => t.id === id)?.title || (id === 'user' ? 'You' : id);
+  const when = short(a.ts);
+  if (a.type === 'note')
+    return (
+      <div className="pjp-ctx-row pjp-act-row" title={a.files?.length ? a.files.join(', ') : undefined}>
+        <span className={`pjp-kind k-${a.kind}`}>{NOTE_LABEL[a.kind] || a.kind}</span>
+        <span className="pjp-act-text">
+          {a.text}
+          <span className="muted">
+            {' '}
+            · {a.from === 'user' ? 'you' : title(a.from)}
+            {a.to?.length ? ` → ${a.to.map(title).join(', ')}` : a.kind === 'decision' ? '' : ' · searchable'}
+          </span>
+        </span>
+        {a.kind !== 'decision' && (
+          <button className="pjp-ctx-del" title="Retract this note" onClick={() => onRetract(a.noteId)}>
+            ✕
+          </button>
+        )}
+        <span className="pjp-row-time">{when}</span>
+      </div>
+    );
+  if (a.type === 'signal')
+    return (
+      <div className="pjp-ctx-row pjp-act-row">
+        <span className="pjp-kind k-signal">{SIGNAL_LABEL[a.kind] || a.kind}</span>
+        <span className="pjp-act-text">{a.text}</span>
+        <span className="pjp-row-time">{when}</span>
+      </div>
+    );
+  if (a.type === 'delivered')
+    return (
+      <div className="pjp-ctx-row pjp-act-row muted">
+        <span className="pjp-kind">handed</span>
+        <span className="pjp-act-text">
+          {a.notes.length} note{a.notes.length > 1 ? 's' : ''} to {a.to === project.coordinatorId ? 'the coordinator' : title(a.to)} {a.via === 'tool' ? 'mid-turn' : 'with its wake'}
+        </span>
+        <span className="pjp-row-time">{when}</span>
+      </div>
+    );
+  return null;
+}
+
 function ContextTab({ project, onError, reload }) {
-  const [open, setOpen] = useState({ instructions: true, memory: false, files: true, artifacts: true });
+  const [open, setOpen] = useState({ instructions: true, memory: false, files: true, artifacts: true, activity: false });
   const [arts, setArts] = useState(null);
   const [mem, setMem] = useState(null);
   const [lib, setLib] = useState(null);
@@ -617,6 +811,20 @@ function ContextTab({ project, onError, reload }) {
               <span className="pjp-row-time">{short(a.mtime)}</span>
             </div>
           ))}
+        </>
+      )}
+      <button className="pjp-ctx-sec" onClick={() => toggle('activity')}>
+        <span className="chev">{open.activity ? '⌄' : '›'}</span> Activity <span className="muted">{project.notes?.length || ''}</span>
+      </button>
+      {open.activity && (
+        <>
+          {!project.activity?.length && <div className="pjp-ctx-row muted">Nothing passed between threads yet. Notes threads share, what was handed to whom, and signals show up here.</div>}
+          {(project.activity || [])
+            .filter((a) => a.type !== 'retracted')
+            .slice(0, 40)
+            .map((a) => (
+              <ActivityRow key={a.id} a={a} project={project} onRetract={(nid) => api(`/api/cprojects/${project.id}/notes/${nid}`, { method: 'DELETE' }).then(reload).catch(onError)} />
+            ))}
         </>
       )}
       <div className="pjp-storage">
