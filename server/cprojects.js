@@ -73,7 +73,6 @@ export const DEFAULT_SETTINGS = {
     threadPermissionMode: 'auto',
     worktrees: true,
     checkInMinutes: 30,
-    rotateTokens: 60_000,
     continueOnReset: true, // cut-off turns continue by themselves when the usage limit resets
     quietHours: null, // { from: '23:00', to: '07:00' } holds browser notifications
     askRules: ['Bash(git push --force:*)', 'Bash(git push -f:*)', 'Bash(git push origin main:*)', 'Bash(git push origin master:*)', 'Bash(gh pr merge:*)', 'Bash(rm -rf /:*)'],
@@ -144,7 +143,7 @@ export function cleanSettings(s) {
   p.worktrees = p.worktrees !== false;
   p.continueOnReset = p.continueOnReset !== false;
   p.checkInMinutes = Math.min(Math.max(parseInt(p.checkInMinutes, 10) || 30, 5), 24 * 60);
-  p.rotateTokens = Math.min(Math.max(parseInt(p.rotateTokens, 10) || 60_000, 20_000), 500_000);
+  delete p.rotateTokens; // removed: the CLI's own auto-compact keeps the coordinator's context in bounds
   p.askRules = (Array.isArray(p.askRules) ? p.askRules : []).map((r) => String(r).trim()).filter(Boolean).slice(0, 50);
   if (p.quietHours && !(/^\d\d:\d\d$/.test(p.quietHours.from) && /^\d\d:\d\d$/.test(p.quietHours.to))) p.quietHours = null;
   return out;
@@ -960,7 +959,6 @@ export class Project {
       this.append({ type: 'queue.dropped', body: { session: sid, events: items.map((q) => q.e) } });
       return false;
     }
-    if (this.rotating === sid) return Date.now() + 300;
     if (this.state.inflight[sid] || s.isBusy() || s.inbox.length) return false;
     if (s.meta.worktreeRemoved && this.state.threads[sid]) {
       // Its worktree was removed after its branch merged: give it a fresh one before it works again,
@@ -1375,7 +1373,6 @@ export class Project {
           this.append({ type: 'turn.guard', body: {} });
         }
       }
-      this.maybeRotate(s);
       return;
     }
     this.engine.checkPr(this, sid, 5000);
@@ -1412,36 +1409,6 @@ export class Project {
       this.crashes.delete(sid);
       this.append({ type: 'session.error', body: { session: sid, text: clipText(ev.text, 500), final: true } });
     }
-  }
-
-  /** Start the coordinator over from a digest when its context grows past the threshold. */
-  maybeRotate(s) {
-    const tokens = s.meta.contextTokens || 0;
-    const sid = s.id;
-    // The threshold counts what the conversation added, not the fixed start (system prompt, tools,
-    // MCP servers, CLAUDE.md), which alone can pass 60k tokens with a real CLI setup. Counting the
-    // whole context reset the coordinator after every turn, so each reply paid a cold start.
-    if (!s.meta.rotateBase) {
-      s.meta.rotateBase = tokens;
-      return;
-    }
-    if (tokens - s.meta.rotateBase < this.settings.policy.rotateTokens) return;
-    setTimeout(async () => {
-      if ((this.state.queue[sid] || []).length || s.isBusy() || this.state.inflight[sid]) return;
-      // Hold deliveries while the CLI stops: a wake sent into a stopping session would be lost.
-      this.rotating = sid;
-      try {
-        await s.stopAndWait();
-      } finally {
-        this.rotating = null;
-      }
-      s.meta.claudeSessionId = null;
-      s.meta.contextTokens = 0;
-      s.meta.rotateBase = 0;
-      s.record({ k: 'notice', text: 'Conversation reset to a digest (context rotation)' });
-      this.append({ type: 'coordinator.rotated', body: { coordinator: sid, tokens } });
-      this.schedulePump();
-    }, 1000).unref?.();
   }
 
   onSignal(s, kind, info) {
@@ -1869,7 +1836,6 @@ export class ProjectEngine {
     await s.stopAndWait();
     s.meta.claudeSessionId = null;
     s.meta.contextTokens = 0;
-    s.meta.rotateBase = 0;
     s.record({ k: 'notice', text: 'Restarted by you; starting over from a digest' });
     p.append({ type: 'coordinator.rotated', body: { coordinator: s.id, manual: true } });
     p.schedulePump();

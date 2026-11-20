@@ -147,10 +147,6 @@ function SettingsFields({ s, set, projects, full }) {
               Check-in every (minutes, Chatty)
               <Input type="number" min={5} value={p.checkInMinutes} onChange={(e) => setP({ checkInMinutes: e.target.value })} />
             </label>
-            <label>
-              Reset coordinator context after (tokens)
-              <Input type="number" min={20000} step={10000} value={p.rotateTokens} onChange={(e) => setP({ rotateTokens: e.target.value })} />
-            </label>
           </div>
           <div className="pj-grid">
             <label>
@@ -178,7 +174,7 @@ const DEFAULTS = {
   instructions: '',
   folders: [{ path: '' }],
   models: { coordinator: { model: 'sonnet', effort: 'low' }, thread: { model: 'opus', effort: 'high' } },
-  policy: { proactivity: 'normal', threadPermissionMode: 'auto', worktrees: true, checkInMinutes: 30, rotateTokens: 60000, quietHours: null, askRules: [] },
+  policy: { proactivity: 'normal', threadPermissionMode: 'auto', worktrees: true, checkInMinutes: 30, quietHours: null, askRules: [] },
 };
 
 const clean = (s) => ({ ...s, folders: s.folders.filter((f) => f.path.trim()), policy: { ...s.policy, askRules: (s.policy.askRules || []).map((r) => r.trim()).filter(Boolean) } });
@@ -416,9 +412,6 @@ export function ProjectSettingsModal({ project, section, setSection, onClose, on
               </Row>
               <Row label="Check-in every (minutes, Chatty)">
                 <Input type="number" min={5} value={p.checkInMinutes} onChange={(e) => setP({ checkInMinutes: e.target.value })} />
-              </Row>
-              <Row label="Reset coordinator context after (tokens)">
-                <Input type="number" min={20000} step={10000} value={p.rotateTokens} onChange={(e) => setP({ rotateTokens: e.target.value })} />
               </Row>
               <Row label="Quiet hours">
                 <div className="pjs-inline">
