@@ -8,7 +8,7 @@ import ProjectPanel, { PrChip, StatusIcon } from './ProjectPanel.jsx';
 import { STATUS_LABEL, STATUS_ORDER, useProject } from './useProject.js';
 import './project.css';
 
-export default function ProjectView({ projectId, tab: initialTab, thread: initialThread, onSelect, onMenu, onError, onDeleted, projects }) {
+export default function ProjectView({ projectId, tab: initialTab, thread: initialThread, onSelect, onCreate, onMenu, onError, onDeleted, projects }) {
   const [project, reload] = useProject(projectId, onError);
   const narrow = useNarrow();
   // Right panel: Threads or Context; a thread opens in place. On a phone the panel is a view of its own.
@@ -73,7 +73,7 @@ export default function ProjectView({ projectId, tab: initialTab, thread: initia
               ⚙
             </IconButton>
           </div>
-          <Banners project={project} reload={reload} onError={onError} />
+          <Banners project={project} reload={reload} onError={onError} onCreate={onCreate} />
           <ProjectChat project={project} openThread={openThread} onError={onError} />
         </div>
       )}
@@ -107,12 +107,19 @@ function useNarrow() {
   return n;
 }
 
-function Banners({ project, reload, onError }) {
+function Banners({ project, reload, onError, onCreate }) {
+  // Same as the chat view's "Log in again": a terminal session that runs the CLI's /login.
+  const relogin = () => onCreate?.({ cwd: project.settings.folders?.[0]?.path, kind: 'claude', name: 'Log in to Claude', login: true });
   return (
     <>
       {project.paused && (
         <div className="pj-banner warn">
           {project.paused.reason}
+          {project.paused.auth && onCreate && (
+            <Button size="sm" variant="primary" onClick={relogin}>
+              Log in again
+            </Button>
+          )}
           <Button size="sm" onClick={() => api(`/api/cprojects/${project.id}/resume`, { method: 'POST' }).then(reload).catch(onError)}>
             Resume
           </Button>
@@ -204,7 +211,7 @@ function ProjectChat({ project, openThread, onError }) {
           ))}
           {(project.coordinatorBusy || project.coordinator?.queued > 0) && (
             <div className="pj-typing">
-              <Spinner /> {project.coordinatorBusy ? 'Working…' : 'Will read this shortly…'}
+              <Spinner /> {project.coordinatorBusy ? 'Working…' : project.paused ? (project.paused.auth ? 'Waits until you log in and resume' : 'Waits until you resume') : 'Will read this shortly…'}
             </div>
           )}
         </div>
@@ -316,6 +323,14 @@ function FeedItem({ e, project, threads, decisions, onSelect, onError }) {
       return <div className="pj-notice warn">{b.reason}</div>;
     case 'project.resumed':
       return <div className="pj-notice">Resumed</div>;
+    case 'turn.failed': {
+      const who = b.session === project.coordinatorId ? 'Claude' : threads[b.session]?.title || 'A thread';
+      return (
+        <div className="pj-notice warn">
+          {who} couldn't finish: {b.text}
+        </div>
+      );
+    }
     case 'limit.hit':
       return <div className="pj-notice warn">Usage limit reached; work continues at {new Date(b.until).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>;
     case 'limit.reset':
