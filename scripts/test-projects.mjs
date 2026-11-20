@@ -342,26 +342,21 @@ async function siblings() {
 }
 
 async function rotation() {
-  console.log('The coordinator resets to a digest only when its conversation grows');
-  // A real CLI starts big (system prompt, tools, MCP servers): 70k tokens on the first turn.
-  const { project: r } = await api('/api/cprojects', { method: 'POST', body: { name: 'Rotate', folders: [repo], prompt: `@@usage 70000\n@@say first\n${call('post_message', { text: 'first' })}` } });
+  console.log('The coordinator is never reset by the engine; the CLI compacts its own context');
+  // A real CLI starts big (system prompt, tools, MCP servers) and grows from there.
+  const { project: r } = await api('/api/cprojects', { method: 'POST', body: { name: 'Rotate', folders: [repo], prompt: `@@usage 70000\n${call('post_message', { text: 'first' })}` } });
   const say = async (n, text) => {
     await api(`/api/cprojects/${r.id}/messages`, { method: 'POST', body: { text: `@@usage ${n}\n${call('post_message', { text })}` } });
     await until(async () => (await detail(r.id)).feed.some((e) => e.type === 'chat.post' && e.body.text === text), 8000, text);
     await sleep(1500);
   };
-  await until(async () => (await detail(r.id)).coordinator && !(await detail(r.id)).coordinator.busy, 8000, 'first turn');
+  await until(async () => (await detail(r.id)).feed.some((e) => e.type === 'chat.post' && e.body.text === 'first'), 8000, 'first turn');
   await sleep(1500);
-  await say(72000, 'second');
-  await say(75000, 'third');
-  let d = await detail(r.id);
-  check(!d.feed.some((e) => e.type === 'coordinator.rotated'), 'a large fixed start (70k tokens) does not reset the coordinator after every turn', d.feed.map((e) => e.type));
-  await say(140000, 'fourth');
-  d = await until(async () => { const x = await detail(r.id); return x.feed.some((e) => e.type === 'coordinator.rotated') && x; }, 8000, 'rotation');
-  check(true, 'it resets once the conversation itself grew past the threshold');
-  await say(70000, 'fifth');
-  d = await detail(r.id);
-  check(d.feed.filter((e) => e.type === 'coordinator.rotated').length === 1 && d.feed.some((e) => e.body?.text === 'fifth'), 'after the reset the next message is answered and does not reset again', d.feed.map((e) => e.type));
+  await say(140000, 'second');
+  await say(400000, 'third');
+  const d = await detail(r.id);
+  check(!d.feed.some((e) => e.type === 'coordinator.rotated'), 'a growing coordinator context never triggers an engine reset', d.feed.map((e) => e.type));
+  check(d.settings.policy.rotateTokens === undefined, 'there is no reset threshold setting', d.settings.policy);
 }
 
 // The label above a coordinator post names the thread it is about. A thread's news sharing a wake with a
