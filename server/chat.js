@@ -1166,12 +1166,12 @@ export class ChatSession {
   }
 
   /** Restart Claude on the same conversation (--resume) and ask it to carry on. */
-  async resume() {
+  async resume({ from } = {}) {
     if (this.proc && (this.turns > 0 || !this.heard)) {
       this.quietExit = true;
       await this.stopAndWait();
     }
-    this.send({ text: 'Continue from where you left off.' });
+    this.send({ text: 'Continue from where you left off.', ...(from ? { from } : {}) });
   }
 
   /** The server is going down: note it in the chat, since the process may outlive our exit handler. */

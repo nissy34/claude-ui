@@ -186,11 +186,11 @@ const slugify = (name) => (name || 'chat').toLowerCase().replace(/[^a-z0-9]+/g, 
  * base: branch to start from (a local branch, or one only on a remote); default is the checked-out commit.
  * Returns { path, branch, repo, base (commit it started at), from (base branch name) }.
  */
-export async function createWorktree(cwd, name, { base } = {}) {
+export async function createWorktree(cwd, name, { base, at } = {}) {
   if (!(await isGitRepo(cwd))) throw new Error('Worktrees need a git repository');
   const top = (await git(cwd, ['rev-parse', '--show-toplevel'])).trim();
   const id = `${slugify(name)}-${Date.now().toString(36)}`;
-  const dir = path.join(top, '.claude', 'worktrees', id);
+  const dir = at && !fs.existsSync(at) ? at : path.join(top, '.claude', 'worktrees', id); // at: reuse a removed worktree's folder
   const branch = `claude/${id}`;
   let start = 'HEAD';
   if (base) {
@@ -232,11 +232,6 @@ export async function checkoutBranch(cwd, branch) {
   }
 }
 
-/**
- * Removes a chat's worktree when it is safe: never with uncommitted changes. Its branch goes too
- * when it has no commits of its own; a branch with work on it is kept.
- * Returns { removed, kept?: reason, branchDeleted }.
- */
 /** True when removing the worktree loses no commits: it has none of its own, or they are all in its repo's checked-out branch. */
 export async function worktreeMerged(wt) {
   if (!wt?.path || !fs.existsSync(wt.path)) return false;
@@ -259,6 +254,11 @@ export async function changedFiles(wt, max = 200) {
   return [...out].sort();
 }
 
+/**
+ * Removes a chat's worktree when it is safe: never with uncommitted changes. Its branch goes too
+ * when it has no commits of its own; a branch with work on it is kept.
+ * Returns { removed, kept?: reason, branchDeleted }.
+ */
 export async function removeWorktree(wt) {
   if (!wt?.path) return { removed: false };
   if (!fs.existsSync(wt.path)) {

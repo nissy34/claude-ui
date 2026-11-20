@@ -407,7 +407,7 @@ if (config.desktopMcp) {
 // Live project data for Custom view pages (sandboxed, opaque origin): signed per project, read-only.
 app.get('/view-data/:pid/:file', (req, res) => {
   const sig = String(req.params.file).replace(/\.json$/, '');
-  const p = engine.get?.(req.params.pid);
+  const p = engine.projects.get(req.params.pid);
   if (!p || !p.viewDataOk(sig)) return res.status(404).json({ error: 'not found' });
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Cache-Control', 'no-store');

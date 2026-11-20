@@ -343,6 +343,14 @@ async function steering() {
   await api(`/api/cprojects/${r.id}/view`, { method: 'POST', body: {} });
   check((await detail(r.id)).view?.empty, 'adding the tab without a page shows the empty state');
   void V;
+  // Review fixes: follow_up waits for a real change; "memory" is reserved; unknown view-data is a 404.
+  await api(`/api/cprojects/${r.id}/messages`, { method: 'POST', body: { text: call('follow_up', { thread_ids: [B.id], note: 'tell the user when B settles' }) } });
+  await until(() => fakeLog().some((l) => l.call === 'project__follow_up' && l.result.includes('follow_up_id')), 8000, 'follow_up recorded');
+  await sleep(1500);
+  check((await detail(r.id)).followUps.length === 1, 'a follow_up on a settled thread does not fire at the next turn end');
+  const reserved = await api(`/api/cprojects/${r.id}/memory/MEMORY`, { method: 'PUT', body: { description: 'x', content: 'y' }, allowError: true });
+  check(/reserved/.test(reserved.error || ''), 'a memory file called "memory" is refused (it is the index)', reserved);
+  check((await fetch(base + '/view-data/prj_nope/abc.json')).status === 404, 'view data for an unknown project is a 404');
   // pause / restart the coordinator
   await api(`/api/cprojects/${r.id}/pause`, { method: 'POST' });
   check((await detail(r.id)).paused, 'Pause pauses the project');

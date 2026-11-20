@@ -115,6 +115,7 @@ export class ProjectMemory {
   write({ name, description, content, baseVersion, by, type }) {
     const slug = memorySlug(name);
     if (!slug) throw new Error('name is required (a short kebab-case subject, e.g. "deploy-process")');
+    if (slug === 'memory') throw new Error('"memory" is reserved for the index (MEMORY.md); pick a name for the subject.');
     if (!String(description || '').trim()) throw new Error('description is required: one line saying what the file covers');
     if (/(api[_-]?key|password|secret|token)\s*[:=]\s*\S{8,}/i.test(content || '')) throw new Error('This looks like it contains a secret. Never store credentials in project memory.');
     const file = path.join(this.dir, `${slug}.md`);

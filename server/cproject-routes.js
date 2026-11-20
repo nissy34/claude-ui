@@ -2,6 +2,7 @@
 // route the built-in project MCP server calls.
 import fs from 'node:fs';
 import path from 'node:path';
+import { PROJECT_FROM } from './cprojects.js';
 
 export function mountProjectRoutes(app, { engine, store, resolveDir, wrap }) {
   // ---- internal: tool calls from the project MCP server (x-cw-session names the caller) ----
@@ -223,7 +224,7 @@ export function mountProjectRoutes(app, { engine, store, resolveDir, wrap }) {
         }
         case 'nudge': {
           const s = store.get(tid);
-          if (s) await s.resume();
+          if (s) await s.resume({ from: PROJECT_FROM });
           break;
         }
         case 'message': {

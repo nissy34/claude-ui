@@ -41,6 +41,8 @@ const BATCH_QUIET_MS = Number(process.env.CW_PROJECT_BATCH_QUIET_MS) || 10_000;
 const BATCH_MAX_MS = Number(process.env.CW_PROJECT_BATCH_MAX_MS) || 60_000;
 const IDEMPOTENT_MS = 10 * 60_000;
 const MAX_PROGRESS_POSTS = 2;
+/** The sender of messages the engine itself sends a session (retries, nudges, limit resets). */
+export const PROJECT_FROM = { role: 'project', name: 'Project', kind: 'project' };
 const STUCK_MS = Number(process.env.CW_PROJECT_STUCK_MS) || 20 * 60_000;
 
 export const DEFAULT_SETTINGS = {
@@ -242,11 +244,15 @@ export function reduce(st, ev) {
         if (st.inbox) delete st.inbox[ev.thread]; // a resolved thread is never handed notes
       }
       break;
+    case 'worktree.created':
+      if (t) t.branch = ev.body.branch;
+      break;
     case 'thread.reopened':
       if (t) t.resolved = false;
       break;
     case 'thread.stopped':
       if (t) t.stopped = true;
+      if (ev.body?.dropped) st.queue[ev.thread] = (st.queue[ev.thread] || []).filter((q) => !ev.body.dropped.includes(q.e));
       break;
     case 'thread.deleted':
       delete st.threads[ev.thread];
@@ -269,6 +275,12 @@ export function reduce(st, ev) {
       break;
     case 'follow_up.added':
       st.followUps[ev.body.id] = { id: ev.body.id, threads: ev.body.threads, note: ev.body.note, ts: ev.ts, seen: ev.body.seen || {} };
+      break;
+    case 'queue.dropped':
+      st.queue[ev.body.session] = (st.queue[ev.body.session] || []).filter((q) => !ev.body.events.includes(q.e));
+      break;
+    case 'follow_up.seen':
+      if (st.followUps[ev.body.id]) st.followUps[ev.body.id].seen[ev.body.thread] = ev.body.status;
       break;
     case 'follow_up.done':
       delete st.followUps[ev.body.id];
@@ -412,6 +424,7 @@ export class Project {
     fs.mkdirSync(this.file('library'), { recursive: true });
     this.turnInfo = new Map(); // sid -> what the current turn did (for the turn guard)
     this.idem = new Map(); // tool-call key -> { at, result }
+    this.lastInput = new Map(); // session -> the wake (or typed message) it was last handed, for idempotency keys
     this.timers = new Map();
     this.load();
   }
@@ -472,6 +485,7 @@ export class Project {
   append(ev) {
     ev.id = newId('evt');
     ev.ts = Date.now();
+    if (this.disposed) return ev; // the project was deleted: a late timer or callback writes nothing
     ev.trust ||= 'system';
     ev.from ||= { kind: 'system' };
     if (!ev.to) ev.to = this.route(ev);
@@ -565,7 +579,7 @@ export class Project {
     if (ev.type === 'memory.changed') this.memoryNotice(ev);
     if (ev.type === 'thread.resolved') setTimeout(() => this.engine.cleanupWorktree(this, ev.thread).catch((e) => console.warn('worktree cleanup:', e.message)), 2000).unref?.();
     // Follow-ups: the coordinator asked to hear when these threads change state.
-    if (['turn.ended', 'thread.post', 'thread.resolved', 'decision.requested', 'session.error'].includes(ev.type)) this.checkFollowUps();
+    if (['turn.started', 'turn.ended', 'thread.post', 'thread.resolved', 'decision.requested', 'session.error'].includes(ev.type)) this.checkFollowUps();
   }
 
   checkFollowUps() {
@@ -574,7 +588,10 @@ export class Project {
       let changed = false;
       for (const tid of f.threads) {
         now[tid] = this.statusOf(tid);
-        if (f.seen[tid] && f.seen[tid] !== now[tid] && !['working', 'queued'].includes(now[tid])) changed = true;
+        const busy = ['working', 'queued'].includes(now[tid]);
+        // Remember that it got busy, so coming back to the same settled status still counts as a change.
+        if (busy && !['working', 'queued'].includes(f.seen[tid])) this.append({ type: 'follow_up.seen', body: { id: f.id, thread: tid, status: now[tid] } });
+        if (f.seen[tid] && f.seen[tid] !== now[tid] && !busy) changed = true;
       }
       // Fire once every thread named has settled (or any is waiting on the user).
       const settled = f.threads.every((tid) => ['idle', 'resolved', 'review', 'landing', 'waiting', 'snoozed'].includes(now[tid]));
@@ -918,11 +935,17 @@ export class Project {
     if (!items.length) return false;
     const s = this.session(sid);
     if (!s) {
-      // The session was deleted: drop its queue.
-      this.state.queue[sid] = [];
+      // The session was deleted: drop its queue (as an event, so a replay drops it too).
+      this.append({ type: 'queue.dropped', body: { session: sid, events: items.map((q) => q.e) } });
       return false;
     }
     if (this.state.inflight[sid] || s.isBusy() || s.inbox.length) return false;
+    if (s.meta.worktreeRemoved && this.state.threads[sid]) {
+      // Its worktree was removed after its branch merged: give it a fresh one before it works again,
+      // so a reopened thread never edits the main checkout.
+      this.engine.recreateWorktree(this, sid).finally(() => this.schedulePump());
+      return Date.now() + 5000;
+    }
     const isCoord = sid === this.state.coordinator;
     const t = this.state.threads[sid];
     if (t?.resolved && !items.some((q) => q.user)) {
@@ -947,6 +970,7 @@ export class Project {
   deliver(sid, s, items) {
     const evs = items.map((q) => this.byId.get(q.e)).filter(Boolean);
     const wake = newId('wk');
+    this.lastInput.set(sid, wake);
     const isCoord = sid === this.state.coordinator;
     const fresh = isCoord && this.state.coordinatorFresh;
     let envelope = this.renderWake(sid, wake, evs, s, { fresh });
@@ -1199,9 +1223,13 @@ export class Project {
       case 'user': {
         if (ev.wake) {
           this.append({ type: 'turn.started', body: { session: sid, wake: ev.wake } });
+        } else if (ev.from) {
+          // Sent by the engine (a retry, a nudge, a limit reset) or another session, not typed by the user.
+          this.append({ type: 'turn.started', body: { session: sid } });
         } else {
           // The user typed straight into a thread (or the coordinator's work log).
           this.turnInfo.set(sid, { user: true, direct: true, posted: false, types: ['user.message'] });
+          this.lastInput.set(sid, `typed:${Date.now()}`);
           if (isThread) this.append({ type: 'user.message', from: { kind: 'user' }, trust: 'principal', thread: sid, body: { where: 'thread', text: clipText(ev.text, 20_000) } });
           this.append({ type: 'turn.started', body: { session: sid } });
         }
@@ -1282,7 +1310,7 @@ export class Project {
     this.crashes.set(sid, tries);
     if (tries <= 1) {
       this.append({ type: 'session.error', body: { session: sid, text: clipText(ev.text, 500), final: false } });
-      setTimeout(() => s.resume().catch?.(() => {}), 2000).unref?.();
+      setTimeout(() => s.resume({ from: PROJECT_FROM }).catch?.(() => {}), 2000).unref?.();
     } else {
       this.crashes.delete(sid);
       this.append({ type: 'session.error', body: { session: sid, text: clipText(ev.text, 500), final: true } });
@@ -1522,8 +1550,11 @@ export class Project {
   }
 
   dispose() {
+    this.disposed = true;
     clearTimeout(this.pumpTimer);
     clearTimeout(this.saveTimer);
+    clearTimeout(this.limitTimer);
+    for (const t of this.timers.values()) clearTimeout(t);
   }
 }
 
@@ -1643,6 +1674,7 @@ export class ProjectEngine {
       if (s && sid === p.state.coordinator) this.store.remove(sid);
     }
     this.store.save();
+    for (const sid of Object.keys(p.state.threads)) clearTimeout(this.prTimers?.get(sid));
     p.dispose();
     this.projects.delete(p.id);
     fs.rmSync(p.dir, { recursive: true, force: true });
@@ -1689,9 +1721,9 @@ export class ProjectEngine {
     const t = p.state.threads[sid];
     if (!t) throw new Error('No such thread');
     const s = this.store.get(sid);
-    p.state.queue[sid] = [];
+    // Dropping its queued messages is part of the event, so a replay of the log drops them too.
+    p.append({ type: 'thread.stopped', thread: sid, from: { kind: by }, trust: by === 'user' ? 'principal' : 'relay', body: { dropped: (p.state.queue[sid] || []).map((q) => q.e) } });
     if (s && s.turns > 0) await s.interrupt();
-    p.append({ type: 'thread.stopped', thread: sid, from: { kind: by }, trust: by === 'user' ? 'principal' : 'relay', body: {} });
   }
 
   remind(p, sid, at, note, { by = 'user' } = {}) {
@@ -1881,9 +1913,41 @@ export class ProjectEngine {
     const r = await removeWorktree(s.meta.worktree).catch((e) => ({ removed: false, kept: e.message }));
     if (r.removed) {
       s.meta.worktreeRemoved = true;
-      s.meta.cwd = s.meta.project && fs.existsSync(s.meta.project) ? s.meta.project : p.libraryDir;
+      // Never the main checkout: until it is reopened (and gets a fresh worktree) it sits in the library.
+      s.meta.cwd = p.libraryDir;
       this.store.save();
       p.append({ type: 'notice', thread: sid, body: { text: `Removed the worktree of "${t.title}" (its branch is merged).` } });
+    }
+  }
+
+  /** A fresh worktree for a reopened thread whose old one was cleaned up. */
+  async recreateWorktree(p, sid) {
+    const s = this.store.get(sid);
+    if (!s?.meta.worktreeRemoved || s.recreating) return;
+    s.recreating = true;
+    try {
+      const folder = p.settings.folders[0]?.path;
+      if (folder && fs.existsSync(folder) && p.settings.policy.worktrees && (await isGitRepo(folder))) {
+        // Same folder as before when possible, so the conversation (stored per folder by the CLI) resumes.
+        const wt = await createWorktree(folder, p.state.threads[sid]?.title || s.meta.name, { at: s.meta.worktree?.path });
+        if (wt.path !== s.meta.worktree?.path) s.meta.claudeSessionId = null;
+        s.meta.worktree = wt;
+        s.meta.cwd = wt.path;
+        p.append({ type: 'worktree.created', thread: sid, body: { branch: wt.branch, path: wt.path } });
+      } else {
+        s.meta.cwd = path.join(p.libraryDir, slug(s.meta.name || sid));
+        fs.mkdirSync(s.meta.cwd, { recursive: true });
+        s.meta.claudeSessionId = null;
+      }
+      s.meta.worktreeRemoved = false;
+      this.store.save();
+    } catch (e) {
+      p.append({ type: 'notice', thread: sid, body: { text: `Couldn't create a new worktree: ${clipText(e.message, 200)}` } });
+      s.meta.worktreeRemoved = false;
+      s.meta.cwd = path.join(p.libraryDir, slug(s.meta.name || sid));
+      fs.mkdirSync(s.meta.cwd, { recursive: true });
+    } finally {
+      s.recreating = false;
     }
   }
 
@@ -1943,7 +2007,7 @@ export class ProjectEngine {
     cut.forEach((sid, i) => {
       setTimeout(() => {
         const s = this.store.get(sid);
-        if (s && !s.isBusy()) s.deliver({ text: 'The usage limit has reset. Continue from where you left off.', from: { role: 'project', name: 'Project', kind: 'project' } });
+        if (s && !s.isBusy()) s.deliver({ text: 'The usage limit has reset. Continue from where you left off.', from: PROJECT_FROM });
       }, i * 30_000).unref?.();
     });
     p.schedulePump();
@@ -1987,6 +2051,7 @@ export class ProjectEngine {
     const evs = items.map((q) => p.byId.get(q.e));
     if (p.state.threads[sid]?.resolved) p.append({ type: 'thread.reopened', thread: sid, body: {} }); // as a wake after the turn would
     const wake = newId('wk');
+    p.lastInput.set(sid, wake);
     const envelope = p.renderWake(sid, wake, evs, s);
     p.append({ type: 'wake.sent', body: { session: sid, wake, events: evs.map((e) => e.id), midTurn: true } });
     p.append({ type: 'wake.delivered', body: { session: sid, wake } });
@@ -2005,9 +2070,14 @@ export class ProjectEngine {
     // Idempotency: a resumed turn may repeat a call whose result it never saw.
     let key = null;
     if (MUTATING.has(name)) {
-      key = crypto.createHash('sha256').update(`${s.id}\0${name}\0${JSON.stringify(a)}`).digest('hex');
+      // Scoped to what the session was last handed: a retried turn repeats a call, a new message may legitimately repeat one.
+      key = crypto.createHash('sha256').update(`${s.id}\0${p.lastInput.get(s.id) || ''}\0${name}\0${JSON.stringify(a)}`).digest('hex');
       const hit = p.idem.get(key);
-      if (hit && Date.now() - hit.at < IDEMPOTENT_MS) return { ...hit.result, note: `${hit.result.note ? `${hit.result.note} ` : ''}(Same call as one made ${Math.round((Date.now() - hit.at) / 1000)}s ago; returned its result instead of doing it twice.)` };
+      if (hit && Date.now() - hit.at < IDEMPOTENT_MS) {
+        const ti = p.turnInfo.get(s.id);
+        if (ti && ['post_message', 'request_decision', 'react'].includes(name)) ti.posted = true;
+        return { ...hit.result, note: `${hit.result.note ? `${hit.result.note} ` : ''}(Same call as one made ${Math.round((Date.now() - hit.at) / 1000)}s ago; returned its result instead of doing it twice.)` };
+      }
     }
     const info = p.turnInfo.get(s.id) || { posted: false, types: [] };
     p.turnInfo.set(s.id, info);
@@ -2190,8 +2260,6 @@ export class ProjectEngine {
         if (!note) throw new Error('note is required: what you promised the user');
         const id = newId('fu');
         const seen = Object.fromEntries(threads.map((t) => [t, p.statusOf(t)]));
-        // Already settled threads count as changed so the follow-up fires on the next settle.
-        for (const t of threads) if (!['working', 'queued'].includes(seen[t])) seen[t] = '_';
         p.append({ type: 'follow_up.added', from: me, trust: 'relay', body: { id, threads, note: clipText(note, 500), seen } });
         return { ok: true, follow_up_id: id, note: 'Recorded. The engine wakes you when those threads settle, even if your conversation is reset.' };
       }
