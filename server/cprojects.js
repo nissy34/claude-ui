@@ -483,6 +483,7 @@ export class Project {
       for (const ev of this.events) reduce(this.state, ev);
     }
     this.byId = new Map(this.events.map((e) => [e.id, e]));
+    for (const e of this.events) this.applyLabel(e);
   }
 
   saveSettings() {
@@ -513,12 +514,30 @@ export class Project {
     fs.appendFileSync(this.file('events.jsonl'), JSON.stringify(ev) + '\n');
     this.events.push(ev);
     this.byId.set(ev.id, ev);
+    this.applyLabel(ev);
     reduce(this.state, ev);
     this.saveState();
     this.afterEvent(ev);
     this.engine.changed(this, ev);
     if (ev.to) this.schedulePump();
     return ev;
+  }
+
+  /**
+   * The coordinator handed work to a thread this turn. Its ack in the chat carries that thread's label (with
+   * working dots while it runs), also when the ack was posted before the handoff: a chat.labeled event adds it.
+   */
+  handedTo(info, tid) {
+    (info.handed ||= new Set()).add(tid);
+    if (info.handed.size !== 1) return;
+    for (const id of info.unlabeled || []) this.append({ type: 'chat.labeled', body: { event: id, about: tid, ack: true } });
+    info.unlabeled = [];
+  }
+
+  /** A chat.labeled event sets the label of an earlier chat.post (applied on load and on append). */
+  applyLabel(ev) {
+    const target = ev.type === 'chat.labeled' && this.byId.get(ev.body?.event);
+    if (target?.type === 'chat.post' && !target.body.about) Object.assign(target.body, { about: ev.body.about, ...(ev.body.ack ? { ack: true } : {}) });
   }
 
   get coordinatorId() {
@@ -2195,12 +2214,18 @@ export class ProjectEngine {
         if (!text) throw new Error('text is required');
         info.posted = true;
         if (isCoord) {
-          // Which thread the post is about: named by the coordinator, or the one thread whose news woke it.
-          // Inferred only for a turn woken by thread news alone: when the user wrote (in the wake or mid-turn) or the
-          // coordinator started a thread this turn, the post answers the user, not the thread that happened to share the wake.
-          const inferred = !info.user && !info.started && info.threads?.length === 1 && p.state.threads[info.threads[0]] ? info.threads[0] : null;
-          const about = (a.thread_id && p.state.threads[a.thread_id] ? a.thread_id : null) || inferred;
-          const ev = p.append({ type: 'chat.post', from: me, trust: 'relay', cites: a.cite_ids, body: { text: clipText(text, 20_000), ...(about ? { about } : {}) } });
+          // Which thread the post is about: named by the coordinator, the one thread it handed work to this turn
+          // (start_thread or message_thread: the post is the ack, labeled with the thread doing the work), or the one
+          // thread whose news woke it. The last is inferred only for a turn woken by thread news alone: when the user
+          // wrote (in the wake or mid-turn), the post answers the user, not the thread that happened to share the wake.
+          const named = a.thread_id && p.state.threads[a.thread_id] ? a.thread_id : null;
+          const handed = info.handed?.size === 1 ? [...info.handed][0] : null;
+          const inferred = !info.user && !info.handed?.size && info.threads?.length === 1 && p.state.threads[info.threads[0]] ? info.threads[0] : null;
+          const about = named || handed || inferred;
+          // An ack relays nothing (the UI keeps the thread's earlier result visible), unless that thread's news is in this wake.
+          const ack = !!(about && about === handed && !info.threads?.includes(about));
+          const ev = p.append({ type: 'chat.post', from: me, trust: 'relay', cites: a.cite_ids, body: { text: clipText(text, 20_000), ...(about ? { about } : {}), ...(ack ? { ack } : {}) } });
+          if (!about) (info.unlabeled ||= []).push(ev.id);
           return { ok: true, event_id: ev.id, note: 'Posted to the project chat.' };
         }
         const kind = ['result', 'blocker', 'question', 'progress'].includes(a.kind) ? a.kind : 'result';
@@ -2255,7 +2280,7 @@ export class ProjectEngine {
         let cites = a.cite_ids;
         if (!(Array.isArray(cites) ? cites.length : cites) && isCoord) cites = (p.wakeEvents.get(s.id) || []).filter((id) => p.byId.get(id)?.type === 'user.message');
         const tt = await this.startThread(p, { title: a.title, brief: a.brief, cites, model: a.model, effort: a.effort, dependsOn: a.depends_on });
-        info.started = true;
+        p.handedTo(info, tt.id);
         return { ok: true, thread_id: tt.id, status: STATUS_LABEL.working, branch: tt.meta.worktree?.branch || null, note: 'Started. Its results, blockers and questions reach you as events; no need to poll.' };
       }
       case 'suggest_thread': {
@@ -2276,6 +2301,7 @@ export class ProjectEngine {
         const text = String(a.text ?? a.message ?? '').trim();
         if (!text) throw new Error('text is required');
         const ev = p.append({ type: 'session.message', from: me, trust: 'relay', thread: to, cites: a.cite_ids, body: { to, text: clipText(text, 20_000) } });
+        if (isCoord) p.handedTo(info, to);
         return { ok: true, event_id: ev.id, status: STATUS_LABEL[p.statusOf(to)], note: s.isBusy?.() ? 'Delivered when that thread is idle.' : 'Delivered.' };
       }
       case 'message_coordinator': {

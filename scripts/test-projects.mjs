@@ -359,8 +359,9 @@ async function rotation() {
   check(d.settings.policy.rotateTokens === undefined, 'there is no reset threshold setting', d.settings.policy);
 }
 
-// The label above a coordinator post names the thread it is about. A thread's news sharing a wake with a
-// user message (queued while the coordinator was busy) must not label the answer to that message.
+// The label under a coordinator post names the thread it is about. A thread's news sharing a wake with a
+// user message (queued while the coordinator was busy) must not label the answer to that message; the
+// thread the coordinator hands the work to does (the ack shows it, with working dots in the UI).
 async function aboutLabel() {
   console.log('Coordinator post labels');
   const { project: r } = await api('/api/cprojects', { method: 'POST', body: { name: 'Labels', folders: [repo], prompt: '@@sleep 2500\n@@say busy' } });
@@ -373,7 +374,8 @@ async function aboutLabel() {
   check(wake?.prompt.includes('Summarize the repo'), "the user's message and the resolved thread's news reach the coordinator in one wake", wake?.prompt.slice(0, 1500));
   check(wake?.prompt.includes(`finished work from "Summarize the repo" (${T.id})`), "that wake asks the coordinator to relay the finished thread's result too", wake?.prompt.slice(-700));
   const post = d.feed.find((e) => e.type === 'chat.post' && e.body.text === 'LABEL-ON-IT');
-  check(!post.body.about, "the answer to the user's message is not labeled with the resolved thread", { about: post.body.about, title: d.threads.find((t) => t.id === post.body.about)?.title });
+  const funny = d.threads.find((t) => t.title === 'Funny custom view');
+  check(post.body.about === funny?.id && post.body.ack, "the answer to the user's message is labeled with the thread it started, not the resolved one", { about: post.body.about, title: d.threads.find((t) => t.id === post.body.about)?.title });
   // A wake with only one thread's news still labels the post with that thread.
   await until(() => fakeLog().some((l) => l.prompt?.includes('<project-wake') && l.prompt.includes('from thread "Funny custom view"')), 12_000, 'new thread reported');
   await until(async () => { const x = await detail(r.id); return !x.coordinatorBusy && !x.coordinator?.queued; }, 12_000, 'coordinator idle');
@@ -381,7 +383,13 @@ async function aboutLabel() {
   await api(`/api/cprojects/${r.id}/threads/${T.id}/message`, { method: 'POST', body: { text: call('post_message', { kind: 'result', text: `\n${call('post_message', { text: 'LABEL-RELAY' })}\n` }) } });
   const d2 = await until(async () => { const x = await detail(r.id); return x.feed.some((e) => e.type === 'chat.post' && e.body.text === 'LABEL-RELAY') && x; }, 12_000, 'relay post');
   const relay = d2.feed.find((e) => e.type === 'chat.post' && e.body.text === 'LABEL-RELAY');
-  check(relay.body.about === T.id, "a post in a wake with only one thread's news is labeled with that thread", { about: relay.body.about, wake: fakeLog().filter((l) => l.prompt?.includes('LABEL-RELAY') && l.prompt.includes('<project-wake')).map((l) => l.prompt.slice(-1500)) });
+  check(relay.body.about === T.id && !relay.body.ack, "a post in a wake with only one thread's news is labeled with that thread", { about: relay.body.about, wake: fakeLog().filter((l) => l.prompt?.includes('LABEL-RELAY') && l.prompt.includes('<project-wake')).map((l) => l.prompt.slice(-1500)) });
+  // A follow-up routed to an existing thread, acked before the handoff: the ack gets the thread's label afterwards.
+  await until(async () => { const x = await detail(r.id); return !x.coordinatorBusy && !x.coordinator?.queued; }, 12_000, 'coordinator idle again');
+  await api(`/api/cprojects/${r.id}/messages`, { method: 'POST', body: { text: [call('post_message', { text: 'LABEL-ROUTED' }), call('message_thread', { thread_id: T.id, text: '@@sleep 1500\n@@say checked' })].join('\n') } });
+  const d3 = await until(async () => { const x = await detail(r.id); const p = x.feed.find((e) => e.type === 'chat.post' && e.body.text === 'LABEL-ROUTED'); return p?.body.about && x; }, 12_000, 'routed ack labeled');
+  const routed = d3.feed.find((e) => e.type === 'chat.post' && e.body.text === 'LABEL-ROUTED');
+  check(routed.body.about === T.id && routed.body.ack, 'an ack posted before message_thread is labeled with the thread the follow-up went to', routed.body);
 }
 
 async function steering() {

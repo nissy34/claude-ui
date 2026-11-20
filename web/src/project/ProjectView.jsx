@@ -180,8 +180,9 @@ function ProjectChat({ project, openThread, onError }) {
     setSending(false);
   };
   // A thread's result shows once: when Claude relays it in the chat afterwards, the raw post is hidden.
+  // An ack (Claude handing work to the thread) is labeled with the thread too, but relays nothing.
   const relayed = new Map();
-  for (const e of project.feed) if (e.type === 'chat.post' && e.body?.about) relayed.set(e.body.about, e.ts);
+  for (const e of project.feed) if (e.type === 'chat.post' && e.body?.about && !e.body.ack) relayed.set(e.body.about, e.ts);
   const items = project.feed.filter((e) => !(e.type === 'decision.answered' || e.type === 'decision.withdrawn') && !(e.type === 'thread.post' && e.body?.kind === 'result' && relayed.get(e.thread) >= e.ts));
   const cm = project.settings.models.coordinator;
   return (
@@ -259,11 +260,20 @@ const STARTERS = [
 
 const modelName = (m) => (!m ? 'Default model' : m.length < 10 ? m[0].toUpperCase() + m.slice(1) : m);
 
+// The thread a post is about, under the post; animated dots while that thread works.
 function AboutLabel({ thread, onSelect }) {
   if (!thread) return null;
+  const working = thread.status === 'working' || thread.status === 'queued';
   return (
-    <button className="pj-about" onClick={() => onSelect(thread.id)}>
-      <span className="hook">╭</span> {thread.title}
+    <button className={`pj-about${working ? ' working' : ''}`} onClick={() => onSelect(thread.id)} title={working ? `${thread.title} is working` : thread.title}>
+      <span className="hook">╰</span> {thread.title}
+      {working && (
+        <span className="pj-dots" aria-label="working">
+          <i />
+          <i />
+          <i />
+        </span>
+      )}
     </button>
   );
 }
@@ -282,8 +292,8 @@ function FeedItem({ e, project, threads, decisions, onSelect, onError }) {
     case 'chat.post':
       return (
         <div className="msg assistant pj-post">
-          <AboutLabel thread={threads[b.about]} onSelect={onSelect} />
           <Md text={b.text} />
+          <AboutLabel thread={threads[b.about]} onSelect={onSelect} />
         </div>
       );
     case 'thread.started': {
