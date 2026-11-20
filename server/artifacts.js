@@ -105,6 +105,16 @@ export function publishArtifact(s, { path: p, content, format, title, descriptio
   return { path: abs, name: path.basename(abs), title: entry.title || path.basename(abs), url: rawUrl(s.meta.id, abs) };
 }
 
+/** Files Claude wrote or edited in this chat, relative to its folder (those inside it only). */
+export function writtenPaths(s) {
+  const out = [];
+  for (const abs of writtenFiles(s).keys()) {
+    const rel = path.relative(s.meta.cwd, abs);
+    if (rel && !rel.startsWith('..') && !path.isAbsolute(rel)) out.push(rel.split(path.sep).join('/'));
+  }
+  return out;
+}
+
 export function listArtifacts(sessions) {
   const list = [];
   for (const s of sessions) {

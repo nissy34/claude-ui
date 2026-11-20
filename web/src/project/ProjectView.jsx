@@ -1,14 +1,14 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { api, timeAgo } from '../api.js';
-import { Button, IconButton, Input, Modal, ModalBody, ModalFoot, ModalHead, Pill, Segmented, Spinner, Textarea } from '../ui/index.jsx';
+import { Button, IconButton, Input, Menu, Modal, ModalBody, ModalFoot, ModalHead, Pill, Segmented, Spinner, Textarea, useDismiss } from '../ui/index.jsx';
 import { DecisionCard, Md, StatusPill, SuggestionCard, ThreadCard } from './ProjectCards.jsx';
-import { promptDialog } from '../ui/dialogs.jsx';
+import { confirmDialog, promptDialog } from '../ui/dialogs.jsx';
 import { ProjectSettingsModal } from './ProjectSettings.jsx';
 import ProjectPanel, { PrChip, StatusIcon } from './ProjectPanel.jsx';
 import { STATUS_LABEL, STATUS_ORDER, useProject } from './useProject.js';
 import './project.css';
 
-export default function ProjectView({ projectId, tab: initialTab, thread: initialThread, onSelect, onMenu, onError, onDeleted, projects }) {
+export default function ProjectView({ projectId, tab: initialTab, thread: initialThread, onSelect, onCreate, onMenu, onError, onDeleted, projects }) {
   const [project, reload] = useProject(projectId, onError);
   const narrow = useNarrow();
   // Right panel: Threads or Context; a thread opens in place. On a phone the panel is a view of its own.
@@ -17,6 +17,10 @@ export default function ProjectView({ projectId, tab: initialTab, thread: initia
   const [mobileView, setMobileView] = useState(initialThread ? 'panel' : ['context', 'threads', 'view'].includes(initialTab) ? 'panel' : 'chat');
   const [settings, setSettings] = useState(initialTab === 'settings' ? 'general' : null);
   const [showNew, setShowNew] = useState(false);
+  // Opening a project you marked unread marks it read again.
+  useEffect(() => {
+    if (project?.unread) api(`/api/cprojects/${project.id}`, { method: 'PATCH', body: { unread: false } }).catch(() => {});
+  }, [project?.id, project?.unread]);
   useEffect(() => {
     setThreadId(initialThread || null);
     if (initialTab === 'settings') setSettings('general');
@@ -57,9 +61,7 @@ export default function ProjectView({ projectId, tab: initialTab, thread: initia
             <IconButton className="menu-btn" onClick={onMenu} aria-label="Menu">
               ☰
             </IconButton>
-            <span className="pj-avatar-mark" aria-hidden="true">
-              {(project.name.trim()[0] || '◈').toUpperCase()}
-            </span>
+            <ProjectIcon project={project} size="md" />
             <span className="pj-name" title={project.goal || project.name}>
               {project.name}
             </span>
@@ -73,7 +75,7 @@ export default function ProjectView({ projectId, tab: initialTab, thread: initia
               ⚙
             </IconButton>
           </div>
-          <Banners project={project} reload={reload} onError={onError} />
+          <Banners project={project} reload={reload} onError={onError} onCreate={onCreate} />
           <ProjectChat project={project} openThread={openThread} onError={onError} />
         </div>
       )}
@@ -107,12 +109,19 @@ function useNarrow() {
   return n;
 }
 
-function Banners({ project, reload, onError }) {
+function Banners({ project, reload, onError, onCreate }) {
+  // Same as the chat view's "Log in again": a terminal session that runs the CLI's /login.
+  const relogin = () => onCreate?.({ cwd: project.settings.folders?.[0]?.path, kind: 'claude', name: 'Log in to Claude', login: true });
   return (
     <>
       {project.paused && (
         <div className="pj-banner warn">
           {project.paused.reason}
+          {project.paused.auth && onCreate && (
+            <Button size="sm" variant="primary" onClick={relogin}>
+              Log in again
+            </Button>
+          )}
           <Button size="sm" onClick={() => api(`/api/cprojects/${project.id}/resume`, { method: 'POST' }).then(reload).catch(onError)}>
             Resume
           </Button>
@@ -204,7 +213,7 @@ function ProjectChat({ project, openThread, onError }) {
           ))}
           {(project.coordinatorBusy || project.coordinator?.queued > 0) && (
             <div className="pj-typing">
-              <Spinner /> {project.coordinatorBusy ? 'Working…' : 'Will read this shortly…'}
+              <Spinner /> {project.coordinatorBusy ? 'Working…' : project.paused ? (project.paused.auth ? 'Waits until you log in and resume' : 'Waits until you resume') : 'Will read this shortly…'}
             </div>
           )}
         </div>
@@ -316,6 +325,14 @@ function FeedItem({ e, project, threads, decisions, onSelect, onError }) {
       return <div className="pj-notice warn">{b.reason}</div>;
     case 'project.resumed':
       return <div className="pj-notice">Resumed</div>;
+    case 'turn.failed': {
+      const who = b.session === project.coordinatorId ? 'Claude' : threads[b.session]?.title || 'A thread';
+      return (
+        <div className="pj-notice warn">
+          {who} couldn't finish: {b.text}
+        </div>
+      );
+    }
     case 'limit.hit':
       return <div className="pj-notice warn">Usage limit reached; work continues at {new Date(b.until).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>;
     case 'limit.reset':
@@ -500,23 +517,112 @@ export function ThreadBar({ session, onSelect, onError, view = 'log', setView })
 }
 
 // ---------------------------------------------------------------- sidebar list
-export function ProjectList({ projects, activeId, onOpen, onNew }) {
+/** A project's icon: its emoji or first letter on its color, like Desktop's project icons. */
+export function ProjectIcon({ project, size = 'sm' }) {
+  const icon = (project.icon || '').trim();
+  // An emoji shows on its own (one of them); letters sit on the project's color.
+  const emoji = /\p{Extended_Pictographic}/u.test(icon);
+  const text = emoji ? [...new Intl.Segmenter().segment(icon)][0].segment : icon.slice(0, 2) || (project.name.trim()[0] || '◈').toUpperCase();
   return (
-    <div className="group pj-sidebar">
+    <span className={`pj-ic c-${project.color || 'orange'} ${size} ${emoji ? 'emoji' : ''} ${text.length > 1 && !emoji ? 'two' : ''}`} aria-hidden="true">
+      {text}
+    </span>
+  );
+}
+
+export function ProjectList({ projects, activeId, onOpen, onNew, onError, onDeleted }) {
+  const [menu, setMenu] = useState(null);
+  const ref = useRef(null);
+  useDismiss(!!menu, () => setMenu(null), ref);
+  const shown = projects.filter((p) => !p.archived).sort((a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0) || b.lastActivity - a.lastActivity);
+  const patch = (p, body) => api(`/api/cprojects/${p.id}`, { method: 'PATCH', body }).catch(onError);
+  const act = async (p, a) => {
+    setMenu(null);
+    if (a === 'window') window.open(`${location.pathname}#p=${p.id}`, '_blank', 'noopener');
+    else if (a === 'pin') patch(p, { pinned: !p.pinned });
+    else if (a === 'unread') patch(p, { unread: true });
+    else if (a === 'rename') {
+      const name = await promptDialog('Rename project', p.name);
+      if (name?.trim()) patch(p, { name: name.trim() });
+    } else if (a === 'settings') onOpen(p.id, 'settings');
+    else if (a === 'archive') patch(p, { archived: true });
+    else if (a === 'delete') {
+      if (!(await confirmDialog(`Delete "${p.name}"? Its threads stay as archived chats; the project chat, memory and library are deleted.`, { title: 'Delete project', ok: 'Delete', danger: true }))) return;
+      api(`/api/cprojects/${p.id}`, { method: 'DELETE' })
+        .then(() => p.id === activeId && onDeleted?.())
+        .catch(onError);
+    }
+  };
+  // Shortcut letters while a row's menu is open, like the desktop app.
+  useEffect(() => {
+    if (!menu) return;
+    const p = projects.find((x) => x.id === menu);
+    const onKey = (e) => {
+      const a = { o: 'window', p: 'pin', u: 'unread', r: 'rename', s: 'settings', a: 'archive', d: 'delete' }[e.key.toLowerCase()];
+      if (e.key === 'Escape') setMenu(null);
+      else if (a && p && !e.metaKey && !e.ctrlKey && !e.altKey) (e.preventDefault(), act(p, a));
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  });
+  return (
+    <div className="group pj-sidebar" ref={ref}>
       <div className="group-head">
         <span className="gname section-like">Projects</span>
         <IconButton title="New project" onClick={onNew}>
           +
         </IconButton>
       </div>
-      {projects.filter((p) => !p.archived).map((p) => (
-        <div key={p.id} role="button" tabIndex={0} className={`session-row ${p.id === activeId ? 'active' : ''}`} onClick={() => onOpen(p.id)} onKeyDown={(e) => e.key === 'Enter' && onOpen(p.id)} title={p.goal || p.name}>
-          <span className={`dot ${p.attention ? 'attn' : p.coordinatorBusy || p.counts.working ? 'busy' : 'on'}`} />
-          <span className="sname">◈ {p.name}</span>
-          {p.attention > 0 ? <span className="count">{p.attention}</span> : <span className="when">{timeAgo(p.lastActivity)}</span>}
+      {shown.map((p) => (
+        <div
+          key={p.id}
+          role="button"
+          tabIndex={0}
+          className={`session-row ${p.id === activeId ? 'active' : ''} ${menu === p.id ? 'menu-open' : ''}`}
+          onClick={() => onOpen(p.id)}
+          onKeyDown={(e) => e.key === 'Enter' && onOpen(p.id)}
+          onContextMenu={(e) => (e.preventDefault(), setMenu(p.id))}
+          title={p.goal || p.name}
+        >
+          <ProjectIcon project={p} />
+          <span className={`sname ${p.unread ? 'unread' : ''}`}>{p.name}</span>
+          {p.attention > 0 ? <span className="count">{p.attention}</span> : p.unread ? <span className="dot attn" title="Unread" /> : p.coordinatorBusy || p.counts?.working ? <span className="dot busy" title="Working" /> : <span className="when">{timeAgo(p.lastActivity)}</span>}
+          <span className="menu-wrap row-menu" onClick={(e) => e.stopPropagation()}>
+            <IconButton title="More" onClick={() => setMenu(menu === p.id ? null : p.id)}>
+              ⋯
+            </IconButton>
+            {menu === p.id && (
+              <Menu place="down">
+                <button onClick={() => act(p, 'window')}>
+                  Open in new window <kbd>O</kbd>
+                </button>
+                <div className="sep" />
+                <button onClick={() => act(p, 'pin')}>
+                  {p.pinned ? 'Unpin' : 'Pin'} <kbd>P</kbd>
+                </button>
+                <button onClick={() => act(p, 'unread')}>
+                  Mark as unread <kbd>U</kbd>
+                </button>
+                <button onClick={() => act(p, 'rename')}>
+                  Rename <kbd>R</kbd>
+                </button>
+                <div className="sep" />
+                <button onClick={() => act(p, 'settings')}>
+                  Settings <kbd>S</kbd>
+                </button>
+                <div className="sep" />
+                <button onClick={() => act(p, 'archive')}>
+                  Archive <kbd>A</kbd>
+                </button>
+                <button className="danger" onClick={() => act(p, 'delete')}>
+                  Delete <kbd>D</kbd>
+                </button>
+              </Menu>
+            )}
+          </span>
         </div>
       ))}
-      {projects.filter((p) => !p.archived).length === 0 && (
+      {shown.length === 0 && (
         <button className="pj-new-row" onClick={onNew}>
           New project…
         </button>

@@ -266,7 +266,7 @@ export default function Sidebar({ sessions, activeId, onSelect, onCreate, onNewC
             ))}
           </div>
         )}
-        {!q && !showArchived && <ProjectList projects={cprojects} activeId={activeProjectId} onOpen={onOpenProject} onNew={onNewProject} />}
+        {!q && !showArchived && <ProjectList projects={cprojects} activeId={activeProjectId} onOpen={onOpenProject} onNew={onNewProject} onError={onError} onDeleted={() => onSelect(null)} />}
         {groups.length > 0 && !q && <div className="section-head">Chats</div>}
         {groups.length === 0 && !(cprojects.length && !q && !showArchived) && <div className="side-empty">{q ? 'No matching chats' : showArchived ? 'No archived chats' : 'No chats yet. Start one with New chat.'}</div>}
         {groups.map((g) => (

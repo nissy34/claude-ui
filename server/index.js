@@ -25,7 +25,7 @@ import { store, claudeProjectDir } from './sessions.js';
 import { getChanges, searchFiles, readFileSafe, createWorktree, listBranches } from './git.js';
 import * as browser from './browser.js';
 import { browserAvailable } from './browser.js';
-import { listArtifacts, publishArtifact, rawHandler, rawUrl } from './artifacts.js';
+import { listArtifacts, publishArtifact, rawHandler, rawUrl, writtenPaths } from './artifacts.js';
 import * as admin from './claude-admin.js';
 import { McpAdmin, onSignedIn, stopAllAdmins } from './mcp-admin.js';
 import { getModels } from './models.js';
@@ -924,7 +924,11 @@ onSignedIn((name, from) => {
 app.get(
   '/api/sessions/:id/changes',
   wrap(async (req, res) => {
-    res.json(await getChanges(getSession(req).meta.cwd));
+    const s = getSession(req);
+    const data = await getChanges(s.meta.cwd, { base: typeof req.query.base === 'string' ? req.query.base : undefined, ignoreWs: req.query.ws === '0' });
+    // Files Claude wrote in this chat, relative to the folder, for "Claude's edits only".
+    if (data.git) data.claude = writtenPaths(s);
+    res.json(data);
   })
 );
 
