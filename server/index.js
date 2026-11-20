@@ -404,6 +404,15 @@ if (config.desktopMcp) {
 
 // Artifact files, authorised by a per-session signature in the path (no cookie: sandboxed
 // HTML artifacts load their own CSS/JS from here with an opaque origin).
+// Live project data for Custom view pages (sandboxed, opaque origin): signed per project, read-only.
+app.get('/view-data/:pid/:file', (req, res) => {
+  const sig = String(req.params.file).replace(/\.json$/, '');
+  const p = engine.get?.(req.params.pid);
+  if (!p || !p.viewDataOk(sig)) return res.status(404).json({ error: 'not found' });
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Cache-Control', 'no-store');
+  res.json(p.viewData());
+});
 app.get('/raw/:sid/:sig/*', (req, res, next) => {
   try {
     rawHandler(store)(req, res);

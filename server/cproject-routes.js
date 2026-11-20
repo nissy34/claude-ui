@@ -78,6 +78,19 @@ export function mountProjectRoutes(app, { engine, store, resolveDir, wrap }) {
     })
   );
 
+  // The Custom view tab: add it (empty), pin one of the project's pages, or remove it.
+  app.post(
+    '/api/cprojects/:id/view',
+    wrap(async (req, res) => {
+      const p = project(req);
+      const b = req.body || {};
+      if (b.remove) p.append({ type: 'view.removed', from: { kind: 'user' }, trust: 'principal', body: {} });
+      else if (b.session && b.path) p.pinView(b.session, b.path, b.title, { kind: 'user' });
+      else p.append({ type: 'view.added', from: { kind: 'user' }, trust: 'principal', body: {} });
+      res.json({ view: p.viewInfo() });
+    })
+  );
+
   app.post(
     '/api/cprojects/:id/pause',
     wrap(async (req, res) => {

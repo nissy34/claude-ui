@@ -325,6 +325,24 @@ async function steering() {
   const res = await until(() => fakeLog().find((l) => l.call === 'project__resolve' && l.result?.includes('STEER-TWO')), 8000, 'resolve refused');
   check(JSON.parse(res.result).resolved === false, 'resolve hands over a waiting message instead of resolving', res.result.slice(0, 200));
   check((await detail(r.id)).threads.find((t) => t.id === B.id).status !== 'resolved', 'the thread stays open');
+  // Custom view: a thread pins a page it wrote; the tab shows it; the user can remove it.
+  const V = await startT('Dashboard', ['Make a dashboard', '@@write view/dash.html <h1>Threads</h1>', call('pin_view', { path: 'view/dash.html', title: 'Threads dashboard' }), '@@say pinned'].join('\n'));
+  const vd = await until(async () => { const d = await detail(r.id); return d.view?.url && d; }, 8000, 'view pinned');
+  check(vd.view.title === 'Threads dashboard' && vd.view.path.endsWith('view/dash.html') && vd.view.url.startsWith('/raw/'), 'pin_view pins a page as the Custom view', vd.view);
+  const page = await fetch(base + vd.view.url, { headers: { cookie } }).then((x) => x.text());
+  check(page.includes('<h1>Threads</h1>'), 'the view URL serves the page', page.slice(0, 80));
+  const dataUrl = fakeLog().map((l) => (l.argv || []).join(' ')).filter((a) => a.includes('/view-data/') && a.includes('"Steer"')).pop()?.match(/\/view-data\/[^\s)]+\.json/)?.[0];
+  check(dataUrl, 'threads are told the live data URL for pages');
+  if (dataUrl) {
+    const live = await fetch(base + dataUrl).then((x) => x.json());
+    check(live.threads?.some((t) => t.title === 'Dashboard') && live.project === 'Steer', 'the data URL serves the live board without a login', live);
+    check((await fetch(base + dataUrl.replace(/\/[^/]+\.json$/, '/bad.json'))).status === 404, 'a wrong signature gets nothing');
+  }
+  await api(`/api/cprojects/${r.id}/view`, { method: 'POST', body: { remove: true } });
+  check(!(await detail(r.id)).view, 'Remove takes the tab away');
+  await api(`/api/cprojects/${r.id}/view`, { method: 'POST', body: {} });
+  check((await detail(r.id)).view?.empty, 'adding the tab without a page shows the empty state');
+  void V;
   // pause / restart the coordinator
   await api(`/api/cprojects/${r.id}/pause`, { method: 'POST' });
   check((await detail(r.id)).paused, 'Pause pauses the project');

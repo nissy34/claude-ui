@@ -2,7 +2,7 @@
 // (instructions, memory, files). The project chat stays on the left.
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { api, timeAgo } from '../api.js';
-import { Button, IconButton, Menu, MenuSeparator, Modal, ModalBody, ModalHead, Spinner, Textarea } from '../ui/index.jsx';
+import { Button, IconButton, Input, Menu, MenuSeparator, Modal, ModalBody, ModalHead, Spinner, Textarea } from '../ui/index.jsx';
 import { confirmDialog, promptDialog } from '../ui/dialogs.jsx';
 import { DecisionCard, Md } from './ProjectCards.jsx';
 import { ProjectMemory } from './ProjectFiles.jsx';
@@ -113,6 +113,16 @@ export default function ProjectPanel({ project, tab, setTab, threadId, openThrea
           <button role="tab" className={tab === 'context' ? 'on' : ''} onClick={() => setTab('context')}>
             Context
           </button>
+          {project.view && (
+            <button role="tab" className={tab === 'view' ? 'on' : ''} onClick={() => setTab('view')}>
+              Custom view
+            </button>
+          )}
+          {!project.view && (
+            <button className="pjp-tab-add" title="Add a Custom view: a page Claude keeps up to date, like a dashboard or a checklist" onClick={() => api(`/api/cprojects/${project.id}/view`, { method: 'POST', body: {} }).then(() => (reload(), setTab('view'))).catch(onError)}>
+              ＋
+            </button>
+          )}
         </div>
         <span className="spacer" />
         {tab === 'threads' && (
@@ -121,8 +131,96 @@ export default function ProjectPanel({ project, tab, setTab, threadId, openThrea
           </IconButton>
         )}
       </div>
-      {tab === 'threads' ? <ThreadsList project={project} openThread={openThread} /> : <ContextTab project={project} onError={onError} reload={reload} />}
+      {tab === 'view' && project.view ? <ViewTab project={project} onError={onError} reload={reload} onRemoved={() => setTab('threads')} /> : tab === 'context' ? <ContextTab project={project} onError={onError} reload={reload} /> : <ThreadsList project={project} openThread={openThread} />}
     </div>
+  );
+}
+
+// ---------------------------------------------------------------- custom view
+function ViewTab({ project, onError, reload, onRemoved }) {
+  const v = project.view;
+  const [picking, setPicking] = useState(false);
+  const [menu, setMenu] = useState(false);
+  const ask = () => window.dispatchEvent(new CustomEvent('cw-pj-draft', { detail: { project: project.id, text: 'Make a custom view for this project: ' } }));
+  const post = (body) => api(`/api/cprojects/${project.id}/view`, { method: 'POST', body }).then(reload).catch(onError);
+  return (
+    <div className="pjp-body pjp-view">
+      {v.empty ? (
+        <div className="pjp-view-empty">
+          <div className="pjp-view-ico">◰</div>
+          <b>Nothing here yet</b>
+          <p className="muted small">Pin a page to see it here, or ask Claude to make one, like a dashboard, a checklist or a weekly digest.</p>
+          <div className="pjp-view-actions">
+            <Button size="sm" onClick={() => setPicking(true)}>
+              Pin a page
+            </Button>
+            <Button size="sm" onClick={ask}>
+              Ask Claude
+            </Button>
+          </div>
+          <button className="linklike small muted" onClick={() => post({ remove: true }).then(onRemoved)}>
+            Remove this tab
+          </button>
+        </div>
+      ) : (
+        <>
+          <div className="pjp-view-bar">
+            <span className="pjp-view-title" title={v.path}>
+              {v.title}
+            </span>
+            <span className="spacer" />
+            {v.url && (
+              <a className="small" href={v.url} target="_blank" rel="noreferrer">
+                Open ↗
+              </a>
+            )}
+            <div className="menu-wrap">
+              <IconButton size="sm" title="More" onClick={() => setMenu((m) => !m)}>
+                ⋯
+              </IconButton>
+              {menu && (
+                <Menu place="down" align="end">
+                  <button onClick={() => (setMenu(false), setPicking(true))}>Pin another page…</button>
+                  <button onClick={() => (setMenu(false), ask())}>Ask Claude to change it</button>
+                  <button onClick={() => (setMenu(false), post({ remove: true }).then(onRemoved))}>Remove the Custom view</button>
+                </Menu>
+              )}
+            </div>
+          </div>
+          {v.missing ? <div className="pjp-ctx-row muted">The pinned file is gone: {v.path}</div> : <iframe key={v.mtime} className="pjp-view-frame" src={v.url} title={v.title} sandbox="allow-scripts allow-popups allow-forms allow-modals allow-downloads" />}
+        </>
+      )}
+      {picking && <PinPicker project={project} onClose={() => setPicking(false)} onPick={(a) => (setPicking(false), post({ session: a.sessionId, path: a.path, title: a.title || a.name }))} onError={onError} />}
+    </div>
+  );
+}
+
+function PinPicker({ project, onClose, onPick, onError }) {
+  const [arts, setArts] = useState(null);
+  const [q, setQ] = useState('');
+  useEffect(() => {
+    api(`/api/artifacts?cproject=${encodeURIComponent(project.id)}`)
+      .then((r) => setArts(r.artifacts.filter((a) => /^(html?|svg|md)$/.test(a.ext))))
+      .catch(onError);
+  }, [project.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  const shown = (arts || []).filter((a) => !q || `${a.title || ''} ${a.name}`.toLowerCase().includes(q.toLowerCase()));
+  return (
+    <Modal onClose={onClose}>
+      <ModalHead onClose={onClose}>Pin a page</ModalHead>
+      <ModalBody>
+        <Input autoFocus placeholder="Search pages" value={q} onChange={(e) => setQ(e.target.value)} />
+        {!arts && <Spinner />}
+        {arts?.length === 0 && <p className="muted small">This project has no pages yet. Ask Claude to make one.</p>}
+        <div className="pjp-pick-list">
+          {shown.map((a) => (
+            <button key={a.sessionId + a.path} className="pjp-pick" onClick={() => onPick(a)}>
+              <b>{a.title || a.name}</b>
+              <span className="muted small">{project.threads.find((t) => t.id === a.sessionId)?.title || a.sessionName || ''}</span>
+            </button>
+          ))}
+        </div>
+      </ModalBody>
+    </Modal>
   );
 }
 

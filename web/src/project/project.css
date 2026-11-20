@@ -333,3 +333,15 @@
 .pj-activity-stats b { display: block; font-size: 22px; font-weight: 600; }
 .pj-activity-stats .add { color: var(--green); } .pj-activity-stats .del { color: var(--red, #d33); }
 .pj-usage-row .share { width: 3.5em; text-align: right; }
+.pjp-tab-add { background: none; border: 0; color: var(--text-muted, inherit); cursor: pointer; padding: 2px 8px; font-size: var(--fs-sm); }
+.pjp-view { display: flex; flex-direction: column; padding: 0; }
+.pjp-view-empty { margin: auto; text-align: center; max-width: 320px; display: flex; flex-direction: column; align-items: center; gap: var(--sp-2); padding: var(--sp-6, 24px); }
+.pjp-view-ico { font-size: 26px; opacity: .6; }
+.pjp-view-actions { display: flex; gap: var(--sp-2); }
+.pjp-view-bar { display: flex; align-items: center; gap: var(--sp-2); padding: var(--sp-2) var(--sp-4); border-bottom: 1px solid var(--border); }
+.pjp-view-bar .spacer { flex: 1; }
+.pjp-view-title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pjp-view-frame { flex: 1; width: 100%; border: 0; background: #fff; min-height: 300px; }
+.pjp-pick-list { display: flex; flex-direction: column; gap: 4px; margin-top: var(--sp-3); max-height: 50vh; overflow: auto; }
+.pjp-pick { display: flex; flex-direction: column; align-items: flex-start; text-align: left; border: 1px solid var(--border); background: none; color: var(--text); border-radius: var(--r-md, 8px); padding: 8px 10px; cursor: pointer; }
+.pjp-pick:hover { background: var(--bg-hover, rgba(127,127,127,.12)); }

@@ -12,16 +12,16 @@ export default function ProjectView({ projectId, tab: initialTab, thread: initia
   const [project, reload] = useProject(projectId, onError);
   const narrow = useNarrow();
   // Right panel: Threads or Context; a thread opens in place. On a phone the panel is a view of its own.
-  const [panel, setPanelState] = useState(initialTab === 'context' ? 'context' : 'threads');
+  const [panel, setPanelState] = useState(['context', 'view'].includes(initialTab) ? initialTab : 'threads');
   const [threadId, setThreadId] = useState(initialThread || null);
-  const [mobileView, setMobileView] = useState(initialThread ? 'panel' : initialTab === 'context' || initialTab === 'threads' ? 'panel' : 'chat');
+  const [mobileView, setMobileView] = useState(initialThread ? 'panel' : ['context', 'threads', 'view'].includes(initialTab) ? 'panel' : 'chat');
   const [settings, setSettings] = useState(initialTab === 'settings' ? 'general' : null);
   const [showNew, setShowNew] = useState(false);
   useEffect(() => {
     setThreadId(initialThread || null);
     if (initialTab === 'settings') setSettings('general');
   }, [projectId, initialThread, initialTab]);
-  const writeHash = (p, t) => history.replaceState(null, '', `#p=${projectId}${p === 'context' ? '&tab=context' : ''}${t ? `&t=${t}` : ''}`);
+  const writeHash = (p, t) => history.replaceState(null, '', `#p=${projectId}${p === 'context' || p === 'view' ? `&tab=${p}` : ''}${t ? `&t=${t}` : ''}`);
   const setPanel = (p) => {
     setPanelState(p);
     writeHash(p, threadId);
@@ -135,6 +135,16 @@ function ProjectChat({ project, openThread, onError }) {
     }
   });
   const [sending, setSending] = useState(false);
+  // "Ask Claude" elsewhere on the page (the Custom view tab) puts a draft here.
+  useEffect(() => {
+    const on = (e) => {
+      if (e.detail?.project !== project.id) return;
+      saveDraft(e.detail.text);
+      setTimeout(() => listRef.current?.closest('.pj-chat')?.querySelector('textarea')?.focus(), 0);
+    };
+    window.addEventListener('cw-pj-draft', on);
+    return () => window.removeEventListener('cw-pj-draft', on);
+  }, [project.id]); // eslint-disable-line react-hooks/exhaustive-deps
   const threads = useMemo(() => Object.fromEntries(project.threads.map((t) => [t.id, t])), [project.threads]);
   const decisions = useMemo(() => Object.fromEntries(project.decisions.map((d) => [d.id, d])), [project.decisions]);
   useLayoutEffect(() => {

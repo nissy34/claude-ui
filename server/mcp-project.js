@@ -59,6 +59,12 @@ const board = { name: 'board', description: 'The board: every open thread with i
 const readThread = { name: 'read_thread', description: "Read a thread's transcript (its messages and replies, tools left out) without waking it.", inputSchema: { type: 'object', properties: { thread_id: { type: 'string' }, max_chars: { type: 'number' } }, required: ['thread_id'] } };
 const listThreads = { name: 'list_threads', description: "The project's threads: id, title, status (Working, Waiting on you, Ready for review, Idle, Queued, Snoozed, Resolved), checklist progress and last post.", inputSchema: { type: 'object', properties: { include_resolved: { type: 'boolean' } } } };
 
+const pinView = {
+  name: 'pin_view',
+  description: "Pin a page you wrote as the project's Custom view: a panel tab beside the project chat that shows it live, e.g. a dashboard, a checklist or a weekly digest. Write a self-contained .html file (inline CSS/JS) first; rewriting the file later updates the view. One view per project; pinning replaces it.",
+  inputSchema: { type: 'object', properties: { path: { type: 'string', description: 'The .html file, absolute or relative to your working folder.' }, title: { type: 'string' } }, required: ['path'] },
+};
+
 const COORDINATOR = [
   { name: 'post_message', description: 'Post a message to the user in the project chat. This is the only way the user sees what you say. Lead with the outcome or the ask; keep it short.', inputSchema: { type: 'object', properties: { text: { type: 'string', description: 'Markdown.' }, thread_id: { type: 'string', description: 'The thread this post is about, if one: the chat labels it with that thread.' }, cite_ids: cite }, required: ['text'] } },
   {
@@ -149,6 +155,7 @@ const THREAD = [
   search,
   board,
   readThread,
+  pinView,
   {
     name: 'resolve',
     description: 'Mark this thread Resolved: the work has ended and nothing is owed. learned is required: what later work or other threads should know (fixes, gotchas, helpers, facts), one line each, or [] when nothing; each item is saved to memory and shared.',

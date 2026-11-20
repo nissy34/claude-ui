@@ -21,6 +21,7 @@ import crypto from 'node:crypto';
 import { config } from './config.js';
 import { changedFiles, createWorktree, isGitRepo, removeWorktree, worktreeMerged } from './git.js';
 import { prStatus } from './pr-status.js';
+import { rawUrl } from './artifacts.js';
 import { coordinatorPrompt, threadPrompt, instructionsBlock, memoryBlock } from './cproject-prompts.js';
 import { ProjectMemory } from './cproject-memory.js';
 import { NOTE_KINDS, NOTE_MAX_CHARS, NOTES_PER_HOUR, MEMORY_FILE_FOR, cleanFiles, liveNotes, noteLine, noteMatchesThread, packNotes, search, similarThreads } from './cproject-notes.js';
@@ -143,6 +144,7 @@ function initialState() {
     inflight: {}, // sid -> { wake, events, at }
     working: {}, // sid -> turn start ts (turn.started without turn.ended)
     reactions: {}, // eventId -> [{ emoji, by }]
+    view: null, // the Custom view: a pinned page { session, path, title, tab }
     cost: 0,
     paused: null, // { reason, at }
     lastUserAt: 0,
@@ -270,6 +272,15 @@ export function reduce(st, ev) {
       break;
     case 'follow_up.done':
       delete st.followUps[ev.body.id];
+      break;
+    case 'view.pinned':
+      st.view = { session: ev.body.session, path: ev.body.path, title: ev.body.title || '' };
+      break;
+    case 'view.added':
+      st.view = st.view || { session: null, path: null, title: '' };
+      break;
+    case 'view.removed':
+      st.view = null;
       break;
     case 'reaction':
       (st.reactions[ev.body.target] ||= []).push({ emoji: ev.body.emoji, by: ev.from });
@@ -1387,7 +1398,67 @@ export class Project {
       limit: this.state.limit,
       libraryDir: this.libraryDir,
       running: this.runningThreadTurns(),
+      view: this.viewInfo(),
     };
+  }
+
+  /** The Custom view tab: the pinned page with a URL and its mtime (so the panel reloads when it changes). */
+  viewInfo() {
+    const v = this.state.view;
+    if (!v) return null;
+    if (!v.path || !v.session) return { empty: true };
+    let mtime = null;
+    try {
+      mtime = fs.statSync(v.path).mtimeMs;
+    } catch {}
+    return { session: v.session, path: v.path, title: v.title || path.basename(v.path), url: mtime ? rawUrl(v.session, v.path) : null, mtime, missing: !mtime };
+  }
+
+  /** A read-only, signed URL with the project's live board as JSON, for pages in the Custom view. */
+  viewDataUrl() {
+    const sig = crypto.createHmac('sha256', config.secret).update(`view:${this.id}`).digest('base64url').slice(0, 22);
+    return `/view-data/${this.id}/${sig}.json`;
+  }
+
+  viewDataOk(sig) {
+    return this.viewDataUrl().endsWith(`/${sig}.json`);
+  }
+
+  /** What a dashboard page can show: threads with status, current step, PR and what each waits on. No transcripts. */
+  viewData() {
+    const threads = Object.values(this.state.threads)
+      .filter((t) => !t.sideOf)
+      .sort((a, b) => (b.lastActivity || 0) - (a.lastActivity || 0))
+      .map((t) => {
+        const st = this.statusOf(t.id);
+        const steps = t.checklist?.steps || [];
+        const waits = [...(t.dependsOn || []).filter((d) => !this.state.threads[d]?.resolved).map((d) => this.state.threads[d]?.title || d), ...(st === 'waiting' ? ['you'] : [])];
+        return {
+          id: t.id,
+          title: t.title,
+          status: STATUS_LABEL[st],
+          resolved: !!t.resolved,
+          step: steps.find((x) => x.status === 'in_progress')?.step || null,
+          progress: steps.length ? { done: steps.filter((x) => x.status === 'completed').length, total: steps.length } : null,
+          waitingOn: waits,
+          lastPost: t.lastPost ? { kind: t.lastPost.kind, text: clipText(t.lastPost.text, 400), at: t.lastPost.ts } : null,
+          pr: t.pr?.url ? { number: t.pr.number, url: t.pr.url, state: t.pr.state, checks: t.pr.summary || null, additions: t.pr.additions ?? null, deletions: t.pr.deletions ?? null } : null,
+          branch: t.branch || null,
+          changedFiles: (t.changedFiles || []).length,
+          updatedAt: t.lastActivity || null,
+        };
+      });
+    return { project: this.settings.name, updatedAt: Date.now(), running: this.runningThreadTurns(), threads, decisionsWaiting: Object.values(this.state.decisions).filter((d) => !d.answer).length };
+  }
+
+  /** Pins a page a session wrote as the Custom view. */
+  pinView(sid, file, title, by) {
+    const s = this.session(sid);
+    if (!s) throw new Error('No such session');
+    const abs = path.resolve(s.meta.cwd, String(file || ''));
+    if (!/\.(html?|svg|md)$/i.test(abs)) throw new Error('Pin an .html page (or .svg / .md).');
+    if (!fs.existsSync(abs)) throw new Error(`No such file: ${abs}`);
+    return this.append({ type: 'view.pinned', from: by, trust: by.kind === 'user' ? 'principal' : 'relay', body: { session: sid, path: abs, title: clipText(String(title || ''), 80) } });
   }
 
   /** What passed between sessions: notes shared and handed over, and signals. Newest first. */
@@ -1416,7 +1487,7 @@ export class Project {
     const m = s.meta;
     const isCoord = m.id === this.state.coordinator;
     const t = this.state.threads[m.id];
-    const role = isCoord ? coordinatorPrompt(this.settings) : threadPrompt(this.settings, { title: t?.title || m.name, branch: t?.branch || m.worktree?.branch, libraryDir: path.join(this.libraryDir, slug(t?.title || m.name)) });
+    const role = isCoord ? coordinatorPrompt(this.settings) : threadPrompt({ ...this.settings, viewDataUrl: this.viewDataUrl() }, { title: t?.title || m.name, branch: t?.branch || m.worktree?.branch, libraryDir: path.join(this.libraryDir, slug(t?.title || m.name)) });
     const prompt = [role, instructionsBlock(this.settings), memoryBlock(this.memory.index())].filter(Boolean).join('\n\n');
     const addDirs = [this.libraryDir];
     for (const f of this.settings.folders.slice(isCoord ? 0 : 1)) if (f.path && f.path !== m.cwd && fs.existsSync(f.path)) addDirs.push(f.path);
@@ -2100,6 +2171,10 @@ export class ProjectEngine {
       }
       case 'board':
         return { board: p.board(), running_turns: p.runningThreadTurns() };
+      case 'pin_view': {
+        const ev = p.pinView(s.id, a.path, a.title, me);
+        return { ok: true, note: `Pinned as the project's Custom view: ${ev.body.path}. It reloads in the panel whenever you rewrite the file.` };
+      }
       case 'set_reminder': {
         const at = a.at ? Date.parse(a.at) : Date.now() + (Number(a.minutes) || (Number(a.hours) || 0) * 60 || (Number(a.days) || 0) * 1440) * 60_000;
         if (!Number.isFinite(at) || at <= Date.now() + 30_000) throw new Error('Give minutes, hours, days or an ISO time at least a minute away.');
@@ -2145,7 +2220,7 @@ export class ProjectEngine {
 
 const MUTATING = new Set(['suggest_thread', 'start_thread', 'message_thread', 'message_coordinator', 'post_message', 'request_decision', 'follow_up', 'share']);
 export const COORDINATOR_TOOLS = ['post_message', 'start_thread', 'suggest_thread', 'message_thread', 'list_threads', 'read_thread', 'board', 'project_search', 'stop_thread', 'resolve_thread', 'request_decision', 'react', 'follow_up', 'set_policy', 'set_reminder', 'memory_list', 'memory_read', 'memory_write', 'memory_delete'];
-export const THREAD_TOOLS = ['post_message', 'update_checklist', 'request_decision', 'message_coordinator', 'message_thread', 'react', 'set_reminder', 'share', 'project_search', 'board', 'read_thread', 'resolve', 'list_threads', 'memory_list', 'memory_read', 'memory_write', 'memory_delete'];
+export const THREAD_TOOLS = ['post_message', 'update_checklist', 'request_decision', 'message_coordinator', 'message_thread', 'react', 'set_reminder', 'share', 'project_search', 'board', 'read_thread', 'pin_view', 'resolve', 'list_threads', 'memory_list', 'memory_read', 'memory_write', 'memory_delete'];
 
 function parseSteps(a) {
   if (Array.isArray(a.steps)) {
