@@ -4,6 +4,9 @@ import { useModels } from '../models.js';
 import { Button, Checkbox, Input, Modal, ModalBody, ModalFoot, ModalHead, Segmented, Select, Textarea, Toggle } from '../ui/index.jsx';
 import { ProjectMemory } from './ProjectFiles.jsx';
 import { confirmDialog } from '../ui/dialogs.jsx';
+import { ProjectIcon } from './ProjectView.jsx';
+
+const PROJECT_COLORS = ['orange', 'blue', 'green', 'purple', 'pink', 'teal', 'yellow', 'red'];
 
 const EFFORTS = [
   ['', 'Default'],
@@ -300,6 +303,15 @@ export function ProjectSettingsModal({ project, section, setSection, onClose, on
               <h3>General</h3>
               <Row label="Name">
                 <Input value={s.name} onChange={(e) => set({ ...s, name: e.target.value })} />
+              </Row>
+              <Row label="Icon" hint="An emoji or up to 2 letters; empty uses the first letter">
+                <div className="pj-swatches">
+                  <ProjectIcon project={{ name: s.name || project.name, icon: s.icon, color: s.color || project.color }} size="md" />
+                  <Input className="pj-icon-input" value={s.icon || ''} maxLength={8} placeholder={(s.name || project.name).trim()[0]?.toUpperCase()} onChange={(e) => set({ ...s, icon: e.target.value })} />
+                  {PROJECT_COLORS.map((c) => (
+                    <button key={c} type="button" title={c} aria-label={`Color ${c}`} className={`pj-swatch pj-ic c-${c} ${(s.color || project.color) === c ? 'on' : ''}`} onClick={() => set({ ...s, color: c })} />
+                  ))}
+                </div>
               </Row>
               <Row label="What do you want to work on?" stack>
                 <Textarea rows={4} maxLength={8000} value={s.goal} onChange={(e) => set({ ...s, goal: e.target.value })} placeholder="Redesign onboarding so more new users finish setup" />

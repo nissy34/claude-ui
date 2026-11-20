@@ -236,7 +236,7 @@ export default function App() {
         onScheduled={() => (setDrawer(false), setDialog({ type: 'scheduled' }))}
         cprojects={cprojects}
         activeProjectId={projectRoute?.id}
-        onOpenProject={(id) => openProject(id)}
+        onOpenProject={(id, tab) => openProject(id, tab)}
         onNewProject={() => (setDrawer(false), setDialog({ type: 'new-project' }))}
         onError={showError}
         onLogout={async () => {
