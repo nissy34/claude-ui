@@ -277,6 +277,10 @@
 button.mention { cursor: pointer; }
 button.mention:hover { border-color: var(--line-strong); background: var(--hover); }
 .composer-bar { display: flex; align-items: center; gap: var(--sp-1h); margin-top: 8px; }
+.mention-input.ghosted.empty::before { max-width: calc(100% - 64px); }
+.ghost-take { position: absolute; top: var(--sp-2h); right: var(--sp-3); display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--panel-2); color: var(--muted); font-size: var(--fs-xs); cursor: pointer; }
+.ghost-take:hover { color: var(--text); background: var(--hover); }
+.ghost-take kbd { font: inherit; background: none; border: 0; padding: 0; }
 .chip { background: transparent; border: 1px solid var(--line); border-radius: var(--r-md); height: 30px; padding: 0 var(--sp-2h); font-size: var(--fs-sm); color: var(--text-2); white-space: nowrap; display: inline-flex; align-items: center; gap: 5px; }
 .chip:hover { background: var(--hover); }
 .chip.icon { width: 30px; padding: 0; justify-content: center; font-size: 16px; }

@@ -1,6 +1,6 @@
 // Per-browser preferences (appearance, notifications, defaults for new chats).
 const KEY = 'cw.prefs';
-const DEFAULTS = { fontSize: 'medium', notifications: true, sendOnEnter: true, newModel: '', newMode: 'default', newEffort: '' };
+const DEFAULTS = { fontSize: 'medium', notifications: true, sendOnEnter: true, suggestions: true, newModel: '', newMode: 'default', newEffort: '' };
 const listeners = new Set();
 
 export function getPrefs() {

@@ -1,6 +1,6 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { api } from '../api.js';
-import { getPrefs } from '../prefs.js';
+import { getPrefs, onPrefs } from '../prefs.js';
 import { needsSignIn } from './McpAuth.jsx';
 import { findModel, modelLabel, useModels } from '../models.js';
 import { withQuote } from './quote.js';
@@ -181,7 +181,7 @@ function ModelItem({ m, on, onPick }) {
   );
 }
 
-export default function Composer({ sessionId, disabled, busy, onSend, onStop, mode, onMode, model, activeModel, onModel, effort, onEffort, commands, footer, onError, placeholder, context, onCompact, insert, usage, mcpServers, onMcpSignIn, onMcpRefresh, onSettings, onBrowser, chats, initialDraft, quote, onClearQuote }) {
+export default function Composer({ sessionId, disabled, busy, onSend, onStop, mode, onMode, model, activeModel, onModel, effort, onEffort, commands, footer, onError, placeholder, context, onCompact, insert, usage, mcpServers, onMcpSignIn, onMcpRefresh, onSettings, onBrowser, chats, initialDraft, quote, onClearQuote, nextPrompt }) {
   const draftKey = `cw.draft.${sessionId}`;
   const [text, setText] = useState(() => {
     try {
@@ -388,6 +388,15 @@ export default function Composer({ sessionId, disabled, busy, onSend, onStop, mo
     }
   };
 
+  const [showGhost, setShowGhost] = useState(() => getPrefs().suggestions);
+  useEffect(() => onPrefs((p) => setShowGhost(p.suggestions)), []);
+  const ghost = showGhost && nextPrompt && !text && !quote && !images.length && !attachments.length ? nextPrompt : null;
+  const takeGhost = () => {
+    setText(ghost);
+    caretRef.current = ghost.length;
+    taRef.current?.focus();
+  };
+
   const onKeyDown = (e) => {
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'u') {
       e.preventDefault();
@@ -405,6 +414,11 @@ export default function Composer({ sessionId, disabled, busy, onSend, onStop, mo
           return;
         }
       }
+    }
+    // Tab in an empty box takes the suggested next message (shown as gray text).
+    if (e.key === 'Tab' && !e.shiftKey && ghost) {
+      e.preventDefault();
+      return takeGhost();
     }
     const enterSends = getPrefs().sendOnEnter ? !e.shiftKey && !isTouch : e.ctrlKey || e.metaKey;
     if (e.key === 'Enter' && enterSends && !e.nativeEvent.isComposing) {
@@ -517,7 +531,8 @@ export default function Composer({ sessionId, disabled, busy, onSend, onStop, mo
           value={text}
           chats={chats}
           known={knownRef.current}
-          placeholder={placeholder || (busy ? 'Queue a follow-up…' : isTouch ? 'Reply to Claude…' : 'Reply to Claude…  (@ to mention, / for commands, ! for shell)')}
+          className={ghost ? 'ghosted' : ''}
+          placeholder={ghost || placeholder || (busy ? 'Queue a follow-up…' : isTouch ? 'Reply to Claude…' : 'Reply to Claude…  (@ to mention, / for commands, ! for shell)')}
           onChange={(value, caret) => {
             setText(value);
             updateSuggest(value, caret);
@@ -531,6 +546,11 @@ export default function Composer({ sessionId, disabled, busy, onSend, onStop, mo
             }
           }}
         />
+        {ghost && (
+          <button type="button" className="ghost-take" onMouseDown={(e) => e.preventDefault()} onClick={takeGhost} title="Use this suggestion">
+            {isTouch ? 'Use' : <kbd>Tab</kbd>}
+          </button>
+        )}
         <div className="composer-bar">
           <div className="menu-wrap">
             <button className="chip icon" title="Add files, skills, connectors and more" onClick={() => setMenu(menu === 'plus' ? null : 'plus')}>

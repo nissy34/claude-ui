@@ -355,6 +355,7 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
   const [hidden, setHidden] = useState(null); // rows not rendered yet at the top of a long chat
   const growRef = useRef(null); // scroll height before showing earlier rows, to keep the view in place
   const [status, setStatus] = useState(null);
+  const [nextPrompt, setNextPrompt] = useState(null);
   const [stick, setStick] = useState(true);
   const [showTodos, setShowTodos] = useState(true);
   const [panel, setPanel] = useState(() => (window.matchMedia('(min-width: 1200px)').matches && localStorage.getItem('cw.panel') === 'open' ? 'changes' : null));
@@ -427,6 +428,7 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
           setWaitingOn(m.waitingOn || null);
           setOauth(m.oauth || []);
           setTasks(m.tasks || []);
+          setNextPrompt(m.nextPrompt || null);
           setDeltas({});
           setConn('open');
           setLoaded(true);
@@ -476,6 +478,7 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
           setMeta({ ...m.meta, live: m.live });
         } else if (m.t === 'tasks') setTasks(m.tasks || []);
         else if (m.t === 'status') setStatus(m.status);
+        else if (m.t === 'suggestion') setNextPrompt(m.text || null);
         else if (m.t === 'reload') ws.close(4000, 'reload');
         else if (m.t === 'error') onError(new Error(m.error));
       };
@@ -1015,6 +1018,7 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
             context={{ used: meta.contextTokens, window: meta.contextWindow, compactWindow: meta.compactWindow, model: meta.model }}
             onCompact={() => submit('/compact', [])}
             insert={insert}
+            nextPrompt={busy ? null : nextPrompt}
             onError={onError}
           />
 
