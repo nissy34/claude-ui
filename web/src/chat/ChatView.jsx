@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { api, wsUrl } from '../api.js';
 import ArtifactsGallery from '../ArtifactsGallery.jsx';
-import { buildItems, lastTodos, isPublishTool, publishedPath, publishedTitle } from './model.js';
+import { buildItems, lastTodos, isPublishTool, isPlanTool, publishedPath, publishedTitle } from './model.js';
 import { renderMarkdown } from './markdown.js';
 import ToolCard, { Todos, ToolGroup } from './ToolCard.jsx';
 import Permission from './Permission.jsx';
@@ -533,9 +533,19 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
   }, [session.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const items = useMemo(() => buildItems(events, deltas, offset), [events, deltas, offset]);
-  // Fold runs of quiet tool calls (reads, searches, commands) into one summary row.
+  // Fold runs of tool calls into one summary row ("Edited app.js, ran 2 commands"), like Desktop.
+  // Calls that ask for something or show their own card stay on their own.
   const rows = useMemo(() => {
-    const QUIET = new Set(['Read', 'Grep', 'Glob', 'LS', 'Bash', 'BashOutput', 'WebFetch', 'WebSearch', 'ToolSearch', 'NotebookRead', 'KillShell']);
+    const ALONE = new Set(['TodoWrite', 'Task', 'Agent', 'ExitPlanMode', 'AskUserQuestion', 'EnterPlanMode']);
+    const groupable = (it) =>
+      it.type === 'tool' &&
+      !ALONE.has(it.name) &&
+      !isPlanTool(it.name) &&
+      !isPublishTool(it.name) &&
+      !/^mcp__sessions__/.test(it.name) &&
+      !it.children?.length &&
+      !(it.perm && !it.perm.done) &&
+      it.perm?.done !== 'deny';
     const out = [];
     let run = [];
     const flush = () => {
@@ -544,7 +554,8 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
       run = [];
     };
     for (const it of items) {
-      if (!verbose && it.type === 'tool' && QUIET.has(it.name) && !(it.perm && !it.perm.done) && !it.result?.isError && !it.result?.images?.length) run.push(it);
+      if (!verbose && groupable(it)) run.push(it);
+      else if (it.type === 'thinking' && !verbose && run.length && !it.text?.trim()) continue;
       else {
         flush();
         out.push(it);
@@ -883,7 +894,7 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
                   case 'tool':
                     return (
                       <ToolCard key={it.id} item={it} cwd={meta.cwd}>
-                        {it.perm && <Permission perm={it.perm} cwd={meta.cwd} onAnswer={answer} onMode={setMode} showBody={false} />}
+                        {it.perm && !(it.perm.done === 'allow' && it.perm.tool !== 'AskUserQuestion' && !verbose) && <Permission perm={it.perm} cwd={meta.cwd} onAnswer={answer} onMode={setMode} showBody={false} />}
                       </ToolCard>
                     );
                   case 'elicit':

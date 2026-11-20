@@ -164,6 +164,17 @@
 /* tool cards: a quiet timeline, like the desktop app */
 .tool-group-head { display: flex; align-items: center; gap: var(--sp-2); background: none; border: 0; padding: 3px 0; color: var(--muted); font-size: var(--fs-md); }
 .tool-group-head:hover { color: var(--text); }
+.tool-group-head .tg-sum { text-align: left; }
+.tool-group-head .tstats { font: var(--fs-xs) var(--mono); display: inline-flex; gap: 4px; }
+.tg-extras { margin: 2px 0 4px 22px; display: flex; flex-direction: column; gap: var(--sp-1h); }
+.tg-files { display: flex; flex-wrap: wrap; gap: var(--sp-1h); }
+.tg-file { display: inline-flex; align-items: center; gap: 5px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-sm); padding: 2px 8px; font-size: var(--fs-xs); color: var(--text-2); cursor: pointer; max-width: 100%; }
+.tg-file:hover { border-color: var(--line-strong); background: var(--hover); }
+.tg-file .mono { font-family: var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.tg-file .add, .tg-file .del { font-family: var(--mono); }
+.tg-extras .tool-images { margin: 0; padding: 0; }
+.tg-extras .tool-image img { max-height: 120px; width: auto; max-width: 220px; object-fit: cover; }
+.tool-group > .artifact-card { margin: 2px 0 4px 22px; }
 .tool-group-body { margin: 2px 0 2px 8px; padding-left: var(--sp-3h); border-left: 2px solid var(--line); display: flex; flex-direction: column; gap: var(--sp-1); }
 /* tool cards */
 .tool { border: 1px solid transparent; border-radius: var(--r-lg); background: transparent; overflow: hidden; }

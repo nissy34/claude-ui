@@ -354,42 +354,111 @@ export default function ToolCard({ item, cwd, children }) {
   );
 }
 
-const GROUP_LABELS = [
-  [['Read', 'NotebookRead'], (n) => `read ${n} file${n > 1 ? 's' : ''}`],
-  [['Grep', 'Glob', 'LS'], (n) => `searched ${n} pattern${n > 1 ? 's' : ''}`],
-  [['Bash', 'BashOutput', 'KillShell'], (n) => `ran ${n} command${n > 1 ? 's' : ''}`],
-  [['WebFetch', 'WebSearch'], (n) => `${n} web lookup${n > 1 ? 's' : ''}`],
+const fileName = (p) => String(p || '').split(/[\\/]/).pop();
+const plural = (n, one, many = one + 's') => `${n} ${n === 1 ? one : many}`;
+const mcpParts = (name) => {
+  const m = /^mcp__([^_]+(?:_[^_]+)*?)__(.+)$/.exec(name);
+  return m ? { server: m[1], tool: m[2].replace(/_/g, ' ') } : null;
+};
+
+// One verb phrase per kind of tool, in the order they first ran, like Desktop's
+// "Edited CLAUDE.md, ran 2 commands, read 3 files".
+const GROUP_KINDS = [
+  { names: ['Edit', 'MultiEdit', 'Write', 'NotebookEdit'], say: (ts) => { const f = [...new Set(ts.map((t) => fileName(t.input?.file_path || t.input?.notebook_path)))]; return f.length === 1 ? `edited ${f[0]}` : `edited ${plural(f.length, 'file')}`; } },
+  { names: ['Read', 'NotebookRead'], say: (ts) => { const f = [...new Set(ts.map((t) => fileName(t.input?.file_path || t.input?.notebook_path)))]; return f.length === 1 ? `read ${f[0]}` : `read ${plural(f.length, 'file')}`; } },
+  { names: ['Grep', 'Glob', 'LS'], say: (ts) => `searched ${plural(ts.length, 'pattern')}` },
+  { names: ['Bash', 'BashOutput', 'KillShell'], say: (ts) => (ts.length === 1 ? 'ran a command' : `ran ${plural(ts.length, 'command')}`) },
+  { names: ['WebFetch'], say: (ts) => `fetched ${plural(ts.length, 'page')}` },
+  { names: ['WebSearch'], say: (ts) => `searched the web${ts.length > 1 ? ` ${ts.length} times` : ''}` },
+  { names: ['ToolSearch'], say: () => 'loaded tools' },
 ];
 
 export function groupSummary(tools) {
-  const counts = new Map();
-  let other = 0;
+  const buckets = new Map(); // key -> {say, tools}
   for (const t of tools) {
-    const g = GROUP_LABELS.find(([names]) => names.includes(t.name));
-    if (g) counts.set(g, (counts.get(g) || 0) + 1);
-    else other++;
+    const kind = GROUP_KINDS.find((k) => k.names.includes(t.name));
+    const mcp = !kind && mcpParts(t.name);
+    const key = kind ? kind.names[0] : mcp ? 'mcp:' + mcp.server : 'other';
+    if (!buckets.has(key)) {
+      const say = kind
+        ? kind.say
+        : mcp
+          ? (ts) => { const names = [...new Set(ts.map((x) => mcpParts(x.name).tool))]; return `used ${mcp.server}: ${names.length <= 2 ? names.join(', ') : plural(names.length, 'tool')}`; }
+          : (ts) => (ts.length === 1 ? `used ${ts[0].name}` : `used ${plural(ts.length, 'other tool')}`);
+      buckets.set(key, { say, tools: [] });
+    }
+    buckets.get(key).tools.push(t);
   }
-  const parts = [...counts].map(([g, n]) => g[1](n));
-  if (other) parts.push(`used ${other} other tool${other > 1 ? 's' : ''}`);
-  const s = parts.join(', ');
+  const s = [...buckets.values()].map((b) => b.say(b.tools)).join(', ');
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
-/** Several quiet tool calls in a row, folded into one line like "Read 3 files, ran 2 commands". */
+/** A run of tool calls folded into one line like "Edited app.js, ran 2 commands". What matters at a
+ *  glance stays visible under it: edited files with their +/−, pictures the tools returned, and
+ *  pages or documents Claude wrote. Expand for the full cards. */
 export function ToolGroup({ tools, cwd }) {
   const running = tools.some((t) => !t.result);
   const failed = tools.filter((t) => t.result?.isError).length;
-  const { verbose } = useContext(ChatCtx);
+  const { verbose, openFile, openArtifact } = useContext(ChatCtx);
   const [open, setOpen] = useState(verbose);
   React.useEffect(() => setOpen(verbose), [verbose]);
+  const edits = useMemo(() => {
+    const m = new Map();
+    for (const t of tools) {
+      if (!['Edit', 'MultiEdit', 'Write', 'NotebookEdit'].includes(t.name) || t.result?.isError) continue;
+      const p = t.input?.file_path || t.input?.notebook_path;
+      if (!p) continue;
+      const st = diffStats(t.name, t.input || {}) || { add: 0, del: 0 };
+      const cur = m.get(p) || { path: p, add: 0, del: 0, wrote: false };
+      m.set(p, { ...cur, add: cur.add + (st.add || 0), del: cur.del + (st.del || 0), wrote: cur.wrote || t.name === 'Write' });
+    }
+    return [...m.values()];
+  }, [tools]);
+  const add = edits.reduce((n, e) => n + e.add, 0);
+  const del = edits.reduce((n, e) => n + e.del, 0);
+  const images = tools.flatMap((t) => t.result?.images || []);
+  // Pages and pictures Claude wrote get a card, like a lone Write does; edited docs stay chips.
+  const arts = edits.filter((e) => e.wrote && artifactKind(e.path));
   return (
-    <div className="tool-group">
-      <button className="tool-group-head" onClick={() => setOpen((o) => !o)}>
+    <div className={`tool-group ${failed ? 'has-err' : ''}`}>
+      <button className="tool-group-head" onClick={() => setOpen((o) => !o)} aria-expanded={open}>
         {running ? <span className="spinner" /> : <span className="ticon">⋯</span>}
-        <span>{groupSummary(tools)}</span>
-        {failed > 0 && <span className="del">({failed} failed)</span>}
+        <span className="tg-sum">{groupSummary(tools)}</span>
+        {failed > 0 && <span className="del">{failed} failed</span>}
+        {(add > 0 || del > 0) && (
+          <span className="tstats">
+            {add > 0 && <span className="add">+{add}</span>}
+            {del > 0 && <span className="del">−{del}</span>}
+          </span>
+        )}
         <span className="chev">{open ? '▾' : '▸'}</span>
       </button>
+      {!open && (edits.length > 0 || images.length > 0) && (
+        <div className="tg-extras">
+          {edits.length > 0 && (
+            <div className="tg-files">
+              {edits.map((e) => (
+                <button key={e.path} className="tg-file" title={e.path} onClick={() => (artifactKind(e.path) ? openArtifact(e.path) : openFile(e.path))}>
+                  <span className="mono">{fileName(e.path)}</span>
+                  {e.add > 0 && <span className="add">+{e.add}</span>}
+                  {e.del > 0 && <span className="del">−{e.del}</span>}
+                </button>
+              ))}
+            </div>
+          )}
+          {images.length > 0 && <ToolImages images={images} label="Tool" />}
+        </div>
+      )}
+      {!open && arts.length > 0 && arts.length <= 2 && arts.map((a) => (
+        <button key={'art' + a.path} className="artifact-card card interactive" onClick={() => openArtifact(a.path)} title={a.path}>
+          <span className="art-icon">{{ html: '◰', image: '▣', markdown: '¶', pdf: '▤', csv: '▦' }[artifactKind(a.path)]}</span>
+          <span className="art-meta">
+            <b>{fileName(a.path)}</b>
+            <span className="muted">{{ html: 'Web page', image: 'Image', markdown: 'Document', pdf: 'PDF', csv: 'Table' }[artifactKind(a.path)]} · click to open</span>
+          </span>
+          <span className="muted">↗</span>
+        </button>
+      ))}
       {open && (
         <div className="tool-group-body">
           {tools.map((t) => (
