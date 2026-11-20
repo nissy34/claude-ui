@@ -5,6 +5,7 @@ import { Button, IconButton, Menu, Modal, ModalHead, useDismiss } from './ui/ind
 import { promptDialog } from './ui/dialogs.jsx';
 import { deleteChat } from './chat/deleteChat.js';
 import { ProjectList } from './project/ProjectView.jsx';
+import { PrIcon } from './project/ProjectPanel.jsx';
 
 function dotState(s) {
   if (s.kind === 'chat') {
@@ -14,6 +15,36 @@ function dotState(s) {
   }
   if (s.status !== 'running') return ['off', 'Exited'];
   return s.attention ? ['attn', 'Needs attention'] : ['on', 'Running'];
+}
+
+// A short label for where a chat stands, like Desktop's status labels in the sidebar.
+export function statusLabel(s) {
+  if (s.kind !== 'chat') return null;
+  if (s.state === 'waiting') return ['needs', 'Needs you'];
+  if (s.state === 'busy') return ['working', 'Working'];
+  if (s.pr?.state === 'MERGED') return ['done', 'Done'];
+  if (s.attention) return ['review', 'Ready for review'];
+  return null;
+}
+
+const PR_WORDS = { OPEN: 'Open', DRAFT: 'Draft', MERGED: 'Merged', CLOSED: 'Closed' };
+
+function RowPr({ pr }) {
+  if (!pr?.number) return null;
+  const st = (pr.state || 'OPEN').toLowerCase();
+  const checks = pr.fail ? ` · ${pr.fail} check${pr.fail > 1 ? 's' : ''} failing` : pr.pending ? ' · checks running' : '';
+  return (
+    <a
+      className={`row-pr ${st} ${pr.fail ? 'failing' : ''}`}
+      href={pr.url}
+      target="_blank"
+      rel="noreferrer"
+      title={`PR #${pr.number} · ${PR_WORDS[pr.state] || pr.state}${checks}${pr.title ? `\n${pr.title}` : ''}`}
+      onClick={(e) => e.stopPropagation()}
+    >
+      <PrIcon merged={pr.state === 'MERGED'} />
+    </a>
+  );
 }
 
 function StatusDot({ s }) {
@@ -136,7 +167,17 @@ export default function Sidebar({ sessions, activeId, onSelect, onCreate, onNewC
         )}
         {s.name}
       </span>
-      <span className="when">{timeAgo(s.lastActivity)}</span>
+      <RowPr pr={s.pr} />
+      {(() => {
+        const label = statusLabel(s);
+        return label ? (
+          <span className={`when row-status ${label[0]}`} title={timeAgo(s.lastActivity)}>
+            {label[1]}
+          </span>
+        ) : (
+          <span className="when">{timeAgo(s.lastActivity)}</span>
+        );
+      })()}
       <span className="menu-wrap row-menu" onClick={(e) => e.stopPropagation()}>
         <IconButton title="More" onClick={() => setMenu(menu === 'row:' + keyPrefix + s.id ? null : 'row:' + keyPrefix + s.id)}>
           ⋯

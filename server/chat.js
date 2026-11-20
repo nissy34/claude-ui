@@ -1,6 +1,7 @@
 // Chat sessions: the real `claude` CLI in headless stream-JSON mode, one long-lived process
 // per session. Tool permission prompts come back over stdio (`--permission-prompt-tool stdio`),
 // the same control protocol the Agent SDK uses, so the browser can answer them.
+import { refreshPr } from './pr-cache.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -622,6 +623,8 @@ export class ChatSession {
         this.broadcastState();
         this.touchIdle();
         if (!msg.is_error) this.autoTitle();
+        // A turn may have pushed a branch or opened a PR: refresh the sidebar's PR icon.
+        if (this.turns === 0) setTimeout(() => refreshPr(this, this.store), 4000).unref?.();
         break;
       case 'autocompact_state':
         // The window autocompact works against (model window minus room for output). Only used

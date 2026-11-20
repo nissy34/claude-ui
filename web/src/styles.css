@@ -474,6 +474,16 @@ button.mention:hover { border-color: var(--line-strong); background: var(--hover
 .session-row:hover .row-menu, .session-row.menu-open .row-menu { display: inline-flex; }
 .session-row:hover .when, .session-row.menu-open .when { display: none; }
 .session-row .pop { min-width: 190px; }
+.row-pr { flex: none; display: inline-flex; align-items: center; color: var(--green); border-radius: var(--r-xs); padding: 1px; position: relative; }
+.row-pr:hover { background: var(--hover); }
+.row-pr.draft, .row-pr.closed { color: var(--muted); }
+.row-pr.merged { color: var(--purple); }
+.row-pr.failing::after { content: ''; position: absolute; right: -1px; top: -1px; width: 6px; height: 6px; border-radius: 50%; background: var(--red); box-shadow: 0 0 0 1.5px var(--sidebar); }
+.row-status { font-weight: 500; white-space: nowrap; }
+.row-status.needs { color: var(--accent); }
+.row-status.working { color: var(--text-2); }
+.row-status.review { color: var(--blue); }
+.row-status.done { color: var(--purple); }
 
 /* artifacts gallery */
 .art-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: var(--sp-3); }
