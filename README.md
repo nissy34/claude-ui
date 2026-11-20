@@ -199,6 +199,8 @@ The handoff MCP has project tools too: `projects_list`, `project_status`, `proje
 
 Tests: `node scripts/test-projects.mjs` runs the engine end to end against a scripted fake CLI (`scripts/fake-claude.mjs`).
 
+CI (`.github/workflows/ci.yml`) runs on every pull request and push to main, with no Claude login or real CLI: `npm run check` (syntax), `npm run build`, `npm test` (the engine checks above, on Node 22 and 24) and `npm run test:ui` (headless Chrome signs in, opens a chat and sends a message against the fake CLI, on a desktop and a phone viewport; set `CHROMIUM_PATH` to pick the browser locally).
+
 ## Claude Desktop handoff
 
 The server is also an MCP server that the Claude Desktop app can use, so the two can hand work to each other. From Desktop you can say "continue this tonight on my machine" (starts a chat here, or leaves the brief in a new chat's message box for you to send later), ask "what did that chat do?", send a chat new instructions, and keep **notes** that every chat here can read and write too (the built-in `notes` tools).
