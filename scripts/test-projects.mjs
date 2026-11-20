@@ -285,6 +285,8 @@ async function main() {
   console.log('Coordination: notes, search, warm briefs, board, signals');
   await coordination();
   await steering();
+  console.log('Threads started for one request report together');
+  await siblings();
 
   await stop();
   console.log(`\n${passes} passed, ${failures} failed`);
@@ -305,6 +307,25 @@ const fakeLog = () =>
         return {};
       }
     });
+
+async function siblings() {
+  const fast = call('start_thread', { title: 'Fast part', brief: '@@say FAST-RESULT' });
+  const slow = call('start_thread', { title: 'Slow part', brief: '@@sleep 2500\n@@say SLOW-RESULT', new: true });
+  const { project: r } = await api('/api/cprojects', { method: 'POST', body: { name: 'Siblings', folders: [repo], prompt: `do both\n${fast}\n${slow}` } });
+  await until(async () => (await detail(r.id)).threads.filter((t) => t.status === 'resolved' || t.status === 'idle').length === 2, 15_000, 'both threads done');
+  await until(() => fakeLog().some((l) => l.prompt?.includes('SLOW-RESULT') && l.prompt.includes('<project-wake') && !l.prompt.includes('You are thread')), 10_000, 'coordinator hears the slow result');
+  const wakes = fakeLog().filter((l) => l.prompt?.includes('<project-wake') && (l.prompt.includes('FAST-RESULT') || l.prompt.includes('SLOW-RESULT')) && !l.prompt.includes('You are thread'));
+  check(wakes.length && wakes[0].prompt.includes('FAST-RESULT') && wakes[0].prompt.includes('SLOW-RESULT'), 'the fast result waits for its sibling: one coordinator wake carries both', wakes.map((w) => w.prompt.slice(0, 300)));
+  const d = await detail(r.id);
+  check(d.threads.every((t) => t.cites?.length === 1), 'threads started without cite_ids are tied to the user message being handled', d.threads.map((t) => t.cites));
+
+  // A follow-up right after a thread finished: the wake lists it as recently finished.
+  for (const t of d.threads) if (t.status !== 'resolved') await api(`/api/cprojects/${r.id}/threads/${t.id}/resolve`, { method: 'POST' });
+  await api(`/api/cprojects/${r.id}/messages`, { method: 'POST', body: { text: 'which part was slower?' } });
+  await until(() => fakeLog().some((l) => l.prompt?.includes('which part was slower?') && l.prompt.includes('recently finished threads')), 10_000, 'recent threads hint');
+  const w = fakeLog().find((l) => l.prompt?.includes('which part was slower?'));
+  check(w.prompt.includes('"Slow part"') && w.prompt.includes('message_thread'), 'a user message wake lists recently finished threads to send follow-ups to', w.prompt.slice(-900));
+}
 
 async function steering() {
   console.log('Follow-ups reach a busy thread mid-turn; pause, restart');
@@ -471,8 +492,12 @@ async function coordination() {
 
   // The coordinator's start_thread refuses a near-duplicate until new: true.
   await api(`/api/cprojects/${r.id}/messages`, { method: 'POST', body: { text: [call('start_thread', { title: 'Util helpers parsing cleanup', brief: 'Clean up the parsing helpers in lib/util.js' }), call('start_thread', { title: 'Util helpers parsing cleanup', brief: 'Clean up the parsing helpers in lib/util.js', new: true }), call('post_message', { text: 'checked' })].join('\n') } });
-  await until(() => fakeLog().filter((l) => l.call === 'project__start_thread' && l.input.title === 'Util helpers parsing cleanup').length >= 2, 10_000, 'similar check');
-  const st = fakeLog().filter((l) => l.call === 'project__start_thread' && l.input.title === 'Util helpers parsing cleanup').map((l) => JSON.parse(l.result));
+  // Only the coordinator's own calls: the new thread's warm brief can quote the same directives
+  // (a search hit on the coordinator's conversation), and the fake CLI would run them there too.
+  // A thread's attempt is refused as "not available to a thread", so leave those out.
+  const ownCalls = () => fakeLog().filter((l) => l.call === 'project__start_thread' && l.input.title === 'Util helpers parsing cleanup' && !l.result.includes('not available to a thread'));
+  await until(() => ownCalls().length >= 2, 10_000, 'similar check');
+  const st = ownCalls().map((l) => JSON.parse(l.result));
   check(st[0].started === false && st[0].similar.some((x) => x.title === 'Util helpers'), 'start_thread returns similar threads instead of starting', st[0]);
   check(st[1].ok && st[1].thread_id, 'start_thread with new: true starts it', st[1]);
 }
