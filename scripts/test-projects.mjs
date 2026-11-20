@@ -492,8 +492,12 @@ async function coordination() {
 
   // The coordinator's start_thread refuses a near-duplicate until new: true.
   await api(`/api/cprojects/${r.id}/messages`, { method: 'POST', body: { text: [call('start_thread', { title: 'Util helpers parsing cleanup', brief: 'Clean up the parsing helpers in lib/util.js' }), call('start_thread', { title: 'Util helpers parsing cleanup', brief: 'Clean up the parsing helpers in lib/util.js', new: true }), call('post_message', { text: 'checked' })].join('\n') } });
-  await until(() => fakeLog().filter((l) => l.call === 'project__start_thread' && l.input.title === 'Util helpers parsing cleanup').length >= 2, 10_000, 'similar check');
-  const st = fakeLog().filter((l) => l.call === 'project__start_thread' && l.input.title === 'Util helpers parsing cleanup').map((l) => JSON.parse(l.result));
+  // Only the coordinator's own calls: the new thread's warm brief can quote the same directives
+  // (a search hit on the coordinator's conversation), and the fake CLI would run them there too.
+  // A thread's attempt is refused as "not available to a thread", so leave those out.
+  const ownCalls = () => fakeLog().filter((l) => l.call === 'project__start_thread' && l.input.title === 'Util helpers parsing cleanup' && !l.result.includes('not available to a thread'));
+  await until(() => ownCalls().length >= 2, 10_000, 'similar check');
+  const st = ownCalls().map((l) => JSON.parse(l.result));
   check(st[0].started === false && st[0].similar.some((x) => x.title === 'Util helpers'), 'start_thread returns similar threads instead of starting', st[0]);
   check(st[1].ok && st[1].thread_id, 'start_thread with new: true starts it', st[1]);
 }
