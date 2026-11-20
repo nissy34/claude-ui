@@ -5,7 +5,7 @@ import { artifactKind } from './ArtifactView.jsx';
 import { diffLines } from 'diff';
 import { highlight, renderMarkdown } from './markdown.js';
 import Linkify from './Linkify.jsx';
-import { shortPath, isPlanTool, planTodos, isPublishTool, publishedPath } from './model.js';
+import { shortPath, isPlanTool, planTodos, isPublishTool, isPinViewTool, publishedPath } from './model.js';
 import { Button } from '../ui/index.jsx';
 
 const ICONS = {
@@ -239,7 +239,8 @@ export default function ToolCard({ item, cwd, children }) {
   const publish = isPublishTool(name);
   // What publish_artifact published: the server's path once done, else the file it was given.
   const published = publish ? (result && !result.isError && publishedPath(result.text)) || input?.path || null : null;
-  const artPath = published || filePath;
+  const pinned = isPinViewTool(name) && typeof input?.path === 'string' ? input.path : null;
+  const artPath = published || pinned || filePath;
   const isSessionTool = /^mcp__sessions__(start_session|send_to_session|read_session)$/.test(name);
   const parentId = ctx.parentId;
   const sendTarget = String(input?.id ?? input?.session_id ?? input?.to ?? '');
@@ -332,11 +333,11 @@ export default function ToolCard({ item, cwd, children }) {
           ))}
         </div>
       )}
-      {artPath && name !== 'Read' && artifactKind(artPath) && status !== 'error' && status !== 'stopped' && (!publish || status === 'done') && (
-        <button className="artifact-card card interactive" onClick={() => ctx.openArtifact(artPath, publish ? input?.title : undefined)} title={artPath}>
+      {artPath && name !== 'Read' && artifactKind(artPath) && status !== 'error' && status !== 'stopped' && (!(publish || pinned) || status === 'done') && (
+        <button className="artifact-card card interactive" onClick={() => ctx.openArtifact(artPath, publish || pinned ? input?.title : undefined)} title={artPath}>
           <span className="art-icon">{{ html: '◰', image: '▣', markdown: '¶', pdf: '▤', csv: '▦' }[artifactKind(artPath)]}</span>
           <span className="art-meta">
-            <b>{(publish && input?.title) || artPath.split(/[\\/]/).pop()}</b>
+            <b>{((publish || pinned) && input?.title) || artPath.split(/[\\/]/).pop()}</b>
             <span className="muted">{{ html: 'Web page', image: 'Image', markdown: 'Document', pdf: 'PDF', csv: 'Table' }[artifactKind(artPath)]} · click to open</span>
           </span>
           <span className="muted">↗</span>

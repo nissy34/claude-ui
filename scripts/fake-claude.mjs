@@ -6,6 +6,7 @@
 //   @@sleep <ms>                     wait (keeps the turn running)
 //   @@fail [text]                    end the turn with an error (text = the error)
 //   @@write <path> <text>            write a file in the working folder (like an Edit)
+//   @@writetool <path> <text>        the same, shown as a Write tool_use + tool_result (as the real CLI does)
 //   @@bashfail <command>             a Bash call that fails (tool_result with is_error)
 // PostToolUse HTTP hooks from --settings run after each tool call, like the real CLI's
 // ($VAR headers from allowedEnvVars); additionalContext they return is logged as hookContext.
@@ -89,7 +90,7 @@ async function runTurn(text) {
   let failed = false;
   // Only top-level directives of the prompt (not ones nested inside JSON strings).
   for (const line of lines) {
-    const m = /^@@(call|say|sleep|fail|write|bashfail)\b\s*(.*)$/.exec(line.trim());
+    const m = /^@@(call|say|sleep|fail|write|writetool|bashfail)\b\s*(.*)$/.exec(line.trim());
     if (!m) continue;
     const [, cmd, rest] = m;
     if (cmd === 'say') {
@@ -104,6 +105,15 @@ async function runTurn(text) {
       const file = sp < 0 ? rest : rest.slice(0, sp);
       fs.mkdirSync(path.dirname(path.resolve(file)), { recursive: true });
       fs.writeFileSync(path.resolve(file), (sp < 0 ? '' : rest.slice(sp + 1)) + '\n');
+      await postToolUse('Write', { file_path: file }, 'ok');
+    } else if (cmd === 'writetool') {
+      const sp = rest.indexOf(' ');
+      const file = path.resolve(sp < 0 ? rest : rest.slice(0, sp));
+      const useId = `toolu_${crypto.randomBytes(6).toString('hex')}`;
+      out({ type: 'assistant', message: { id: `msg_${++msgN}`, role: 'assistant', content: [{ type: 'tool_use', id: useId, name: 'Write', input: { file_path: file, content: sp < 0 ? '' : rest.slice(sp + 1) } }] }, parent_tool_use_id: null, session_id: sessionId });
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, (sp < 0 ? '' : rest.slice(sp + 1)) + '\n');
+      out({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: useId, content: `File created successfully at: ${file}` }] }, parent_tool_use_id: null, session_id: sessionId, uuid: crypto.randomUUID() });
       await postToolUse('Write', { file_path: file }, 'ok');
     } else if (cmd === 'bashfail') {
       const useId = `toolu_${crypto.randomBytes(6).toString('hex')}`;
@@ -134,7 +144,7 @@ async function runTurn(text) {
       await postToolUse(`mcp__${server}__${tool}`, input, result);
     }
   }
-  if (!said && !failed && !lines.some((l) => /^@@(call|write|bashfail)/.test(l.trim()))) {
+  if (!said && !failed && !lines.some((l) => /^@@(call|write|writetool|bashfail)/.test(l.trim()))) {
     out({ type: 'assistant', message: { id: `msg_${++msgN}`, role: 'assistant', content: [{ type: 'text', text: `ok: ${lines.find((l) => l.trim()) || ''}`.slice(0, 200) }] }, parent_tool_use_id: null, session_id: sessionId });
   }
   out({ type: 'result', subtype: failed ? 'error_during_execution' : 'success', is_error: failed, result: failed ? (typeof failed === 'string' ? failed : 'fake failure') : 'done', duration_ms: Date.now() - t0, num_turns: 1, total_cost_usd: 0.001, session_id: sessionId });

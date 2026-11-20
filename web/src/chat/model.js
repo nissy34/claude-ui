@@ -128,6 +128,31 @@ export function planTodos(input) {
 }
 
 export const isPublishTool = (name) => name === 'mcp__ui__publish_artifact';
+// A project thread pinning a page as the project's Custom view (input.path is the page).
+export const isPinViewTool = (name) => name === 'mcp__project__pin_view';
+
+// The local page a browser URL points at, when it is a file Claude can show as an artifact:
+// file:///abs/page.html or this UI's signed /raw/<sid>/<sig>/<abs path> URLs (any host, since Claude
+// may use localhost or the LAN address). Returns the absolute path, or null for any other URL.
+export function localPageFromUrl(url) {
+  let u;
+  try {
+    u = new URL(String(url || ''), 'http://x');
+  } catch {
+    return null;
+  }
+  let p = null;
+  if (u.protocol === 'file:') p = u.pathname;
+  else if (/^https?:$/.test(u.protocol)) p = /^\/raw\/[^/]+\/[^/]+(\/.+)$/.exec(u.pathname)?.[1] || null;
+  if (!p) return null;
+  try {
+    p = decodeURIComponent(p);
+  } catch {
+    return null;
+  }
+  if (/^\/[A-Za-z]:\//.test(p)) p = p.slice(1); // /C:/Users/... -> C:/Users/...
+  return /\.(html?|svg|md)$/i.test(p) ? p : null;
+}
 // The published file's absolute path, from publish_artifact's JSON result.
 export function publishedPath(text) {
   try {

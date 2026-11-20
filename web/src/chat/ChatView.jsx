@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { api, wsUrl } from '../api.js';
 import ArtifactsGallery from '../ArtifactsGallery.jsx';
-import { buildItems, lastTodos, isPublishTool, isPlanTool, publishedPath, publishedTitle } from './model.js';
+import { buildItems, lastTodos, isPublishTool, isPinViewTool, isPlanTool, publishedPath, publishedTitle, localPageFromUrl } from './model.js';
 import { renderMarkdown } from './markdown.js';
 import ToolCard, { Todos, ToolGroup } from './ToolCard.jsx';
 import Permission from './Permission.jsx';
@@ -390,6 +390,8 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
   const [wide, setWide] = useState(false);
   const [changesKey, setChangesKey] = useState(0);
   const pendingArtifacts = useRef(new Map());
+  // The browser is on one of Claude's own pages (shown in the artifact panel instead).
+  const browsingOwnPage = useRef(false);
   // Published artifacts' titles, for their side panel tabs (three report.html tabs look alike).
   const [artTitles, setArtTitles] = useState({});
   const [menu, setMenu] = useState(false);
@@ -467,16 +469,29 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
           // Like Desktop: show the browser when Claude uses it, and new pages/images it writes.
           if (e.k === 'block' && e.block?.type === 'tool_use' && !e.parent) {
             const { name, input } = e.block;
-            if (/^mcp__browser__(navigate|click|type)$/.test(name)) ctxRef.current?.openBrowser();
+            // Claude checking a page it wrote (file:// or a /raw/ URL) keeps it in the artifact panel,
+            // rather than swapping the page it just opened there for the Browser.
+            if (name === 'mcp__browser__navigate') {
+              const page = localPageFromUrl(input?.url);
+              browsingOwnPage.current = !!page;
+              if (page) ctxRef.current?.openArtifact(page);
+              else ctxRef.current?.openBrowser();
+            } else if (/^mcp__browser__(click|type)$/.test(name)) {
+              if (!browsingOwnPage.current) ctxRef.current?.openBrowser();
+            }
             // Opened once the file is written: before that (e.g. while asking permission) the page doesn't exist yet.
             else if (name === 'Write' && /\.(html?|svg)$/i.test(input?.file_path || '')) pendingArtifacts.current.set(e.block.id, input.file_path);
             // publish_artifact: the path is in its result (content is saved to a file by the server).
             else if (isPublishTool(name)) pendingArtifacts.current.set(e.block.id, null);
+            // pin_view: the project's Custom view, opened like any page once it is pinned.
+            else if (isPinViewTool(name) && input?.path) pendingArtifacts.current.set(e.block.id, { path: input.path, title: input.title });
           }
           if (e.k === 'tool_result' && pendingArtifacts.current.has(e.toolUseId)) {
-            const file = pendingArtifacts.current.get(e.toolUseId) || publishedPath(e.text);
+            const pending = pendingArtifacts.current.get(e.toolUseId);
+            const file = pending?.path || pending || publishedPath(e.text);
+            const title = pending?.title || publishedTitle(e.text);
             pendingArtifacts.current.delete(e.toolUseId);
-            if (!e.isError && file) setTimeout(() => ctxRef.current?.openArtifact(file, publishedTitle(e.text)), 200);
+            if (!e.isError && file) setTimeout(() => ctxRef.current?.openArtifact(file, title), 200);
           }
           if (e.k === 'block' || e.k === 'result') {
             setDeltas((d) => {
