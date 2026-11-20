@@ -249,7 +249,7 @@ export default function App() {
       <div className="scrim" onClick={() => setDrawer(false)} />
       <main className="main">
         {projectRoute && !active ? (
-          <ProjectView key={projectRoute.id} projectId={projectRoute.id} tab={projectRoute.tab} thread={projectRoute.thread} projects={projects} onSelect={select} onMenu={openMenu} onError={showError} onDeleted={() => select(null)} />
+          <ProjectView key={projectRoute.id} projectId={projectRoute.id} tab={projectRoute.tab} thread={projectRoute.thread} projects={projects} onSelect={select} onCreate={createSession} onMenu={openMenu} onError={showError} onDeleted={() => select(null)} />
         ) : active && active.kind === 'chat' ? (
           <ChatView
             key={active.id}

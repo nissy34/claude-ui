@@ -43,6 +43,8 @@ const IDEMPOTENT_MS = 10 * 60_000;
 const MAX_PROGRESS_POSTS = 2;
 /** The sender of messages the engine itself sends a session (retries, nudges, limit resets). */
 export const PROJECT_FROM = { role: 'project', name: 'Project', kind: 'project' };
+/** Errors that mean the server's CLI is signed out (same test as the chat view's "Log in again" card). */
+export const AUTH_RE = /oauth|authenticat|\/login|not logged in|invalid api key|credentials/i;
 const STUCK_MS = Number(process.env.CW_PROJECT_STUCK_MS) || 20 * 60_000;
 
 export const DEFAULT_SETTINGS = {
@@ -276,6 +278,11 @@ export function reduce(st, ev) {
     case 'follow_up.added':
       st.followUps[ev.body.id] = { id: ev.body.id, threads: ev.body.threads, note: ev.body.note, ts: ev.ts, seen: ev.body.seen || {} };
       break;
+    case 'queue.restored': {
+      const have = new Set((st.queue[ev.body.session] || []).map((q) => q.e));
+      st.queue[ev.body.session] = [...ev.body.events.filter((e) => !have.has(e)).map((e) => ({ e, at: ev.ts, user: true })), ...(st.queue[ev.body.session] || [])];
+      break;
+    }
     case 'queue.dropped':
       st.queue[ev.body.session] = (st.queue[ev.body.session] || []).filter((q) => !ev.body.events.includes(q.e));
       break;
@@ -344,7 +351,7 @@ export function reduce(st, ev) {
       if (t) t.pr = ev.body.pr;
       break;
     case 'project.paused':
-      st.paused = { reason: ev.body.reason, at: ev.ts };
+      st.paused = { reason: ev.body.reason, at: ev.ts, ...(ev.body.auth ? { auth: true } : {}) };
       break;
     case 'project.resumed':
       st.paused = null;
@@ -1260,13 +1267,26 @@ export class Project {
         this.engine.changed(this);
         break;
       case 'result': {
+        const failed = ev.isError && ev.text && ev.text !== 'Interrupted';
+        // A turn that fails because the CLI is signed out: keep what it was handed and pause, so
+        // nothing is lost and nothing retries in a loop until the user logs in and resumes.
+        if (failed && AUTH_RE.test(ev.text)) this.authFailed(sid, ev.text);
         this.append({ type: 'turn.ended', body: { session: sid, cost: ev.cost || 0, isError: !!ev.isError, interrupted: ev.text === 'Interrupted' } });
+        if (failed && !AUTH_RE.test(ev.text)) this.append({ type: 'turn.failed', body: { session: sid, text: clipText(ev.text, 500) } });
         this.afterTurn(s, ev);
         // The session is idle again: deliver what queued meanwhile (after its own inbox flush).
         this.schedulePump(400);
         break;
       }
       case 'error':
+        if (AUTH_RE.test(ev.text || '')) {
+          this.authFailed(sid, ev.text);
+          break;
+        }
+        if (/^Could not start/.test(ev.text || '')) {
+          this.append({ type: 'turn.failed', body: { session: sid, text: clipText(ev.text, 500) } });
+          break;
+        }
         // A server shutdown is not a crash: restart recovery picks the turn up again.
         if (ev.resumable && this.state.working[sid] && !this.engine.store.shuttingDown) {
           this.append({ type: 'turn.ended', body: { session: sid, cost: 0, isError: true, crashed: true } });
@@ -1301,6 +1321,19 @@ export class Project {
       const text = s.lastReply().trim();
       if (text) this.append({ type: 'thread.post', from: { kind: 'thread', id: sid }, trust: 'relay', thread: sid, body: { kind: 'result', text: clipText(text, 8000), auto: true } });
     }
+  }
+
+  /** The CLI is signed out: give back the wake it was handed and pause the project until the user logs in. */
+  authFailed(sid, text) {
+    const inf = this.state.inflight[sid];
+    if (inf) this.append({ type: 'wake.requeued', body: { session: sid, wake: inf.wake, reason: 'signed out' } });
+    else {
+      // Already handed over: put the same events back in its queue.
+      const wake = this.turnInfo.get(sid)?.wake;
+      const sent = wake && [...this.events].reverse().find((e) => e.type === 'wake.sent' && e.body.wake === wake);
+      if (sent) this.append({ type: 'queue.restored', body: { session: sid, events: sent.body.events, reason: 'signed out' } });
+    }
+    if (!this.state.paused?.auth) this.append({ type: 'project.paused', body: { auth: true, reason: `Claude is logged out on the server (${clipText(String(text || ''), 160)}). Log in again, then press Resume; your messages are kept.` } });
   }
 
   /** A turn died with the process: retry once, then tell the coordinator. */
@@ -1406,7 +1439,7 @@ export class Project {
   }
 
   detail({ limit = 300 } = {}) {
-    const chatTypes = new Set(['user.message', 'chat.post', 'thread.started', 'decision.requested', 'decision.answered', 'decision.withdrawn', 'thread.resolved', 'project.paused', 'project.resumed', 'limit.hit', 'limit.reset', 'policy.changed', 'notice', 'coordinator.rotated', 'thread.post', 'pr.updated', 'thread.suggested', 'suggestion.answered']);
+    const chatTypes = new Set(['user.message', 'chat.post', 'thread.started', 'decision.requested', 'decision.answered', 'decision.withdrawn', 'thread.resolved', 'project.paused', 'project.resumed', 'limit.hit', 'limit.reset', 'policy.changed', 'notice', 'coordinator.rotated', 'thread.post', 'pr.updated', 'thread.suggested', 'suggestion.answered', 'turn.failed']);
     const feed = this.events.filter((e) => chatTypes.has(e.type) && (e.type !== 'user.message' || e.body.where === 'chat') && (e.type !== 'thread.post' || e.body.kind !== 'progress')).slice(-limit);
     const coord = this.session(this.state.coordinator);
     return {
