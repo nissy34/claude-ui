@@ -938,6 +938,29 @@ a.autolink:hover { text-decoration-color: currentColor; }
 }
 
 
+/* side panel split into two panes */
+.pane-split { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.pane-split.across { flex-direction: row; }
+.pane-split > .pane-a { flex-grow: 0; flex-shrink: 0; min-height: 0; min-width: 0; }
+.pane-b { flex: 1; min-height: 0; min-width: 0; display: flex; flex-direction: column; }
+.pane-b > .panel-body:has(> .art), .pane-b > .panel-body:has(> .browser), .pane-a:has(> .art), .pane-a:has(> .browser) { overflow: hidden; display: flex; flex-direction: column; }
+.pane-head-2 { display: flex; align-items: center; gap: var(--sp-1); padding: 4px var(--sp-2) 4px var(--sp-2h); border-bottom: 1px solid var(--line); background: var(--panel-2); flex: none; }
+.pane-head-2 .panel-tab { font-size: var(--fs-sm); padding: 3px var(--sp-2); }
+.pane-divider { flex: none; background: var(--line); position: relative; touch-action: none; }
+.pane-split.down > .pane-divider { height: 1px; cursor: row-resize; }
+.pane-split.across > .pane-divider { width: 1px; cursor: col-resize; }
+.pane-divider::after { content: ''; position: absolute; inset: -4px 0; }
+.pane-split.across > .pane-divider::after { inset: 0 -4px; }
+.pane-divider:hover, body.pane-dragging .pane-divider { background: var(--accent); }
+body.pane-dragging { user-select: none; }
+body.pane-dragging.down { cursor: row-resize; }
+body.pane-dragging.across { cursor: col-resize; }
+body.pane-dragging iframe { pointer-events: none; }
+.pane-empty { display: flex; align-items: center; justify-content: center; height: 100%; padding: var(--sp-4); }
+.side-panel .term-view { height: 100%; display: flex; flex-direction: column; }
+.side-panel .term-view .topbar { display: none; }
+.panel-body:has(> .term-view) { overflow: hidden; }
+@media (max-width: 860px) { .pane-split.down > .pane-a { flex-basis: 50% !important; } }
 /* search palette (Ctrl/⌘ K) */
 .side-search-btn .side-kbd { margin-left: auto; font-size: var(--fs-2xs); color: var(--muted); }
 .pal-scrim { position: fixed; inset: 0; z-index: 60; background: color-mix(in srgb, #000 28%, transparent); display: flex; justify-content: center; align-items: flex-start; padding: 12vh 16px 16px; }

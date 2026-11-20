@@ -398,6 +398,7 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
   const [info, setInfo] = useState(false);
   const [gallery, setGallery] = useState(false);
   const [terminal, setTerminal] = useState(false);
+  const [split, setSplit] = useState(null); // the side panel's second pane, when split
   const [inbox, setInbox] = useState([]);
   const [waitingOn, setWaitingOn] = useState(null);
   const [oauth, setOauth] = useState(session.oauth || []);
@@ -598,7 +599,8 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
   const lastError = [...items].reverse().find((i) => i.type === 'error' || i.type === 'result');
   const authProblem = lastError && (lastError.type === 'error' || lastError.isError) && AUTH_RE.test(lastError.text || '');
   const parent = meta.parentId && sessions.find((s) => s.id === meta.parentId);
-  const showRail = rail && !projectConversation && (!panel || roomy);
+  // A wide panel (or one split side by side) needs the room: the rail steps aside.
+  const showRail = rail && !projectConversation && (!panel || (roomy && !wide));
   const children = sessions.filter((s) => s.parentId === session.id && s.kind === 'chat');
   const drawerSession = sessions.find((s) => s.parentId === session.id && s.kind === 'shell');
 
@@ -768,6 +770,10 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
     }
     setTerminal((t) => !t);
   };
+  // The terminal as a side-panel pane: make the chat's shell session if it doesn't exist yet.
+  const startTerminal = async () => {
+    if (!drawerSession) await onCreate({ cwd: meta.cwd, kind: 'shell', parentId: session.id, name: `${meta.name} terminal` }, { navigate: false });
+  };
   const openTui = async () => {
     setMenu(false);
     try {
@@ -821,6 +827,7 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
                   if (showRail) return toggleRail(false);
                   toggleRail(true);
                   if (panel && !roomy) setPanel(null);
+                  else if (panel && wide) setWide(false);
                 }}
               >
                 ▤ <span className="lbl hide-mobile">Details</span>
@@ -1075,7 +1082,7 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
             onError={onError}
           />
 
-          {terminal && drawerSession && (
+          {terminal && drawerSession && !(panel && (panel === 'terminal' || split === 'terminal')) && (
             <div className="term-drawer">
               <div className="term-drawer-head">
                 ›_ Terminal · {meta.cwd}
@@ -1121,6 +1128,7 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
             onCloseFile={(f) => {
               setFiles((list) => list.filter((x) => x !== f));
               if (panel === f) setPanel('changes');
+              if (split === f) setSplit(null);
             }}
             onClose={() => {
               setPanel(null);
@@ -1137,6 +1145,10 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
             onWide={() => setWide((w) => !w)}
             tasks={tasks}
             taskFocus={taskFocus}
+            split={split}
+            onSplit={setSplit}
+            terminal={drawerSession && (panel === 'terminal' || split === 'terminal') ? <TerminalView key={drawerSession.id} session={drawerSession} onMenu={() => {}} onError={onError} onDeleted={() => (setSplit((x) => (x === 'terminal' ? null : x)), panel === 'terminal' && setPanel('changes'))} /> : null}
+            onStartTerminal={meta.noFolder ? undefined : startTerminal}
           />
         )}
         {info && <InfoDialog meta={meta} onClose={() => setInfo(false)} onSignIn={signIn} />}
