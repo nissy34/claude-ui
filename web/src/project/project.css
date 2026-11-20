@@ -107,7 +107,9 @@
 .pj-advanced[open] > :not(summary) { margin-bottom: var(--sp-3); }
 .pj-save { display: flex; gap: var(--sp-3); align-items: center; }
 .pj-usage { display: flex; flex-direction: column; gap: var(--sp-1); font-size: var(--fs-md); }
-.pj-usage-row { display: flex; justify-content: space-between; }
+.pj-usage-row { display: flex; justify-content: space-between; gap: var(--sp-2); align-items: baseline; }
+.pj-usage-row .spacer { flex: 1; }
+.pj-usage-row .tokens { font-variant-numeric: tabular-nums; }
 .pj-danger { flex-direction: row; justify-content: space-between; border-top: 1px solid var(--line); padding-top: var(--sp-3); }
 
 /* thread bar above a thread's chat */
@@ -369,3 +371,17 @@
 .pj-ic.sm.two { font-size: 9px; letter-spacing: -0.02em; }
 .pj-ic.md.two { font-size: 12px; }
 .pj-sidebar .row-menu .pop { min-width: 230px; white-space: nowrap; right: 0; left: auto; }
+
+/* context ring + usage popover in project composers */
+.pj-usage-wrap .ctx-ring { padding: 2px; }
+.pop.pj-usage-pop { width: 380px; max-width: calc(100vw - 32px); max-height: min(70vh, 560px); overflow-y: auto; }
+.pj-usage-head { display: flex; justify-content: space-between; gap: var(--sp-2); }
+.pop button.pj-usage-thread { gap: var(--sp-2); }
+.pop button.pj-usage-thread:disabled { opacity: 1; cursor: default; }
+.pop button.pj-usage-thread:disabled:hover { background: none; }
+.pj-usage-dot { width: 7px; height: 7px; border-radius: 50%; border: 1.5px solid var(--muted); flex: none; box-sizing: border-box; }
+.pj-usage-dot.live { background: var(--green); border-color: var(--green); }
+.pj-usage-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pj-usage-amt { flex: none; font-size: var(--fs-sm); font-variant-numeric: tabular-nums; }
+.pop button.pj-usage-full { justify-content: space-between; color: var(--text-2); }
+.pj-usage-pop .meter.hot > span { background: var(--red); }

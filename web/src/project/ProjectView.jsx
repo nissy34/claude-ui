@@ -4,6 +4,7 @@ import { Button, IconButton, Input, Menu, Modal, ModalBody, ModalFoot, ModalHead
 import { DecisionCard, Md, StatusPill, SuggestionCard, ThreadCard } from './ProjectCards.jsx';
 import { confirmDialog, promptDialog } from '../ui/dialogs.jsx';
 import { ProjectSettingsModal } from './ProjectSettings.jsx';
+import { ProjectUsageRing } from './ProjectUsage.jsx';
 import ProjectPanel, { PrChip, StatusIcon } from './ProjectPanel.jsx';
 import { STATUS_LABEL, STATUS_ORDER, useProject } from './useProject.js';
 import './project.css';
@@ -76,7 +77,7 @@ export default function ProjectView({ projectId, tab: initialTab, thread: initia
             </IconButton>
           </div>
           <Banners project={project} reload={reload} onError={onError} onCreate={onCreate} />
-          <ProjectChat project={project} openThread={openThread} onError={onError} />
+          <ProjectChat project={project} openThread={openThread} onError={onError} onFullUsage={() => setSettings('usage')} />
         </div>
       )}
       {showPanel && (
@@ -88,7 +89,7 @@ export default function ProjectView({ projectId, tab: initialTab, thread: initia
               </button>
             </div>
           )}
-          <ProjectPanel project={project} tab={panel} setTab={setPanel} threadId={threadId} openThread={openThread} onSelect={onSelect} onError={onError} onNewThread={() => setShowNew(true)} reload={reload} />
+          <ProjectPanel project={project} tab={panel} setTab={setPanel} threadId={threadId} openThread={openThread} onSelect={onSelect} onError={onError} onNewThread={() => setShowNew(true)} reload={reload} onFullUsage={() => setSettings('usage')} />
         </div>
       )}
       {showNew && <NewThreadDialog project={project} onClose={() => setShowNew(false)} onError={onError} onDone={reload} />}
@@ -133,7 +134,7 @@ function Banners({ project, reload, onError, onCreate }) {
 }
 
 // ---------------------------------------------------------------- project chat
-function ProjectChat({ project, openThread, onError }) {
+function ProjectChat({ project, openThread, onError, onFullUsage }) {
   const listRef = useRef(null);
   const stick = useRef(true);
   const [text, setText] = useState(() => {
@@ -245,6 +246,7 @@ function ProjectChat({ project, openThread, onError }) {
             {modelName(cm.model)}
             {cm.effort ? ` ${cm.effort[0].toUpperCase()}${cm.effort.slice(1)}` : ''}
           </span>
+          <ProjectUsageRing project={project} context={project.coordinator?.context} onOpenThread={openThread} onFullUsage={onFullUsage} />
         </div>
       </div>
     </div>
