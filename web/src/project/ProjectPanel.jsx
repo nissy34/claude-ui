@@ -64,7 +64,7 @@ export function StatusIcon({ status }) {
   );
 }
 
-const PrIcon = ({ merged }) => (
+export const PrIcon = ({ merged }) => (
   <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">
     {merged ? (
       <path d="M5 3.5a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0Zm0 0v9M3.5 12.5a1.5 1.5 0 1 0 0 .01M12.5 11a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3Zm0 0c0-4-4-5.5-9-5.5" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />

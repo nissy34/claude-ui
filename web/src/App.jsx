@@ -239,7 +239,7 @@ export default function App() {
         onSearch={() => (setDrawer(false), setDialog({ type: 'palette' }))}
         cprojects={cprojects}
         activeProjectId={projectRoute?.id}
-        onOpenProject={(id) => openProject(id)}
+        onOpenProject={(id, tab) => openProject(id, tab)}
         onNewProject={() => (setDrawer(false), setDialog({ type: 'new-project' }))}
         onError={showError}
         onLogout={async () => {

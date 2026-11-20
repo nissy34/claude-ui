@@ -345,3 +345,27 @@
 .pjp-pick-list { display: flex; flex-direction: column; gap: 4px; margin-top: var(--sp-3); max-height: 50vh; overflow: auto; }
 .pjp-pick { display: flex; flex-direction: column; align-items: flex-start; text-align: left; border: 1px solid var(--border); background: none; color: var(--text); border-radius: var(--r-md, 8px); padding: 8px 10px; cursor: pointer; }
 .pjp-pick:hover { background: var(--bg-hover, rgba(127,127,127,.12)); }
+
+/* Project icons: emoji or first letter on the project's color (Desktop-style). */
+.pj-ic { flex: none; display: inline-flex; align-items: center; justify-content: center; border-radius: 5px; color: #fff; font-weight: var(--fw-bold); line-height: 1; background: var(--pj-c); }
+.pj-ic.sm { width: 18px; height: 18px; font-size: 11px; }
+.pj-ic.md { width: 26px; height: 26px; font-size: 14px; border-radius: var(--r-md); }
+.pj-ic.c-orange { --pj-c: #d97757; }
+.pj-ic.c-blue { --pj-c: #4a7fd6; }
+.pj-ic.c-green { --pj-c: #4f9a6a; }
+.pj-ic.c-purple { --pj-c: #8a6bd1; }
+.pj-ic.c-pink { --pj-c: #cf5f96; }
+.pj-ic.c-teal { --pj-c: #3b9a9a; }
+.pj-ic.c-yellow { --pj-c: #c4952f; }
+.pj-ic.c-red { --pj-c: #c95454; }
+.pj-sidebar .sname.unread { color: var(--text); font-weight: var(--fw-bold); }
+.pj-sidebar .session-row:hover .when, .pj-sidebar .session-row.menu-open .when { display: none; }
+.pj-swatches { display: flex; gap: var(--sp-1h, 6px); flex-wrap: wrap; align-items: center; }
+.pj-swatch { width: 22px; height: 22px; border-radius: 50%; border: 2px solid transparent; background: var(--pj-c); padding: 0; cursor: pointer; }
+.pj-swatch.on { border-color: var(--text); }
+.pj-icon-input { width: 56px; text-align: center; }
+.pj-ic.emoji { background: transparent; font-size: 15px; }
+.pj-ic.md.emoji { font-size: 21px; }
+.pj-ic.sm.two { font-size: 9px; letter-spacing: -0.02em; }
+.pj-ic.md.two { font-size: 12px; }
+.pj-sidebar .row-menu .pop { min-width: 230px; white-space: nowrap; right: 0; left: auto; }
