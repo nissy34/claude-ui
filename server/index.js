@@ -25,12 +25,13 @@ import { store, claudeProjectDir } from './sessions.js';
 import { getChanges, searchFiles, readFileSafe, createWorktree, listBranches } from './git.js';
 import * as browser from './browser.js';
 import { browserAvailable } from './browser.js';
-import { listArtifacts, publishArtifact, rawHandler, rawUrl } from './artifacts.js';
+import { listArtifacts, publishArtifact, rawHandler, rawUrl, writtenPaths } from './artifacts.js';
 import * as admin from './claude-admin.js';
 import { McpAdmin, onSignedIn, stopAllAdmins } from './mcp-admin.js';
 import { getModels } from './models.js';
 import { sideChat } from './side-chat.js';
 import { prStatus, mergeWhenReady } from './pr-status.js';
+import { rememberPr, startPrSweep } from './pr-cache.js';
 import * as schedules from './schedules.js';
 import * as notes from './notes.js';
 import { controlSession } from './session-control.js';
@@ -923,17 +924,31 @@ onSignedIn((name, from) => {
 app.get(
   '/api/sessions/:id/changes',
   wrap(async (req, res) => {
-    res.json(await getChanges(getSession(req).meta.cwd));
+    const s = getSession(req);
+    const data = await getChanges(s.meta.cwd, { base: typeof req.query.base === 'string' ? req.query.base : undefined, ignoreWs: req.query.ws === '0' });
+    // Files Claude wrote in this chat, relative to the folder, for "Claude's edits only".
+    if (data.git) data.claude = writtenPaths(s);
+    res.json(data);
   })
 );
 
 app.get(
   '/api/sessions/:id/pr',
-  wrap(async (req, res) => res.json(await prStatus(getSession(req).meta.cwd)))
+  wrap(async (req, res) => {
+    const s = getSession(req);
+    const st = await prStatus(s.meta.cwd);
+    rememberPr(s, st, store);
+    res.json(st);
+  })
 );
 app.post(
   '/api/sessions/:id/pr/merge-when-ready',
-  wrap(async (req, res) => res.json(await mergeWhenReady(getSession(req).meta.cwd, parseInt(req.body?.number, 10))))
+  wrap(async (req, res) => {
+    const s = getSession(req);
+    const st = await mergeWhenReady(s.meta.cwd, parseInt(req.body?.number, 10));
+    rememberPr(s, st, store);
+    res.json(st);
+  })
 );
 
 // Side chat: streams the answer as NDJSON lines ({d: text} … then {done} or {error}).
@@ -1313,6 +1328,7 @@ if (config.schedules) schedules.startScheduler(async (t) => {
 });
 
 server.listen(config.port, config.host, () => {
+  startPrSweep(store);
   const h = ['0.0.0.0', '::', ''].includes(config.host) ? '127.0.0.1' : config.host.includes(':') ? `[${config.host}]` : config.host;
   config.internalUrl = `http://${h}:${config.port}`;
   console.log(`claude-web listening on http://${config.host}:${config.port}`);

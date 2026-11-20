@@ -4,7 +4,7 @@
 //   @@call <server>__<tool> <json>   call that MCP tool (shown as a tool_use + tool_result)
 //   @@say <text>                     reply with text
 //   @@sleep <ms>                     wait (keeps the turn running)
-//   @@fail                           end the turn with an error
+//   @@fail [text]                    end the turn with an error (text = the error)
 //   @@write <path> <text>            write a file in the working folder (like an Edit)
 //   @@bashfail <command>             a Bash call that fails (tool_result with is_error)
 // PostToolUse HTTP hooks from --settings run after each tool call, like the real CLI's
@@ -98,7 +98,7 @@ async function runTurn(text) {
     } else if (cmd === 'sleep') {
       await new Promise((r) => setTimeout(r, Number(rest) || 100));
     } else if (cmd === 'fail') {
-      failed = true;
+      failed = rest || true;
     } else if (cmd === 'write') {
       const sp = rest.indexOf(' ');
       const file = sp < 0 ? rest : rest.slice(0, sp);
@@ -137,7 +137,7 @@ async function runTurn(text) {
   if (!said && !failed && !lines.some((l) => /^@@(call|write|bashfail)/.test(l.trim()))) {
     out({ type: 'assistant', message: { id: `msg_${++msgN}`, role: 'assistant', content: [{ type: 'text', text: `ok: ${lines.find((l) => l.trim()) || ''}`.slice(0, 200) }] }, parent_tool_use_id: null, session_id: sessionId });
   }
-  out({ type: 'result', subtype: failed ? 'error_during_execution' : 'success', is_error: failed, result: failed ? 'fake failure' : 'done', duration_ms: Date.now() - t0, num_turns: 1, total_cost_usd: 0.001, session_id: sessionId });
+  out({ type: 'result', subtype: failed ? 'error_during_execution' : 'success', is_error: failed, result: failed ? (typeof failed === 'string' ? failed : 'fake failure') : 'done', duration_ms: Date.now() - t0, num_turns: 1, total_cost_usd: 0.001, session_id: sessionId });
 }
 
 async function drain() {

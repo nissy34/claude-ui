@@ -358,6 +358,16 @@ async function steering() {
   await api(`/api/cprojects/${r.id}/restart-coordinator`, { method: 'POST' });
   const d = await detail(r.id);
   check(!d.paused && d.feed.some((e) => e.type === 'coordinator.rotated' && e.body.manual), 'Resume, then Restart starts the coordinator over', d.feed.slice(-3).map((e) => e.type));
+  // A turn that fails shows in the chat; a signed-out CLI pauses the project and keeps the message.
+  await startT('Broken', '@@fail something broke');
+  await until(async () => (await detail(r.id)).feed.some((e) => e.type === 'turn.failed' && e.body.text === 'something broke'), 8000, 'turn.failed');
+  check(true, "a thread's failed turn shows in the project chat");
+  await api(`/api/cprojects/${r.id}/messages`, { method: 'POST', body: { text: '@@fail Failed to authenticate: OAuth session expired and could not be refreshed' } });
+  const ad = await until(async () => { const x = await detail(r.id); return x.paused?.auth && x; }, 8000, 'auth pause');
+  check(/logged out/.test(ad.paused.reason), 'a signed-out CLI pauses the project with a log-in banner', ad.paused);
+  await sleep(500);
+  const ad2 = await detail(r.id);
+  check(ad2.coordinator.queued > 0 && !ad2.feed.some((e) => e.type === 'turn.failed' && /OAuth/.test(e.body.text)), 'the message waits in the queue for after the log-in', { queued: ad2.coordinator.queued });
 }
 
 async function coordination() {
