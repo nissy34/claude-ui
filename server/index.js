@@ -1021,6 +1021,41 @@ app.post(
   })
 );
 
+// ---------- search palette ----------
+// Words people wrote and Claude's replies, across all chats (events are already in memory).
+app.get('/api/search', (req, res) => {
+  const q = String(req.query.q || '').trim().toLowerCase();
+  if (q.length < 2) return res.json({ messages: [], artifacts: [], schedules: [] });
+  const snip = (text, i) => {
+    const start = Math.max(0, i - 50);
+    return (start ? '…' : '') + text.slice(start, i + q.length + 90).replace(/\s+/g, ' ').trim() + (i + q.length + 90 < text.length ? '…' : '');
+  };
+  const messages = [];
+  const chats = [...store.sessions.values()].filter((s) => s.meta.kind === 'chat' && Array.isArray(s.events)).sort((a, b) => b.meta.lastActivity - a.meta.lastActivity);
+  outer: for (const s of chats) {
+    let hits = 0;
+    for (let i = s.events.length - 1; i >= 0; i--) {
+      const e = s.events[i];
+      const text = e.k === 'user' ? e.text : e.k === 'block' && e.block?.type === 'text' && !e.parent ? e.block.text : null;
+      if (typeof text !== 'string') continue;
+      const at = text.toLowerCase().indexOf(q);
+      if (at < 0) continue;
+      messages.push({ sessionId: s.meta.id, name: s.meta.name, who: e.k === 'user' ? 'you' : 'claude', snippet: snip(text, at), ts: e.ts || null, archived: !!s.meta.archived, cproject: s.meta.cproject || null });
+      if (++hits >= 3) break;
+      if (messages.length >= 40) break outer;
+    }
+  }
+  const all = store.list().map((j) => store.get(j.id)).filter(Boolean);
+  const artifacts = listArtifacts(all)
+    .filter((a) => `${a.title || ''} ${a.path}`.toLowerCase().includes(q))
+    .slice(0, 12);
+  const tasks = schedules.listTasks()
+    .filter((t) => `${t.name || ''} ${t.prompt || ''}`.toLowerCase().includes(q))
+    .slice(0, 8)
+    .map((t) => ({ id: t.id, name: t.name, prompt: (t.prompt || '').slice(0, 120), lastSessionId: t.lastSessionId || null }));
+  res.json({ messages, artifacts, schedules: tasks });
+});
+
 // ---------- artifacts ----------
 app.get('/api/artifacts', (req, res) => {
   const all = store.list().map((j) => store.get(j.id)).filter(Boolean);

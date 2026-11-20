@@ -282,7 +282,7 @@ export default function Settings({ projects, activeCwd, onClose, onError, onKeys
 }
 
 const KEYS = [
-  ['Ctrl/⌘ K', 'New chat'],
+  ['Ctrl/⌘ K', 'Search chats, files and actions'],
   ['Ctrl/⌘ B', 'Show or hide the sidebar'],
   ['Ctrl/⌘ ,', 'Settings'],
   ['Ctrl/⌘ /', 'Keyboard shortcuts'],

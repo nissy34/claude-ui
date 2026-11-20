@@ -684,12 +684,14 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
   const ctxRef = useRef(ctx);
   ctxRef.current = ctx;
 
-  // Opened from the Artifacts gallery: #s=<id>&a=<path>
+  // Opened from the Artifacts gallery or the search palette: #s=<id>&a=<path> or #s=<id>&f=<path>
   useEffect(() => {
     const check = () => {
       const m = /[&#]a=([^&]+)/.exec(location.hash);
-      if (m && meta.cwd) {
-        ctxRef.current.openArtifact(decodeURIComponent(m[1]));
+      const f = /[&#]f=([^&]+)/.exec(location.hash); // a file, from the search palette
+      if ((m || f) && meta.cwd) {
+        if (m) ctxRef.current.openArtifact(decodeURIComponent(m[1]));
+        else ctxRef.current.openFile(decodeURIComponent(f[1]));
         history.replaceState(null, '', `#s=${session.id}`);
       }
     };

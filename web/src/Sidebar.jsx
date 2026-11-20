@@ -56,7 +56,7 @@ export function baseName(p) {
   return (p || '').split(/[\\/]/).filter(Boolean).pop() || p;
 }
 
-export default function Sidebar({ sessions, activeId, onSelect, onCreate, onNewChat, onHistory, onSettings, onArtifacts, onScheduled, onCustomize, onLogout, onClose, onCollapse, onError, cprojects = [], activeProjectId, onOpenProject, onNewProject }) {
+export default function Sidebar({ sessions, activeId, onSelect, onCreate, onNewChat, onHistory, onSettings, onArtifacts, onScheduled, onSearch, onCustomize, onLogout, onClose, onCollapse, onError, cprojects = [], activeProjectId, onOpenProject, onNewProject }) {
   const [q, setQ] = useState('');
   const [showArchived, setShowArchived] = useState(false);
   const [collapsed, setCollapsed] = useState(() => {
@@ -126,7 +126,6 @@ export default function Sidebar({ sessions, activeId, onSelect, onCreate, onNewC
 
   const archivedCount = sessions.filter((s) => s.archived).length;
   const pinned = useMemo(() => (showArchived || q ? [] : sessions.filter((s) => s.pinned && !s.archived && !(s.kind === 'shell' && s.parentId)).sort((a, b) => b.lastActivity - a.lastActivity)), [sessions, showArchived, q]);
-  const searchRef = React.useRef(null);
 
   const patch = (s, body) => api(`/api/sessions/${s.id}`, { method: 'PATCH', body }).catch(onError);
   const rowAction = async (s, action) => {
@@ -239,13 +238,13 @@ export default function Sidebar({ sessions, activeId, onSelect, onCreate, onNewC
       </div>
 
       <nav className="side-nav">
-        <button onClick={onNewChat} title="New chat (Ctrl+K)">
+        <button onClick={onNewChat} title="New chat">
           <span className="nico">＋</span> New chat
         </button>
-        <div className="side-search">
-          <span className="s-ico">⌕</span>
-          <input ref={searchRef} placeholder="Search" value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => e.key === 'Escape' && q && (e.preventDefault(), setQ(''), e.currentTarget.blur())} />
-        </div>
+        <button className="side-search-btn" onClick={onSearch} title="Search (Ctrl+K)">
+          <span className="nico">⌕</span> Search
+          <kbd className="side-kbd">{/Mac|iPhone|iPad/.test(navigator.platform) ? '⌘K' : 'Ctrl K'}</kbd>
+        </button>
         <button onClick={onArtifacts}>
           <span className="nico">◇</span> Artifacts
         </button>
