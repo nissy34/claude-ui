@@ -31,6 +31,7 @@ import { McpAdmin, onSignedIn, stopAllAdmins } from './mcp-admin.js';
 import { getModels } from './models.js';
 import { sideChat } from './side-chat.js';
 import { prStatus, mergeWhenReady } from './pr-status.js';
+import { rememberPr, startPrSweep } from './pr-cache.js';
 import * as schedules from './schedules.js';
 import * as notes from './notes.js';
 import { controlSession } from './session-control.js';
@@ -933,11 +934,21 @@ app.get(
 
 app.get(
   '/api/sessions/:id/pr',
-  wrap(async (req, res) => res.json(await prStatus(getSession(req).meta.cwd)))
+  wrap(async (req, res) => {
+    const s = getSession(req);
+    const st = await prStatus(s.meta.cwd);
+    rememberPr(s, st, store);
+    res.json(st);
+  })
 );
 app.post(
   '/api/sessions/:id/pr/merge-when-ready',
-  wrap(async (req, res) => res.json(await mergeWhenReady(getSession(req).meta.cwd, parseInt(req.body?.number, 10))))
+  wrap(async (req, res) => {
+    const s = getSession(req);
+    const st = await mergeWhenReady(s.meta.cwd, parseInt(req.body?.number, 10));
+    rememberPr(s, st, store);
+    res.json(st);
+  })
 );
 
 // Side chat: streams the answer as NDJSON lines ({d: text} … then {done} or {error}).
@@ -1317,6 +1328,7 @@ if (config.schedules) schedules.startScheduler(async (t) => {
 });
 
 server.listen(config.port, config.host, () => {
+  startPrSweep(store);
   const h = ['0.0.0.0', '::', ''].includes(config.host) ? '127.0.0.1' : config.host.includes(':') ? `[${config.host}]` : config.host;
   config.internalUrl = `http://${h}:${config.port}`;
   console.log(`claude-web listening on http://${config.host}:${config.port}`);
