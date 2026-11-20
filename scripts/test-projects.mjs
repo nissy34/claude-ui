@@ -395,6 +395,22 @@ async function aboutLabel() {
   const d3 = await until(async () => { const x = await detail(r.id); const p = x.feed.find((e) => e.type === 'chat.post' && e.body.text === 'LABEL-ROUTED'); return p?.body.about && x; }, 12_000, 'routed ack labeled');
   const routed = d3.feed.find((e) => e.type === 'chat.post' && e.body.text === 'LABEL-ROUTED');
   check(routed.body.about === T.id && routed.body.ack, 'an ack posted before message_thread is labeled with the thread the follow-up went to', routed.body);
+  // Work handed to two threads: the ack (posted before, between and after the handoffs) is labeled with both.
+  await until(async () => { const x = await detail(r.id); return !x.coordinatorBusy && !x.coordinator?.queued; }, 12_000, 'coordinator idle (multi)');
+  const two = [call('post_message', { text: 'LABEL-BEFORE' }), call('start_thread', { title: 'Alpha docs', brief: '@@sleep 1500\n@@say a', new: true }), call('start_thread', { title: 'Beta tests', brief: '@@sleep 1500\n@@say b', new: true }), call('post_message', { text: 'LABEL-AFTER' })];
+  await api(`/api/cprojects/${r.id}/messages`, { method: 'POST', body: { text: two.join('\n') } });
+  const d4 = await until(async () => { const x = await detail(r.id); const p = x.feed.find((e) => e.type === 'chat.post' && e.body.text === 'LABEL-AFTER'); const q = x.feed.find((e) => e.type === 'chat.post' && e.body.text === 'LABEL-BEFORE'); return p && q?.body.abouts?.length === 2 && x; }, 12_000, 'two-thread ack');
+  const ab = ['Alpha docs', 'Beta tests'].map((n) => d4.threads.find((t) => t.title === n)?.id);
+  const before = d4.feed.find((e) => e.type === 'chat.post' && e.body.text === 'LABEL-BEFORE').body;
+  const after = d4.feed.find((e) => e.type === 'chat.post' && e.body.text === 'LABEL-AFTER').body;
+  check(JSON.stringify(after.abouts) === JSON.stringify(ab) && after.ack && !after.about, 'a post after handing work to two threads is labeled with both', after);
+  check(JSON.stringify(before.abouts) === JSON.stringify(ab) && before.ack, 'an ack posted before the handoffs is relabeled with both threads', before);
+  // A joint report names several threads with thread_ids.
+  await until(async () => { const x = await detail(r.id); return !x.coordinatorBusy && !x.coordinator?.queued; }, 12_000, 'coordinator idle (joint)');
+  await api(`/api/cprojects/${r.id}/messages`, { method: 'POST', body: { text: call('post_message', { text: 'LABEL-JOINT', thread_ids: [...ab, 'nope'] }) } });
+  const d5 = await until(async () => { const x = await detail(r.id); return x.feed.some((e) => e.type === 'chat.post' && e.body.text === 'LABEL-JOINT') && x; }, 12_000, 'joint post');
+  const joint = d5.feed.find((e) => e.type === 'chat.post' && e.body.text === 'LABEL-JOINT').body;
+  check(JSON.stringify(joint.abouts) === JSON.stringify(ab) && !joint.ack, 'post_message with thread_ids labels a joint report with those threads (unknown ids dropped)', joint);
 }
 
 async function steering() {

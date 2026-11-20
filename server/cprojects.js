@@ -176,6 +176,12 @@ function initialState() {
 // ---------------------------------------------------------------------------------------------
 // The reducer: state from events. Pure apart from mutating `st`; no clocks, no I/O.
 // ---------------------------------------------------------------------------------------------
+/** A chat post's thread label: about for one thread, abouts for several; ack when it hands work over (relays nothing). */
+export function labelBody(ids, ack) {
+  if (!ids.length) return {};
+  return { ...(ids.length === 1 ? { about: ids[0] } : { abouts: ids }), ...(ack ? { ack: true } : {}) };
+}
+
 export function reduce(st, ev) {
   const t = ev.thread && st.threads[ev.thread];
   // Routing written into the event becomes queued wakes.
@@ -531,16 +537,23 @@ export class Project {
    * working dots while it runs), also when the ack was posted before the handoff: a chat.labeled event adds it.
    */
   handedTo(info, tid) {
-    (info.handed ||= new Set()).add(tid);
-    if (info.handed.size !== 1) return;
-    for (const id of info.unlabeled || []) this.append({ type: 'chat.labeled', body: { event: id, about: tid, ack: true } });
-    info.unlabeled = [];
+    const handed = (info.handed ||= new Set());
+    if (handed.has(tid)) return;
+    handed.add(tid);
+    const ids = [...handed];
+    const ack = !ids.some((id) => info.threads?.includes(id));
+    for (const id of info.ackPosts || []) this.append({ type: 'chat.labeled', body: { event: id, ...labelBody(ids, ack) } });
   }
 
   /** A chat.labeled event sets the label of an earlier chat.post (applied on load and on append). */
   applyLabel(ev) {
     const target = ev.type === 'chat.labeled' && this.byId.get(ev.body?.event);
-    if (target?.type === 'chat.post' && !target.body.about) Object.assign(target.body, { about: ev.body.about, ...(ev.body.ack ? { ack: true } : {}) });
+    if (target?.type !== 'chat.post') return;
+    delete target.body.about;
+    delete target.body.abouts;
+    delete target.body.ack;
+    const { about, abouts, ack } = ev.body;
+    Object.assign(target.body, labelBody(abouts || (about ? [about] : []), ack));
   }
 
   get coordinatorId() {
@@ -2230,14 +2243,16 @@ export class ProjectEngine {
           // (start_thread or message_thread: the post is the ack, labeled with the thread doing the work), or the one
           // thread whose news woke it. The last is inferred only for a turn woken by thread news alone: when the user
           // wrote (in the wake or mid-turn), the post answers the user, not the thread that happened to share the wake.
-          const named = a.thread_id && p.state.threads[a.thread_id] ? a.thread_id : null;
-          const handed = info.handed?.size === 1 ? [...info.handed][0] : null;
-          const inferred = !info.user && !info.handed?.size && info.threads?.length === 1 && p.state.threads[info.threads[0]] ? info.threads[0] : null;
-          const about = named || handed || inferred;
-          // An ack relays nothing (the UI keeps the thread's earlier result visible), unless that thread's news is in this wake.
-          const ack = !!(about && about === handed && !info.threads?.includes(about));
-          const ev = p.append({ type: 'chat.post', from: me, trust: 'relay', cites: a.cite_ids, body: { text: clipText(text, 20_000), ...(about ? { about } : {}), ...(ack ? { ack } : {}) } });
-          if (!about) (info.unlabeled ||= []).push(ev.id);
+          // Several threads (a joint report, or work handed to two threads) label it "N threads".
+          const valid = (ids) => [...new Set(ids.map((x) => String(x || '').trim()))].filter((id) => p.state.threads[id]);
+          const named = valid([a.thread_id, ...(Array.isArray(a.thread_ids) ? a.thread_ids : [])]);
+          const handed = [...(info.handed || [])];
+          const inferred = !info.user && !handed.length ? valid(info.threads || []) : [];
+          const ids = named.length ? named : handed.length ? handed : inferred;
+          // An ack relays nothing (the UI keeps the threads' earlier results visible), unless their news is in this wake.
+          const ack = !named.length && handed.length > 0 && !ids.some((id) => info.threads?.includes(id));
+          const ev = p.append({ type: 'chat.post', from: me, trust: 'relay', cites: a.cite_ids, body: { text: clipText(text, 20_000), ...labelBody(ids, ack) } });
+          if (!named.length && (ack || !ids.length)) (info.ackPosts ||= []).push(ev.id); // a later handoff this turn (re)labels it
           return { ok: true, event_id: ev.id, note: 'Posted to the project chat.' };
         }
         const kind = ['result', 'blocker', 'question', 'progress'].includes(a.kind) ? a.kind : 'result';

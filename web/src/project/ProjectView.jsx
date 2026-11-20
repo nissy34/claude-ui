@@ -183,7 +183,7 @@ function ProjectChat({ project, openThread, onError, onFullUsage }) {
   // A thread's result shows once: when Claude relays it in the chat afterwards, the raw post is hidden.
   // An ack (Claude handing work to the thread) is labeled with the thread too, but relays nothing.
   const relayed = new Map();
-  for (const e of project.feed) if (e.type === 'chat.post' && e.body?.about && !e.body.ack) relayed.set(e.body.about, e.ts);
+  for (const e of project.feed) if (e.type === 'chat.post' && !e.body?.ack) for (const tid of aboutIds(e.body)) relayed.set(tid, e.ts);
   const items = project.feed.filter((e) => !(e.type === 'decision.answered' || e.type === 'decision.withdrawn') && !(e.type === 'thread.post' && e.body?.kind === 'result' && relayed.get(e.thread) >= e.ts));
   const cm = project.settings.models.coordinator;
   return (
@@ -262,21 +262,56 @@ const STARTERS = [
 
 const modelName = (m) => (!m ? 'Default model' : m.length < 10 ? m[0].toUpperCase() + m.slice(1) : m);
 
-// The thread a post is about, under the post; animated dots while that thread works.
-function AboutLabel({ thread, onSelect }) {
-  if (!thread) return null;
-  const working = thread.status === 'working' || thread.status === 'queued';
+const aboutIds = (b) => (b?.abouts?.length ? b.abouts : b?.about ? [b.about] : []);
+const isWorking = (t) => t.status === 'working' || t.status === 'queued';
+
+const WorkingDots = () => (
+  <span className="pj-dots" aria-label="working">
+    <i />
+    <i />
+    <i />
+  </span>
+);
+
+// The thread(s) a post is about, under the post. One thread: its title, with animated dots while it works.
+// Several: "N threads", and hovering or clicking lists each with its state; a row opens that thread.
+function AboutLabel({ ids, threads, onSelect }) {
+  const list = ids.map((id) => threads[id]).filter(Boolean);
+  const [open, setOpen] = useState(false);
+  const root = useRef(null);
+  const hover = useRef(null);
+  useDismiss(open, () => setOpen(false), root);
+  if (!list.length) return null;
+  if (list.length === 1) {
+    const t = list[0];
+    return (
+      <button className={`pj-about${isWorking(t) ? ' working' : ''}`} onClick={() => onSelect(t.id)} title={isWorking(t) ? `${t.title} is working` : t.title}>
+        <span className="hook">╰</span> {t.title}
+        {isWorking(t) && <WorkingDots />}
+      </button>
+    );
+  }
+  const show = (v) => {
+    clearTimeout(hover.current);
+    hover.current = setTimeout(() => setOpen(v), v ? 120 : 250);
+  };
   return (
-    <button className={`pj-about${working ? ' working' : ''}`} onClick={() => onSelect(thread.id)} title={working ? `${thread.title} is working` : thread.title}>
-      <span className="hook">╰</span> {thread.title}
-      {working && (
-        <span className="pj-dots" aria-label="working">
-          <i />
-          <i />
-          <i />
-        </span>
+    <div className="menu-wrap pj-about-wrap" ref={root} onMouseEnter={() => matchMedia('(hover: hover)').matches && show(true)} onMouseLeave={() => matchMedia('(hover: hover)').matches && show(false)}>
+      <button className={`pj-about${list.some(isWorking) ? ' working' : ''}`} aria-haspopup="menu" aria-expanded={open} onClick={() => (clearTimeout(hover.current), setOpen((o) => !o))}>
+        <span className="hook">╰</span> {list.length} threads
+        {list.some(isWorking) && <WorkingDots />}
+      </button>
+      {open && (
+        <Menu place="up" className="pj-about-pop">
+          {list.map((t) => (
+            <button key={t.id} role="menuitem" onClick={() => (setOpen(false), onSelect(t.id))} title={`${t.title} · ${STATUS_LABEL[t.status] || t.status}`}>
+              <span className="pj-about-st">{isWorking(t) ? <WorkingDots /> : <StatusIcon status={t.status === 'idle' ? 'resolved' : t.status} />}</span>
+              <span className="pj-about-title">{t.title}</span>
+            </button>
+          ))}
+        </Menu>
       )}
-    </button>
+    </div>
   );
 }
 
@@ -295,7 +330,7 @@ function FeedItem({ e, project, threads, decisions, onSelect, onError }) {
       return (
         <div className="msg assistant pj-post">
           <Md text={b.text} />
-          <AboutLabel thread={threads[b.about]} onSelect={onSelect} />
+          <AboutLabel ids={aboutIds(b)} threads={threads} onSelect={onSelect} />
         </div>
       );
     case 'thread.started': {
@@ -321,7 +356,7 @@ function FeedItem({ e, project, threads, decisions, onSelect, onError }) {
     case 'thread.post':
       return (
         <div className={`pj-activity kind-${b.kind}`}>
-          <AboutLabel thread={threads[e.thread]} onSelect={onSelect} />
+          <AboutLabel ids={e.thread ? [e.thread] : []} threads={threads} onSelect={onSelect} />
           <div>
             {b.kind !== 'result' && <span className={`pk pk-${b.kind}`}>{b.kind}</span>} <ActivityText text={b.text} />
           </div>

@@ -163,6 +163,12 @@
 .pj-dots i:nth-child(3) { animation-delay: .4s; }
 @keyframes pj-dot { 0%, 80%, 100% { opacity: .25; transform: translateY(0); } 40% { opacity: 1; transform: translateY(-2px); } }
 @media (prefers-reduced-motion: reduce) { .pj-dots i { animation: none; opacity: .6; } }
+.pj-about-wrap { display: block; position: relative; width: fit-content; }
+.pj-about-pop { min-width: 220px; max-width: min(360px, calc(100vw - 32px)); }
+.pj-about-pop button { display: flex; align-items: center; gap: var(--sp-2); width: 100%; }
+.pj-about-st { display: inline-flex; justify-content: center; width: 18px; flex: none; color: var(--muted); }
+.pj-about-st .pj-dots { margin-left: 0; }
+.pj-about-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pj-started { display: flex; align-items: center; gap: var(--sp-2); width: 100%; text-align: left; border: 1px solid var(--line); background: var(--panel); border-radius: var(--r-lg); padding: var(--sp-2) var(--sp-3); font: inherit; color: var(--text); cursor: pointer; }
 .pj-started:hover { background: var(--hover); }
 .pj-started-what { color: var(--muted); font-size: var(--fs-sm); flex: none; }
