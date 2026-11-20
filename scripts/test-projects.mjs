@@ -144,8 +144,15 @@ async function main() {
   }, 10_000, 'coordinator woken for results');
   const posts = ev.filter((e) => e.type === 'thread.post').map((e) => e.body.text);
   check(posts.includes('A is done') && posts.includes('B is done'), 'thread results recorded', posts);
-  const delivered = ev.filter((e) => e.type === 'wake.delivered').length;
-  const sent = ev.filter((e) => e.type === 'wake.sent').length;
+  // The last wake can be sent a moment before its echo lands: wait for the log to settle, then compare.
+  let delivered = 0;
+  let sent = 0;
+  await until(() => {
+    const log = fs.readFileSync(path.join(env.CW_DATA_DIR, 'cprojects', id, 'events.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+    delivered = log.filter((e) => e.type === 'wake.delivered').length;
+    sent = log.filter((e) => e.type === 'wake.sent').length;
+    return delivered === sent;
+  }, 5000, 'wake echoes').catch(() => {});
   check(delivered === sent, `every wake was acknowledged by the CLI echo (${delivered}/${sent})`);
   const readPrompts = () => fs.readFileSync(env.FAKE_CLAUDE_LOG, 'utf8').trim().split('\n').map((l) => JSON.parse(l)).filter((x) => x.prompt);
   const coordPrompt = await until(() => readPrompts().find((x) => x.prompt.includes('[result] status now') && x.prompt.includes('A is done')), 8000, 'coordinator prompt with results').catch(() => null);
