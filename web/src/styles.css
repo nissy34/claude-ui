@@ -322,6 +322,40 @@ button.mention:hover { border-color: var(--line-strong); background: var(--hover
 .meter { height: 6px; border-radius: var(--r-full); background: var(--panel-2); overflow: hidden; margin-top: 4px; }
 .meter > span { display: block; height: 100%; background: var(--accent); }
 
+
+/* session details rail (Desktop's right-hand column) */
+.rail-scrim { display: none; }
+.session-rail { width: 264px; flex: none; border-left: 1px solid var(--line); background: var(--sidebar); display: flex; flex-direction: column; min-height: 0; }
+.rail-top { display: flex; align-items: center; gap: var(--sp-1); padding: var(--sp-2) var(--sp-2) var(--sp-2) var(--sp-3h); height: 49px; border-bottom: 1px solid var(--line); flex: none; }
+.rail-top-title { flex: 1; font-size: var(--fs-md); font-weight: var(--fw-bold); }
+.rail-body { overflow-y: auto; padding: var(--sp-1) 0 var(--sp-5); display: flex; flex-direction: column; }
+.rail-sec { padding: var(--sp-3) var(--sp-3h); display: flex; flex-direction: column; gap: var(--sp-1h); border-bottom: 1px solid var(--line); }
+.rail-sec:last-child { border-bottom: 0; }
+.rail-head { display: flex; align-items: center; gap: var(--sp-2); min-height: 20px; }
+.rail-title { flex: 1; font-size: var(--fs-xs); font-weight: var(--fw-bold); color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+.rail-row { display: flex; align-items: center; gap: var(--sp-2); font-size: var(--fs-md); color: var(--text-2); min-width: 0; padding: 2px 0; background: none; border: 0; text-align: left; width: 100%; }
+.rail-row.link { cursor: pointer; border-radius: var(--r-sm); padding: 3px var(--sp-1h); margin: 0 calc(-1 * var(--sp-1h)); width: calc(100% + 2 * var(--sp-1h)); }
+.rail-row.link:hover { background: var(--hover); }
+.rail-row.sub { padding-left: var(--sp-3); }
+.rail-row .ri { width: 16px; flex: none; text-align: center; color: var(--muted); font-size: var(--fs-sm); }
+.rail-row .rv { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rail-row .rv.mono { font-family: var(--mono); font-size: var(--fs-sm); }
+.rail-tag { font-size: var(--fs-2xs); flex: none; }
+.rail-note { font-size: var(--fs-sm); color: var(--muted); }
+.rail-link { background: none; border: 0; padding: 0; font-size: var(--fs-sm); color: var(--accent); cursor: pointer; }
+.rail-link:hover { text-decoration: underline; }
+.rail-link:disabled { color: var(--muted); cursor: default; text-decoration: none; }
+.rail-link.more { align-self: flex-start; }
+.rail-status { display: inline-flex; align-items: center; gap: 5px; font-size: var(--fs-xs); color: var(--muted); }
+.rail-status.on .dot { background: var(--green); }
+.rail-status.busy .dot { background: var(--accent); animation: pulse 1.2s ease-in-out infinite; }
+.rail-status.warn { color: var(--warn); } .rail-status.warn .dot { background: var(--warn); }
+.rail-status.off .dot { background: transparent; border: 1px solid var(--line-strong); }
+.rail-diffstat { font: var(--fs-xs) var(--mono); flex: none; }
+.session-rail .meter.hot > span { background: var(--red); }
+.session-rail .pr-card { margin: var(--sp-1) 0 0; font-size: var(--fs-sm); }
+.session-rail .pr-card .git-actions { flex-wrap: wrap; }
+
 /* ============ phones and narrow windows ============ */
 @media (max-width: 860px) {
   .sidebar { position: fixed; z-index: var(--z-drawer); top: 0; bottom: 0; left: 0; width: min(86vw, 330px); height: var(--app-h); transform: translateX(-100%); transition: transform var(--dur-slow) ease; padding-top: env(safe-area-inset-top); display: flex !important; }
@@ -344,6 +378,9 @@ button.mention:hover { border-color: var(--line-strong); background: var(--hover
   .jump { bottom: 120px; }
   .todo-dock { width: calc(100% - 16px); }
   .side-panel { position: fixed; inset: 0; width: 100%; z-index: var(--z-panel); height: var(--app-h); }
+  .rail-scrim { display: block; position: fixed; inset: 0; z-index: calc(var(--z-panel) - 1); background: var(--scrim); }
+  .session-rail { position: fixed; inset: 0 0 0 auto; width: min(88vw, 340px); z-index: var(--z-panel); height: var(--app-h); box-shadow: var(--shadow-pop); padding-top: env(safe-area-inset-top); }
+  .session-rail .rail-body { padding-bottom: max(20px, env(safe-area-inset-bottom)); }
   .msg-actions { opacity: 1; }
   .term-drawer { height: 45%; }
 }
