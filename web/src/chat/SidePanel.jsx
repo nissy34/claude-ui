@@ -83,7 +83,7 @@ function UnifiedDiff({ diff, path, comments, onComment }) {
 }
 
 // The branch's pull request with CI checks, like Desktop's PR status in the Changes card.
-function PrCard({ sessionId, refreshKey, onPrompt, busy, onError }) {
+export function PrCard({ sessionId, refreshKey, onPrompt, busy, onError }) {
   const [st, setSt] = useState(null);
   const [open, setOpen] = useState(false);
   const [merging, setMerging] = useState(false);
