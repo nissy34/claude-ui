@@ -285,6 +285,8 @@ async function main() {
   console.log('Coordination: notes, search, warm briefs, board, signals');
   await coordination();
   await steering();
+  console.log('Threads started for one request report together');
+  await siblings();
 
   await stop();
   console.log(`\n${passes} passed, ${failures} failed`);
@@ -305,6 +307,25 @@ const fakeLog = () =>
         return {};
       }
     });
+
+async function siblings() {
+  const fast = call('start_thread', { title: 'Fast part', brief: '@@say FAST-RESULT' });
+  const slow = call('start_thread', { title: 'Slow part', brief: '@@sleep 2500\n@@say SLOW-RESULT', new: true });
+  const { project: r } = await api('/api/cprojects', { method: 'POST', body: { name: 'Siblings', folders: [repo], prompt: `do both\n${fast}\n${slow}` } });
+  await until(async () => (await detail(r.id)).threads.filter((t) => t.status === 'resolved' || t.status === 'idle').length === 2, 15_000, 'both threads done');
+  await until(() => fakeLog().some((l) => l.prompt?.includes('SLOW-RESULT') && l.prompt.includes('<project-wake') && !l.prompt.includes('You are thread')), 10_000, 'coordinator hears the slow result');
+  const wakes = fakeLog().filter((l) => l.prompt?.includes('<project-wake') && (l.prompt.includes('FAST-RESULT') || l.prompt.includes('SLOW-RESULT')) && !l.prompt.includes('You are thread'));
+  check(wakes.length && wakes[0].prompt.includes('FAST-RESULT') && wakes[0].prompt.includes('SLOW-RESULT'), 'the fast result waits for its sibling: one coordinator wake carries both', wakes.map((w) => w.prompt.slice(0, 300)));
+  const d = await detail(r.id);
+  check(d.threads.every((t) => t.cites?.length === 1), 'threads started without cite_ids are tied to the user message being handled', d.threads.map((t) => t.cites));
+
+  // A follow-up right after a thread finished: the wake lists it as recently finished.
+  for (const t of d.threads) if (t.status !== 'resolved') await api(`/api/cprojects/${r.id}/threads/${t.id}/resolve`, { method: 'POST' });
+  await api(`/api/cprojects/${r.id}/messages`, { method: 'POST', body: { text: 'which part was slower?' } });
+  await until(() => fakeLog().some((l) => l.prompt?.includes('which part was slower?') && l.prompt.includes('recently finished threads')), 10_000, 'recent threads hint');
+  const w = fakeLog().find((l) => l.prompt?.includes('which part was slower?'));
+  check(w.prompt.includes('"Slow part"') && w.prompt.includes('message_thread'), 'a user message wake lists recently finished threads to send follow-ups to', w.prompt.slice(-900));
+}
 
 async function steering() {
   console.log('Follow-ups reach a busy thread mid-turn; pause, restart');

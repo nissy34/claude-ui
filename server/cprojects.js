@@ -39,6 +39,12 @@ const THREAD_MODES = ['auto', 'acceptEdits', 'default', 'plan', 'bypassPermissio
 // longer than the ceiling; they go at once when no other thread is working.
 const BATCH_QUIET_MS = Number(process.env.CW_PROJECT_BATCH_QUIET_MS) || 10_000;
 const BATCH_MAX_MS = Number(process.env.CW_PROJECT_BATCH_MAX_MS) || 60_000;
+// Threads started for the same user message report together: a finished one waits this long at
+// most for its still-working siblings, so the user gets one combined answer instead of a post each.
+const SIBLING_MAX_MS = Number(process.env.CW_PROJECT_SIBLING_MAX_MS) || 5 * 60_000;
+// A user message right after a thread finished is often a follow-up to it: the wake lists threads
+// resolved this recently so the coordinator can send the follow-up to the thread that has the context.
+const RECENT_RESOLVED_MS = 3 * 60 * 60_000;
 const IDEMPOTENT_MS = 10 * 60_000;
 const MAX_PROGRESS_POSTS = 2;
 /** The sender of messages the engine itself sends a session (retries, nudges, limit resets). */
@@ -204,6 +210,7 @@ export function reduce(st, ev) {
         forkedFrom: ev.body.forkedFrom || null,
         sideOf: ev.body.sideOf || null,
         adopted: !!ev.body.adopted,
+        cites: ev.cites || [], // the user messages it was started for (siblings share them)
         changedFiles: [],
         checklist: null,
         lastPost: null,
@@ -436,6 +443,7 @@ export class Project {
     this.turnInfo = new Map(); // sid -> what the current turn did (for the turn guard)
     this.idem = new Map(); // tool-call key -> { at, result }
     this.lastInput = new Map(); // session -> the wake (or typed message) it was last handed, for idempotency keys
+    this.wakeEvents = new Map(); // session -> ids of the events in the wake it is handling now
     this.timers = new Map();
     this.load();
   }
@@ -972,16 +980,32 @@ export class Project {
       const first = items[0].at;
       const last = items[items.length - 1].at;
       const othersWorking = Object.keys(this.state.threads).some((tid) => tid !== sid && this.liveOf(tid).busy);
+      const siblings = isCoord ? this.workingSiblings(items) : [];
+      if (siblings.length && now - first < SIBLING_MAX_MS) return Math.min(now + 5000, first + SIBLING_MAX_MS);
       const ready = !othersWorking || now - last >= BATCH_QUIET_MS || now - first >= BATCH_MAX_MS;
       if (!ready) return Math.min(last + BATCH_QUIET_MS, first + BATCH_MAX_MS);
     }
     return this.deliver(sid, s, items);
   }
 
+  /** Threads still working on the same user message as a thread whose result waits in these items. */
+  workingSiblings(items) {
+    const done = new Set();
+    for (const q of items) {
+      const e = this.byId.get(q.e);
+      if (e && (e.type === 'thread.post' || e.type === 'thread.resolved') && e.thread) done.add(e.thread);
+    }
+    const cites = new Set();
+    for (const tid of done) for (const c of this.state.threads[tid]?.cites || []) cites.add(c);
+    if (!cites.size) return [];
+    return Object.values(this.state.threads).filter((t) => !done.has(t.id) && !t.resolved && t.cites?.some((c) => cites.has(c)) && this.liveOf(t.id).busy).map((t) => t.id);
+  }
+
   deliver(sid, s, items) {
     const evs = items.map((q) => this.byId.get(q.e)).filter(Boolean);
     const wake = newId('wk');
     this.lastInput.set(sid, wake);
+    this.wakeEvents.set(sid, evs.map((e) => e.id));
     const isCoord = sid === this.state.coordinator;
     const fresh = isCoord && this.state.coordinatorFresh;
     let envelope = this.renderWake(sid, wake, evs, s, { fresh });
@@ -1105,12 +1129,26 @@ export class Project {
     }
     const notes = this.takeNotes(sid, { via: 'wake' });
     if (notes) out.push(`\n⟦${marker}⟧ notes · trust: relay (each line names its source)\n${esc(notes)}`);
+    const userAsked = evs.some((e) => e.type === 'user.message');
+    if (sid === this.state.coordinator && userAsked) {
+      const recent = Object.values(this.state.threads)
+        .filter((t) => t.resolved && !t.sideOf && Date.now() - (t.resolvedAt || 0) < RECENT_RESOLVED_MS)
+        .sort((a, b) => b.resolvedAt - a.resolvedAt)
+        .slice(0, 5);
+      if (recent.length)
+        out.push(
+          `\n⟦${marker}⟧ recently finished threads · trust: system\n${esc(recent.map((t) => `- ${t.id} "${t.title}" · resolved ${Math.max(1, Math.round((Date.now() - t.resolvedAt) / 60_000))} min ago`).join('\n'))}\nIf the user's message follows up on one of these, send it there with message_thread: that reopens the thread with its full context, which is faster and cheaper than a new thread.`
+        );
+    }
     if (sid === this.state.coordinator) {
       // The board: only rows that changed since your last wake (the digest carries the full board).
       const delta = this.boardDelta({ full: fresh });
       if (delta && !fresh) out.push(`\n⟦${marker}⟧ board changes since your last turn · trust: system\n${esc(delta)}`);
     }
-    out.push(sid === this.state.coordinator ? '\nAnswer the user with post_message only when they need to know or decide something; saying nothing is fine. Manage threads with the project tools.' : '\nReport with post_message (result, blocker, question). The user may also type to you here directly.');
+    const coordFooter = userAsked
+      ? "\nThe user wrote: answer with post_message (or react when the work comes first). Then end your turn without further text."
+      : '\nPost to the user only when they need to know or decide something; saying nothing is fine. End your turn without further text.';
+    out.push(sid === this.state.coordinator ? coordFooter : '\nReport with post_message (result, blocker, question). The user may also type to you here directly.');
     out.push('</project-wake>');
     return out.join('\n');
   }
@@ -1409,6 +1447,7 @@ export class Project {
       adopted: !!t.adopted,
       changedFiles: t.changedFiles || [],
       dependsOn: t.dependsOn || [],
+      cites: t.cites || [],
       pendingNotes: (this.state.inbox?.[t.id] || []).length,
     };
   }
@@ -2204,7 +2243,11 @@ export class ProjectEngine {
             };
           }
         }
-        const tt = await this.startThread(p, { title: a.title, brief: a.brief, cites: a.cite_ids, model: a.model, effort: a.effort, dependsOn: a.depends_on });
+        // Without cite_ids, a thread is started for the user's messages in the wake being handled,
+        // so threads started together for one request are known as siblings (they report together).
+        let cites = a.cite_ids;
+        if (!(Array.isArray(cites) ? cites.length : cites) && isCoord) cites = (p.wakeEvents.get(s.id) || []).filter((id) => p.byId.get(id)?.type === 'user.message');
+        const tt = await this.startThread(p, { title: a.title, brief: a.brief, cites, model: a.model, effort: a.effort, dependsOn: a.depends_on });
         return { ok: true, thread_id: tt.id, status: STATUS_LABEL.working, branch: tt.meta.worktree?.branch || null, note: 'Started. Its results, blockers and questions reach you as events; no need to poll.' };
       }
       case 'suggest_thread': {
