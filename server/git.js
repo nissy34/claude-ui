@@ -37,8 +37,26 @@ function splitDiff(text) {
   return files;
 }
 
-/** Working-tree changes against HEAD, including untracked files. */
-export async function getChanges(cwd) {
+/** The branches a diff can be measured against: the remote's default branch first, then local ones. */
+async function baseCandidates(cwd, current) {
+  const out = [];
+  try {
+    const head = (await git(cwd, ['symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD'])).trim();
+    if (head) out.push(head);
+  } catch {}
+  try {
+    const local = (await git(cwd, ['for-each-ref', '--sort=-committerdate', '--format=%(refname:short)', 'refs/heads', '--count=25'])).split('\n').filter(Boolean);
+    for (const b of local) if (b !== current && !out.includes(b)) out.push(b);
+  } catch {}
+  return out;
+}
+
+const SAFE_REF = /^(?!-)[\w./@{}~^-]{1,200}$/;
+
+/** Changes in the working tree, including untracked files: against HEAD (uncommitted only), or
+ *  with `base`, everything since this branch left that branch (commits plus uncommitted work).
+ *  `ignoreWs` drops whitespace-only changes. */
+export async function getChanges(cwd, { base, ignoreWs } = {}) {
   if (!(await isGitRepo(cwd))) return { git: false, files: [] };
   let branch = '';
   try {
@@ -50,7 +68,20 @@ export async function getChanges(cwd) {
   } catch {
     hasHead = false;
   }
-  const diffText = hasHead ? await git(cwd, ['diff', 'HEAD', '--no-color', '--no-ext-diff', '-M']) : await git(cwd, ['diff', '--cached', '--no-color']);
+  const bases = hasHead ? await baseCandidates(cwd, branch) : [];
+  let from = 'HEAD';
+  let baseUsed = null;
+  if (base && base !== 'HEAD' && hasHead) {
+    if (!SAFE_REF.test(base)) throw new Error('Bad branch name');
+    try {
+      from = (await git(cwd, ['merge-base', base, 'HEAD'])).trim();
+      baseUsed = base;
+    } catch {
+      throw new Error(`Can't compare with ${base}: no common history`);
+    }
+  }
+  const ws = ignoreWs ? ['-w'] : [];
+  const diffText = hasHead ? await git(cwd, ['diff', from, '--no-color', '--no-ext-diff', '-M', ...ws]) : await git(cwd, ['diff', '--cached', '--no-color', ...ws]);
   const files = splitDiff(diffText).map((f) => ({ ...f, status: 'modified' }));
   for (const f of files) if (/^new file mode/m.test(f.diff)) f.status = 'added';
   for (const f of files) if (/^deleted file mode/m.test(f.diff)) f.status = 'deleted';
@@ -75,7 +106,8 @@ export async function getChanges(cwd) {
       diff: `diff --git a/${rel} b/${rel}\nnew file\n--- /dev/null\n+++ b/${rel}\n@@ -0,0 +1,${lines.length} @@\n` + lines.map((l) => '+' + l).join('\n'),
     });
   }
-  return { git: true, branch, files };
+  if (ignoreWs) for (let i = files.length - 1; i >= 0; i--) if (files[i].status !== 'added' && !/^@@/m.test(files[i].diff)) files.splice(i, 1);
+  return { git: true, branch, base: baseUsed, bases, files };
 }
 
 const SKIP = new Set(['node_modules', '.git', 'dist', 'build', '.next', 'target', '__pycache__', '.venv', 'venv', '.cache']);

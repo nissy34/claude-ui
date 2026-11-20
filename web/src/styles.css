@@ -334,6 +334,39 @@ button.mention:hover { border-color: var(--line-strong); background: var(--hover
 .meter > span { display: block; height: 100%; background: var(--accent); }
 
 
+/* diff viewer: line numbers, side by side, wrap, changed words, file list */
+.diff.numbered .dl .lno, .diff.split .lno { width: 38px; flex: none; text-align: right; padding-right: 6px; color: var(--muted); opacity: .75; user-select: none; font-variant-numeric: tabular-nums; }
+.diff.numbered .dl.hunk, .diff.split .dl.hunk { padding-left: 98px; }
+.diff.split .dl.hunk { padding-left: 46px; min-width: 0; }
+.diff .dt { flex: 1; min-width: 0; }
+.diff.wrap .dl { white-space: pre-wrap; word-break: break-word; min-width: 0; }
+.diff.split { padding: var(--sp-1) 0; }
+/* Side by side always wraps, so both halves keep the same width on every row. */
+.dsplit { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+.dc { display: flex; white-space: pre-wrap; word-break: break-word; padding-right: var(--sp-2); position: relative; min-width: 0; }
+.dc + .dc { border-left: 1px solid var(--line); }
+.dc.add { background: var(--diff-add); } .dc.del { background: var(--diff-del); }
+.dc.empty { background: repeating-linear-gradient(135deg, transparent 0 6px, var(--panel-2) 6px 7px); }
+.dc:hover .dl-add, .dc .dl-add:focus { opacity: 1; }
+mark.dw { background: color-mix(in srgb, var(--green) 28%, transparent); color: inherit; border-radius: 2px; }
+.dl.del mark.dw, .dc.del mark.dw { background: color-mix(in srgb, var(--red) 28%, transparent); }
+.base-pick { font: var(--fs-sm) var(--sans); background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: var(--r-sm); padding: 2px 4px; max-width: 160px; }
+.changes-summary .pill.mono { max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.changes-count { white-space: nowrap; }
+.changes-filter { display: flex; gap: var(--sp-2); align-items: center; padding: var(--sp-2) var(--sp-3h); border-bottom: 1px solid var(--line); }
+.changes-filter input { flex: 1; min-width: 0; }
+.changes-filter .chip { white-space: nowrap; height: 28px; }
+.changes-filter .chip.on { background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); color: var(--accent-hover); }
+.changes-body.side { display: grid; grid-template-columns: minmax(180px, 28%) 1fr; align-items: start; }
+.changes-body.side .file-list { position: sticky; top: 0; max-height: calc(var(--app-h, 100vh) - 200px); overflow-y: auto; border-right: 1px solid var(--line); border-bottom: 0; }
+.changes-files { min-width: 0; }
+.file-list { border-bottom: 1px solid var(--line); padding: var(--sp-1) 0; max-height: 220px; overflow-y: auto; }
+.fl-row { display: flex; align-items: center; gap: var(--sp-2); width: 100%; background: none; border: 0; padding: 3px var(--sp-3h); text-align: left; font-size: var(--fs-sm); color: var(--text-2); cursor: pointer; }
+.fl-row:hover { background: var(--hover); } .fl-row.on { background: var(--active); }
+.fl-name { flex: 1; min-width: 0; font-family: var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }
+.fl-row .tstats { font: var(--fs-xs) var(--mono); }
+.fl-dir-name { font: var(--fs-xs) var(--mono); color: var(--muted); padding: 4px var(--sp-3h) 1px; }
+.fl-dir .fl-row { padding-left: calc(var(--sp-3h) + 10px); }
 /* session details rail (Desktop's right-hand column) */
 .rail-scrim { display: none; }
 .session-rail { width: 264px; flex: none; border-left: 1px solid var(--line); background: var(--sidebar); display: flex; flex-direction: column; min-height: 0; }
@@ -626,7 +659,7 @@ button.mention:hover { border-color: var(--line-strong); background: var(--hover
 .dl { position: relative; }
 .dl-add { position: absolute; left: 2px; top: 1px; width: 17px; height: 17px; border-radius: var(--r-xs); border: 0; background: var(--accent); color: var(--on-accent); font: 600 var(--fs-sm)/var(--fs-title) var(--sans, inherit); padding: 0; cursor: pointer; opacity: 0; }
 .dl:hover .dl-add, .dl-add:focus { opacity: 1; }
-@media (pointer: coarse) { .dl-add { opacity: .55; } }
+@media (pointer: coarse) { .dl-add { opacity: .55; } .diff.numbered .dl-add, .diff.split .dl-add { opacity: 0; } .diff.numbered .dl:hover .dl-add, .diff.split .dc:hover .dl-add { opacity: 1; } }
 .dl-comment, .dl-draft { position: sticky; left: 0; margin: 4px 8px 4px 22px; max-width: min(520px, calc(100% - 30px)); font: var(--fs-md)/1.45 var(--sans, inherit); white-space: pre-wrap; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-md); padding: 7px 9px; }
 .dl-comment { display: flex; gap: var(--sp-2); align-items: flex-start; border-left: 3px solid var(--accent); }
 .dl-comment span { flex: 1; }
