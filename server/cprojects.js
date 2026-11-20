@@ -43,6 +43,10 @@ const IDEMPOTENT_MS = 10 * 60_000;
 const MAX_PROGRESS_POSTS = 2;
 /** The sender of messages the engine itself sends a session (retries, nudges, limit resets). */
 export const PROJECT_FROM = { role: 'project', name: 'Project', kind: 'project' };
+/** Colors a project's icon can have (design tokens); the default is picked from its id. */
+export const PROJECT_COLORS = ['orange', 'blue', 'green', 'purple', 'pink', 'teal', 'yellow', 'red'];
+const projectColor = (id) => PROJECT_COLORS[[...String(id)].reduce((n, c) => (n * 31 + c.charCodeAt(0)) >>> 0, 7) % PROJECT_COLORS.length];
+
 /** Errors that mean the server's CLI is signed out (same test as the chat view's "Log in again" card). */
 export const AUTH_RE = /oauth|authenticat|\/login|not logged in|invalid api key|credentials/i;
 const STUCK_MS = Number(process.env.CW_PROJECT_STUCK_MS) || 20 * 60_000;
@@ -1435,6 +1439,10 @@ export class Project {
       coordinatorBusy: !!coord && coord.turns > 0,
       paused: this.state.paused,
       archived: !!this.settings.archived,
+      pinned: !!this.settings.pinned,
+      unread: !!this.settings.unread,
+      icon: this.settings.icon || null,
+      color: this.settings.color || projectColor(this.id),
     };
   }
 
@@ -1685,6 +1693,13 @@ export class ProjectEngine {
     const next = cleanSettings(mergeSettings(before, patch));
     next.createdAt = before.createdAt;
     next.archived = patch.archived ?? before.archived;
+    // Sidebar state, like a chat's: pinned, marked unread, and the project's icon and color.
+    next.pinned = !!(patch.pinned ?? before.pinned);
+    next.unread = !!(patch.unread ?? before.unread);
+    if (patch.icon !== undefined) next.icon = [...new Intl.Segmenter().segment(String(patch.icon || '').trim())].slice(0, 2).map((g) => g.segment).join('') || undefined;
+    else next.icon = before.icon;
+    if (patch.color !== undefined) next.color = PROJECT_COLORS.includes(patch.color) ? patch.color : undefined;
+    else next.color = before.color;
     p.settings = next;
     p.saveSettings();
     // Model and effort changes apply to the coordinator now and to threads started later.
