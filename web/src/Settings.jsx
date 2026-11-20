@@ -63,6 +63,9 @@ function General({ prefs, set, onKeys }) {
       <Row label="Enter sends the message" desc="When off, use Ctrl+Enter to send. On phones the send button is always used.">
         <Toggle value={prefs.sendOnEnter} onChange={(v) => set('sendOnEnter', v)} />
       </Row>
+      <Row label="Suggested next message" desc="After Claude replies, show a likely next message in gray in the empty box. Press Tab (or tap Use) to take it.">
+        <Toggle value={prefs.suggestions} onChange={(v) => set('suggestions', v)} />
+      </Row>
       <Row label="Desktop notifications" desc={perm === 'denied' ? 'Blocked in this browser. Allow them in the site settings.' : 'Notify when Claude finishes or needs approval while this tab is in the background.'}>
         {perm === 'default' ? (
           <Button size="sm" onClick={() => Notification.requestPermission().then(setPerm)}>
@@ -279,7 +282,7 @@ export default function Settings({ projects, activeCwd, onClose, onError, onKeys
 }
 
 const KEYS = [
-  ['Ctrl/⌘ K', 'New chat'],
+  ['Ctrl/⌘ K', 'Search chats, files and actions'],
   ['Ctrl/⌘ B', 'Show or hide the sidebar'],
   ['Ctrl/⌘ ,', 'Settings'],
   ['Ctrl/⌘ /', 'Keyboard shortcuts'],

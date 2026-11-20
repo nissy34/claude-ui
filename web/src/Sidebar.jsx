@@ -5,6 +5,7 @@ import { Button, IconButton, Menu, Modal, ModalHead, useDismiss } from './ui/ind
 import { promptDialog } from './ui/dialogs.jsx';
 import { deleteChat } from './chat/deleteChat.js';
 import { ProjectList } from './project/ProjectView.jsx';
+import { PrIcon } from './project/ProjectPanel.jsx';
 
 function dotState(s) {
   if (s.kind === 'chat') {
@@ -16,6 +17,36 @@ function dotState(s) {
   return s.attention ? ['attn', 'Needs attention'] : ['on', 'Running'];
 }
 
+// A short label for where a chat stands, like Desktop's status labels in the sidebar.
+export function statusLabel(s) {
+  if (s.kind !== 'chat') return null;
+  if (s.state === 'waiting') return ['needs', 'Needs you'];
+  if (s.state === 'busy') return ['working', 'Working'];
+  if (s.pr?.state === 'MERGED') return ['done', 'Done'];
+  if (s.attention) return ['review', 'Ready for review'];
+  return null;
+}
+
+const PR_WORDS = { OPEN: 'Open', DRAFT: 'Draft', MERGED: 'Merged', CLOSED: 'Closed' };
+
+function RowPr({ pr }) {
+  if (!pr?.number) return null;
+  const st = (pr.state || 'OPEN').toLowerCase();
+  const checks = pr.fail ? ` · ${pr.fail} check${pr.fail > 1 ? 's' : ''} failing` : pr.pending ? ' · checks running' : '';
+  return (
+    <a
+      className={`row-pr ${st} ${pr.fail ? 'failing' : ''}`}
+      href={pr.url}
+      target="_blank"
+      rel="noreferrer"
+      title={`PR #${pr.number} · ${PR_WORDS[pr.state] || pr.state}${checks}${pr.title ? `\n${pr.title}` : ''}`}
+      onClick={(e) => e.stopPropagation()}
+    >
+      <PrIcon merged={pr.state === 'MERGED'} />
+    </a>
+  );
+}
+
 function StatusDot({ s }) {
   const [cls, title] = dotState(s);
   return <span className={`dot ${cls}`} title={title} />;
@@ -25,7 +56,7 @@ export function baseName(p) {
   return (p || '').split(/[\\/]/).filter(Boolean).pop() || p;
 }
 
-export default function Sidebar({ sessions, activeId, onSelect, onCreate, onNewChat, onHistory, onSettings, onArtifacts, onScheduled, onCustomize, onLogout, onClose, onCollapse, onError, cprojects = [], activeProjectId, onOpenProject, onNewProject }) {
+export default function Sidebar({ sessions, activeId, onSelect, onCreate, onNewChat, onHistory, onSettings, onArtifacts, onScheduled, onSearch, onCustomize, onLogout, onClose, onCollapse, onError, cprojects = [], activeProjectId, onOpenProject, onNewProject }) {
   const [q, setQ] = useState('');
   const [showArchived, setShowArchived] = useState(false);
   const [collapsed, setCollapsed] = useState(() => {
@@ -95,7 +126,6 @@ export default function Sidebar({ sessions, activeId, onSelect, onCreate, onNewC
 
   const archivedCount = sessions.filter((s) => s.archived).length;
   const pinned = useMemo(() => (showArchived || q ? [] : sessions.filter((s) => s.pinned && !s.archived && !(s.kind === 'shell' && s.parentId)).sort((a, b) => b.lastActivity - a.lastActivity)), [sessions, showArchived, q]);
-  const searchRef = React.useRef(null);
 
   const patch = (s, body) => api(`/api/sessions/${s.id}`, { method: 'PATCH', body }).catch(onError);
   const rowAction = async (s, action) => {
@@ -136,7 +166,17 @@ export default function Sidebar({ sessions, activeId, onSelect, onCreate, onNewC
         )}
         {s.name}
       </span>
-      <span className="when">{timeAgo(s.lastActivity)}</span>
+      <RowPr pr={s.pr} />
+      {(() => {
+        const label = statusLabel(s);
+        return label ? (
+          <span className={`when row-status ${label[0]}`} title={timeAgo(s.lastActivity)}>
+            {label[1]}
+          </span>
+        ) : (
+          <span className="when">{timeAgo(s.lastActivity)}</span>
+        );
+      })()}
       <span className="menu-wrap row-menu" onClick={(e) => e.stopPropagation()}>
         <IconButton title="More" onClick={() => setMenu(menu === 'row:' + keyPrefix + s.id ? null : 'row:' + keyPrefix + s.id)}>
           ⋯
@@ -198,13 +238,13 @@ export default function Sidebar({ sessions, activeId, onSelect, onCreate, onNewC
       </div>
 
       <nav className="side-nav">
-        <button onClick={onNewChat} title="New chat (Ctrl+K)">
+        <button onClick={onNewChat} title="New chat">
           <span className="nico">＋</span> New chat
         </button>
-        <div className="side-search">
-          <span className="s-ico">⌕</span>
-          <input ref={searchRef} placeholder="Search" value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => e.key === 'Escape' && q && (e.preventDefault(), setQ(''), e.currentTarget.blur())} />
-        </div>
+        <button className="side-search-btn" onClick={onSearch} title="Search (Ctrl+K)">
+          <span className="nico">⌕</span> Search
+          <kbd className="side-kbd">{/Mac|iPhone|iPad/.test(navigator.platform) ? '⌘K' : 'Ctrl K'}</kbd>
+        </button>
         <button onClick={onArtifacts}>
           <span className="nico">◇</span> Artifacts
         </button>
@@ -225,7 +265,7 @@ export default function Sidebar({ sessions, activeId, onSelect, onCreate, onNewC
             ))}
           </div>
         )}
-        {!q && !showArchived && <ProjectList projects={cprojects} activeId={activeProjectId} onOpen={onOpenProject} onNew={onNewProject} />}
+        {!q && !showArchived && <ProjectList projects={cprojects} activeId={activeProjectId} onOpen={onOpenProject} onNew={onNewProject} onError={onError} onDeleted={() => onSelect(null)} />}
         {groups.length > 0 && !q && <div className="section-head">Chats</div>}
         {groups.length === 0 && !(cprojects.length && !q && !showArchived) && <div className="side-empty">{q ? 'No matching chats' : showArchived ? 'No archived chats' : 'No chats yet. Start one with New chat.'}</div>}
         {groups.map((g) => (

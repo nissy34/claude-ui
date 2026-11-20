@@ -1,89 +1,16 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api.js';
 import { highlight } from './markdown.js';
 import ArtifactView from './ArtifactView.jsx';
 import BrowserView from './BrowserView.jsx';
 import BackgroundTasks, { isLive } from './BackgroundTasks.jsx';
-import { Button, IconButton } from '../ui/index.jsx';
+import { Button, IconButton, Menu, useDismiss } from '../ui/index.jsx';
+import DiffView from './DiffView.jsx';
 import { confirmDialog } from '../ui/dialogs.jsx';
 import { copyText } from '../ui/clipboard.js';
 
-function UnifiedDiff({ diff, path, comments, onComment }) {
-  const [draft, setDraft] = useState(null); // { i, line, text }
-  const rows = [];
-  let oldN = 0;
-  let newN = 0;
-  for (const line of diff.split('\n')) {
-    if (/^(diff --git|index |--- |\+\+\+ |new file|deleted file|similarity|rename |old mode|new mode)/.test(line)) continue;
-    if (line.startsWith('@@')) {
-      const m = /@@ -(\d+)(?:,\d+)? \+(\d+)/.exec(line);
-      if (m) (oldN = +m[1]), (newN = +m[2]);
-      rows.push(['hunk', line.replace(/^(@@[^@]*@@).*/, '$1')]);
-    } else if (line.startsWith('+')) rows.push(['add', line.slice(1), newN++]);
-    else if (line.startsWith('-')) rows.push(['del', line.slice(1), oldN++, true]);
-    else if (line.startsWith('\\')) continue;
-    else rows.push(['ctx', line.slice(1), (oldN++, newN++)]);
-  }
-  const shown = rows.slice(0, 3000);
-  const save = () => {
-    if (draft?.text.trim()) onComment({ path, line: draft.line, old: draft.old, code: draft.code, text: draft.text.trim() });
-    setDraft(null);
-  };
-  return (
-    <div className="diff">
-      {shown.map(([k, l, n, old], i) => (
-        <React.Fragment key={i}>
-          <div className={`dl ${k}`}>
-            {onComment && k !== 'hunk' && (
-              <button className="dl-add" title="Comment on this line" onClick={() => setDraft({ i, line: n, old: !!old, code: l, text: '' })}>
-                +
-              </button>
-            )}
-            <span className="dm">{k === 'add' ? '+' : k === 'del' ? '−' : ''}</span>
-            {k === 'hunk' ? <span>{l}</span> : <span dangerouslySetInnerHTML={{ __html: highlight(l, path) || ' ' }} />}
-          </div>
-          {comments
-            ?.filter((c) => c.path === path && c.line === n && c.old === !!old && k !== 'hunk' && c.code === l)
-            .map((c) => (
-              <div key={c.id} className="dl-comment">
-                <span>{c.text}</span>
-                <IconButton title="Remove comment" onClick={() => onComment({ remove: c.id })}>
-                  ✕
-                </IconButton>
-              </div>
-            ))}
-          {draft?.i === i && (
-            <div className="dl-draft fields sm">
-              <textarea
-                autoFocus
-                rows={2}
-                placeholder="Comment for Claude (Ctrl/⌘ Enter to add)"
-                value={draft.text}
-                onChange={(e) => setDraft({ ...draft, text: e.target.value })}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) (e.preventDefault(), save());
-                  if (e.key === 'Escape') setDraft(null);
-                }}
-              />
-              <div className="row">
-                <Button variant="ghost" size="sm" onClick={() => setDraft(null)}>
-                  Cancel
-                </Button>
-                <Button variant="primary" size="sm" disabled={!draft.text.trim()} onClick={save}>
-                  Add comment
-                </Button>
-              </div>
-            </div>
-          )}
-        </React.Fragment>
-      ))}
-      {rows.length > shown.length && <div className="dl gap">… {rows.length - shown.length} more lines</div>}
-    </div>
-  );
-}
-
 // The branch's pull request with CI checks, like Desktop's PR status in the Changes card.
-function PrCard({ sessionId, refreshKey, onPrompt, busy, onError }) {
+export function PrCard({ sessionId, refreshKey, onPrompt, busy, onError }) {
   const [st, setSt] = useState(null);
   const [open, setOpen] = useState(false);
   const [merging, setMerging] = useState(false);
@@ -190,11 +117,101 @@ function reviewPrompt(comments) {
   return `Please address my review comments on the current changes:\n\n${body}`;
 }
 
-function Changes({ sessionId, refreshKey, onOpenFile, onPrompt, busy }) {
+const DIFF_OPTS_KEY = 'cw.diffOpts';
+const DEFAULT_OPTS = { list: true, group: false, split: false, wrap: false, words: true, ws: false, mine: false };
+function loadOpts() {
+  try {
+    return { ...DEFAULT_OPTS, ...JSON.parse(localStorage.getItem(DIFF_OPTS_KEY) || '{}') };
+  } catch {
+    return DEFAULT_OPTS;
+  }
+}
+
+/** Changed files as a flat list or grouped under their folders. */
+function FileList({ files, group, active, onPick }) {
+  const row = (f, label) => (
+    <button key={f.path} className={`fl-row ${active === f.path ? 'on' : ''}`} title={f.path} onClick={() => onPick(f.path)}>
+      <span className={`cstatus ${f.status}`}>{f.status === 'added' ? 'A' : f.status === 'deleted' ? 'D' : 'M'}</span>
+      <span className="fl-name">{label}</span>
+      <span className="tstats">
+        {f.add > 0 && <span className="add">+{f.add}</span>}
+        {f.del > 0 && <span className="del">−{f.del}</span>}
+      </span>
+    </button>
+  );
+  if (!group) return <div className="file-list">{files.map((f) => row(f, f.path))}</div>;
+  const dirs = new Map();
+  for (const f of files) {
+    const i = f.path.lastIndexOf('/');
+    const d = i < 0 ? '' : f.path.slice(0, i);
+    if (!dirs.has(d)) dirs.set(d, []);
+    dirs.get(d).push(f);
+  }
+  return (
+    <div className="file-list">
+      {[...dirs.keys()].sort().map((d) => (
+        <div key={d || '.'} className="fl-dir">
+          {d && <div className="fl-dir-name">{d}/</div>}
+          {dirs.get(d).map((f) => row(f, f.path.slice(d ? d.length + 1 : 0)))}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function DiffOptions({ opts, set, anyOpen, onToggleAll }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+  useDismiss(open, () => setOpen(false), ref);
+  const item = (key, label) => (
+    <button role="menuitemcheckbox" aria-checked={!!opts[key]} onClick={() => set({ [key]: !opts[key] })}>
+      <span className="check">{opts[key] ? '✓' : ''}</span>
+      {label}
+    </button>
+  );
+  return (
+    <div className="menu-wrap" ref={ref}>
+      <IconButton title="Diff options" aria-label="Diff options" onClick={() => setOpen((o) => !o)}>
+        ⋯
+      </IconButton>
+      {open && (
+        <Menu place="down" align="right">
+          {item('list', 'Show file list')}
+          {item('group', 'Group files by folder')}
+          <div className="sep" />
+          {item('split', 'Side by side')}
+          {item('wrap', 'Word wrap')}
+          {item('words', 'Highlight changed words')}
+          {item('ws', 'Hide whitespace changes')}
+          <div className="sep" />
+          <button onClick={() => (setOpen(false), onToggleAll())}>
+            <span className="check" />
+            {anyOpen ? 'Collapse all files' : 'Expand all files'}
+          </button>
+        </Menu>
+      )}
+    </div>
+  );
+}
+
+function Changes({ sessionId, refreshKey, onOpenFile, onPrompt, busy, wide }) {
   const [data, setData] = useState(null);
   const [open, setOpen] = useState({});
   const [loading, setLoading] = useState(false);
   const [comments, setComments] = useState([]);
+  const [opts, setOptsState] = useState(loadOpts);
+  const [base, setBase] = useState('HEAD');
+  const [q, setQ] = useState('');
+  const [active, setActive] = useState(null);
+  const listRef = useRef(null);
+  const setOpts = (patch) =>
+    setOptsState((o) => {
+      const next = { ...o, ...patch };
+      try {
+        localStorage.setItem(DIFF_OPTS_KEY, JSON.stringify(next));
+      } catch {}
+      return next;
+    });
   const onComment = (c) => setComments((list) => (c.remove ? list.filter((x) => x.id !== c.remove) : [...list, { ...c, id: Math.random().toString(36).slice(2) }]));
   const sendReview = () => {
     onPrompt(reviewPrompt(comments));
@@ -202,37 +219,81 @@ function Changes({ sessionId, refreshKey, onOpenFile, onPrompt, busy }) {
   };
   const load = () => {
     setLoading(true);
-    api(`/api/sessions/${sessionId}/changes`)
+    const qs = new URLSearchParams();
+    if (base !== 'HEAD') qs.set('base', base);
+    if (opts.ws) qs.set('ws', '0');
+    api(`/api/sessions/${sessionId}/changes?${qs}`)
       .then(setData)
       .catch((e) => setData({ error: e.message }))
       .finally(() => setLoading(false));
   };
-  useEffect(load, [sessionId, refreshKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(load, [sessionId, refreshKey, base, opts.ws]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const files = useMemo(() => {
+    if (!data?.files) return [];
+    const mine = new Set(data.claude || []);
+    const needle = q.trim().toLowerCase();
+    return data.files.filter((f) => (!opts.mine || mine.has(f.path)) && (!needle || f.path.toLowerCase().includes(needle)));
+  }, [data, opts.mine, q]);
 
   if (!data) return <div className="panel-empty">Loading…</div>;
-  if (data.error) return <div className="panel-empty">{data.error}</div>;
+  if (data.error)
+    return (
+      <div className="panel-empty">
+        {data.error}
+        {base !== 'HEAD' && (
+          <div>
+            <Button size="sm" onClick={() => setBase('HEAD')}>
+              Show uncommitted changes
+            </Button>
+          </div>
+        )}
+      </div>
+    );
   if (!data.git) return <div className="panel-empty">This folder isn't a git repository, so there's no change list. Edits still show as diffs in the chat.</div>;
-  const add = data.files.reduce((n, f) => n + f.add, 0);
-  const del = data.files.reduce((n, f) => n + f.del, 0);
+  const add = files.reduce((n, f) => n + f.add, 0);
+  const del = files.reduce((n, f) => n + f.del, 0);
+  const anyOpen = files.some((f) => open[f.path]);
+  const pick = (p) => {
+    setOpen((o) => ({ ...o, [p]: true }));
+    setActive(p);
+    requestAnimationFrame(() => listRef.current?.querySelector(`[data-path="${CSS.escape(p)}"]`)?.scrollIntoView({ block: 'start', behavior: 'smooth' }));
+  };
+  const sideList = opts.list && wide && files.length > 1;
+  const nMine = (data.claude || []).filter((p) => data.files.some((f) => f.path === p)).length;
+
   return (
     <>
       <div className="changes-summary">
-        <span className="pill mono">⎇ {data.branch}</span>
-        <span>
-          {data.files.length} file{data.files.length === 1 ? '' : 's'} <span className="add">+{add}</span> <span className="del">−{del}</span>
+        <select className="base-pick" value={base} onChange={(e) => setBase(e.target.value)} title="Compare with">
+          <option value="HEAD">Uncommitted</option>
+          {(data.bases || []).map((b) => (
+            <option key={b} value={b}>
+              Since {b}
+            </option>
+          ))}
+        </select>
+        <span className="muted">→</span>
+        <span className="pill mono" title="Current branch">
+          ⎇ {data.branch}
         </span>
         <span className="spacer" />
+        <span className="changes-count">
+          {files.length} file{files.length === 1 ? '' : 's'} <span className="add">+{add}</span> <span className="del">−{del}</span>
+        </span>
         <IconButton title="Refresh" onClick={load}>
           {loading ? <span className="spinner" /> : '↻'}
         </IconButton>
-        {data.files.length > 0 && (
-          <Button variant="ghost" size="sm" onClick={() => setOpen(Object.fromEntries(data.files.map((f) => [f.path, !Object.values(open).some(Boolean)])))}>
-            {Object.values(open).some(Boolean) ? 'Collapse all' : 'Expand all'}
-          </Button>
-        )}
+        <DiffOptions opts={opts} set={setOpts} anyOpen={anyOpen} onToggleAll={() => setOpen(Object.fromEntries(files.map((f) => [f.path, !anyOpen])))} />
+      </div>
+      <div className="changes-filter">
+        <input className="field sm" type="search" placeholder="Search changed files" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search changed files" />
+        <button className={`chip ${opts.mine ? 'on' : ''}`} aria-pressed={opts.mine} onClick={() => setOpts({ mine: !opts.mine })} title="Only files Claude edited in this chat, not changes from commands it ran or your own edits">
+          Claude's edits only{nMine ? ` · ${nMine}` : ''}
+        </button>
       </div>
       <PrCard sessionId={sessionId} refreshKey={refreshKey} onPrompt={onPrompt} busy={busy} />
-      {onPrompt && (
+      {onPrompt && base === 'HEAD' && (
         <div className="git-actions">
           <Button size="sm" disabled={busy || !data.files.length} onClick={() => onPrompt('Commit the current changes with a clear commit message. Stage only the files that belong to this work.')}>
             Commit
@@ -259,35 +320,41 @@ function Changes({ sessionId, refreshKey, onOpenFile, onPrompt, busy }) {
           </Button>
         </div>
       )}
-      {data.files.length === 0 && <div className="panel-empty">No uncommitted changes.</div>}
-      {data.files.map((f) => (
-        <div key={f.path} className="change-file">
-          <button className="change-head" onClick={() => setOpen((o) => ({ ...o, [f.path]: !o[f.path] }))}>
-            <span className="chev">{open[f.path] ? '▾' : '▸'}</span>
-            <span className={`cstatus ${f.status}`}>{f.status === 'added' ? 'A' : f.status === 'deleted' ? 'D' : 'M'}</span>
-            <span className="cpath" title={f.path}>
-              {f.path}
-            </span>
-            <span className="tstats">
-              {f.add > 0 && <span className="add">+{f.add}</span>}
-              {f.del > 0 && <span className="del">−{f.del}</span>}
-            </span>
-            {f.status !== 'deleted' && (
-              <span
-                className="icon-btn"
-                title="Open file"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onOpenFile(f.path);
-                }}
-              >
-                ↗
-              </span>
-            )}
-          </button>
-          {open[f.path] && <UnifiedDiff diff={f.diff} path={f.path} comments={comments} onComment={onPrompt ? onComment : null} />}
+      {data.files.length === 0 && <div className="panel-empty">{base === 'HEAD' ? 'No uncommitted changes.' : `No changes since ${base}.`}</div>}
+      {data.files.length > 0 && files.length === 0 && <div className="panel-empty">No changed files match.</div>}
+      <div className={`changes-body ${sideList ? 'side' : ''}`}>
+        {opts.list && files.length > 1 && <FileList files={files} group={opts.group} active={active} onPick={pick} />}
+        <div className="changes-files" ref={listRef}>
+          {files.map((f) => (
+            <div key={f.path} className="change-file" data-path={f.path}>
+              <button className="change-head" onClick={() => setOpen((o) => ({ ...o, [f.path]: !o[f.path] }))}>
+                <span className="chev">{open[f.path] ? '▾' : '▸'}</span>
+                <span className={`cstatus ${f.status}`}>{f.status === 'added' ? 'A' : f.status === 'deleted' ? 'D' : 'M'}</span>
+                <span className="cpath" title={f.path}>
+                  {f.path}
+                </span>
+                <span className="tstats">
+                  {f.add > 0 && <span className="add">+{f.add}</span>}
+                  {f.del > 0 && <span className="del">−{f.del}</span>}
+                </span>
+                {f.status !== 'deleted' && (
+                  <span
+                    className="icon-btn"
+                    title="Open file"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onOpenFile(f.path);
+                    }}
+                  >
+                    ↗
+                  </span>
+                )}
+              </button>
+              {open[f.path] && <DiffView diff={f.diff} path={f.path} comments={comments} onComment={onPrompt ? onComment : null} split={opts.split} wrap={opts.wrap} words={opts.words} />}
+            </div>
+          ))}
         </div>
-      ))}
+      </div>
     </>
   );
 }
@@ -392,7 +459,7 @@ export default function SidePanel({ sessionId, tab, files, titles = {}, onTab, o
 
   const body = (t) =>
     t === 'changes' ? (
-      <Changes sessionId={sessionId} refreshKey={refreshKey} onOpenFile={onOpenFile} onPrompt={onPrompt} busy={busy} />
+      <Changes sessionId={sessionId} refreshKey={refreshKey} onOpenFile={onOpenFile} onPrompt={onPrompt} busy={busy} wide={wide && !split} />
     ) : t === 'tasks' ? (
       <BackgroundTasks sessionId={sessionId} tasks={tasks} onError={onError} focus={taskFocus} />
     ) : t === 'browser' ? (

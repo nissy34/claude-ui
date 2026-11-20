@@ -25,12 +25,13 @@ import { store, claudeProjectDir } from './sessions.js';
 import { getChanges, searchFiles, readFileSafe, createWorktree, listBranches } from './git.js';
 import * as browser from './browser.js';
 import { browserAvailable } from './browser.js';
-import { listArtifacts, publishArtifact, rawHandler, rawUrl } from './artifacts.js';
+import { listArtifacts, publishArtifact, rawHandler, rawUrl, writtenPaths } from './artifacts.js';
 import * as admin from './claude-admin.js';
 import { McpAdmin, onSignedIn, stopAllAdmins } from './mcp-admin.js';
 import { getModels } from './models.js';
 import { sideChat } from './side-chat.js';
 import { prStatus, mergeWhenReady } from './pr-status.js';
+import { rememberPr, startPrSweep } from './pr-cache.js';
 import * as schedules from './schedules.js';
 import * as notes from './notes.js';
 import { controlSession } from './session-control.js';
@@ -923,17 +924,31 @@ onSignedIn((name, from) => {
 app.get(
   '/api/sessions/:id/changes',
   wrap(async (req, res) => {
-    res.json(await getChanges(getSession(req).meta.cwd));
+    const s = getSession(req);
+    const data = await getChanges(s.meta.cwd, { base: typeof req.query.base === 'string' ? req.query.base : undefined, ignoreWs: req.query.ws === '0' });
+    // Files Claude wrote in this chat, relative to the folder, for "Claude's edits only".
+    if (data.git) data.claude = writtenPaths(s);
+    res.json(data);
   })
 );
 
 app.get(
   '/api/sessions/:id/pr',
-  wrap(async (req, res) => res.json(await prStatus(getSession(req).meta.cwd)))
+  wrap(async (req, res) => {
+    const s = getSession(req);
+    const st = await prStatus(s.meta.cwd);
+    rememberPr(s, st, store);
+    res.json(st);
+  })
 );
 app.post(
   '/api/sessions/:id/pr/merge-when-ready',
-  wrap(async (req, res) => res.json(await mergeWhenReady(getSession(req).meta.cwd, parseInt(req.body?.number, 10))))
+  wrap(async (req, res) => {
+    const s = getSession(req);
+    const st = await mergeWhenReady(s.meta.cwd, parseInt(req.body?.number, 10));
+    rememberPr(s, st, store);
+    res.json(st);
+  })
 );
 
 // Side chat: streams the answer as NDJSON lines ({d: text} … then {done} or {error}).
@@ -1005,6 +1020,41 @@ app.post(
     res.json({ ...(out.url ? { url: out.url, title: out.title } : out), state: await browser.state(req.params.id) });
   })
 );
+
+// ---------- search palette ----------
+// Words people wrote and Claude's replies, across all chats (events are already in memory).
+app.get('/api/search', (req, res) => {
+  const q = String(req.query.q || '').trim().toLowerCase();
+  if (q.length < 2) return res.json({ messages: [], artifacts: [], schedules: [] });
+  const snip = (text, i) => {
+    const start = Math.max(0, i - 50);
+    return (start ? '…' : '') + text.slice(start, i + q.length + 90).replace(/\s+/g, ' ').trim() + (i + q.length + 90 < text.length ? '…' : '');
+  };
+  const messages = [];
+  const chats = [...store.sessions.values()].filter((s) => s.meta.kind === 'chat' && Array.isArray(s.events)).sort((a, b) => b.meta.lastActivity - a.meta.lastActivity);
+  outer: for (const s of chats) {
+    let hits = 0;
+    for (let i = s.events.length - 1; i >= 0; i--) {
+      const e = s.events[i];
+      const text = e.k === 'user' ? e.text : e.k === 'block' && e.block?.type === 'text' && !e.parent ? e.block.text : null;
+      if (typeof text !== 'string') continue;
+      const at = text.toLowerCase().indexOf(q);
+      if (at < 0) continue;
+      messages.push({ sessionId: s.meta.id, name: s.meta.name, who: e.k === 'user' ? 'you' : 'claude', snippet: snip(text, at), ts: e.ts || null, archived: !!s.meta.archived, cproject: s.meta.cproject || null });
+      if (++hits >= 3) break;
+      if (messages.length >= 40) break outer;
+    }
+  }
+  const all = store.list().map((j) => store.get(j.id)).filter(Boolean);
+  const artifacts = listArtifacts(all)
+    .filter((a) => `${a.title || ''} ${a.path}`.toLowerCase().includes(q))
+    .slice(0, 12);
+  const tasks = schedules.listTasks()
+    .filter((t) => `${t.name || ''} ${t.prompt || ''}`.toLowerCase().includes(q))
+    .slice(0, 8)
+    .map((t) => ({ id: t.id, name: t.name, prompt: (t.prompt || '').slice(0, 120), lastSessionId: t.lastSessionId || null }));
+  res.json({ messages, artifacts, schedules: tasks });
+});
 
 // ---------- artifacts ----------
 app.get('/api/artifacts', (req, res) => {
@@ -1313,6 +1363,7 @@ if (config.schedules) schedules.startScheduler(async (t) => {
 });
 
 server.listen(config.port, config.host, () => {
+  startPrSweep(store);
   const h = ['0.0.0.0', '::', ''].includes(config.host) ? '127.0.0.1' : config.host.includes(':') ? `[${config.host}]` : config.host;
   config.internalUrl = `http://${h}:${config.port}`;
   console.log(`claude-web listening on http://${config.host}:${config.port}`);

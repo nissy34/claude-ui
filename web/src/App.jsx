@@ -13,6 +13,7 @@ import { setBrowserAvailable } from './chat/McpAuth.jsx';
 import Scheduled from './Scheduled.jsx';
 import ProjectView, { MoveToProjectDialog, ThreadBar, ThreadConversation } from './project/ProjectView.jsx';
 import { NewProjectDialog } from './project/ProjectSettings.jsx';
+import Palette, { rememberChat, themeActions } from './Palette.jsx';
 
 function readHash() {
   const m = location.hash.match(/s=([0-9a-f-]{36})/i);
@@ -177,7 +178,7 @@ export default function App() {
     } catch {}
   };
 
-  // Ctrl/Cmd+K: new chat, Ctrl/Cmd+B: toggle sidebar, Ctrl/Cmd+,: settings, Ctrl/Cmd+/: shortcuts.
+  // Ctrl/Cmd+K: search palette, Ctrl/Cmd+B: toggle sidebar, Ctrl/Cmd+,: settings, Ctrl/Cmd+/: shortcuts.
   useEffect(() => {
     const onKey = (e) => {
       if (e.key === 'Escape' && dialog && (dialog.type === 'settings' || dialog.type === 'keys')) return setDialog(null);
@@ -198,7 +199,7 @@ export default function App() {
         setDialog({ type: 'keys' });
       } else if (e.key === 'k') {
         e.preventDefault();
-        newChat();
+        setDialog((d) => (d?.type === 'palette' ? null : { type: 'palette' }));
       } else if (e.key === 'b') {
         e.preventDefault();
         setSidebarHidden(!collapsed);
@@ -209,6 +210,7 @@ export default function App() {
   }, [collapsed, dialog, sessions, activeId, select, newChat]);
 
   const active = sessions.find((s) => s.id === activeId) || null;
+  useEffect(() => rememberChat(active?.id), [active?.id]);
 
   useEffect(() => {
     const waiting = sessions.filter((s) => !s.cproject && (s.state === 'waiting' || s.attention)).length + cprojects.reduce((n, p) => n + (p.attention || 0), 0);
@@ -234,9 +236,10 @@ export default function App() {
         onCustomize={() => (setDrawer(false), setDialog({ type: 'settings', tab: 'plugins' }))}
         onArtifacts={() => (setDrawer(false), setDialog({ type: 'artifacts' }))}
         onScheduled={() => (setDrawer(false), setDialog({ type: 'scheduled' }))}
+        onSearch={() => (setDrawer(false), setDialog({ type: 'palette' }))}
         cprojects={cprojects}
         activeProjectId={projectRoute?.id}
-        onOpenProject={(id) => openProject(id)}
+        onOpenProject={(id, tab) => openProject(id, tab)}
         onNewProject={() => (setDrawer(false), setDialog({ type: 'new-project' }))}
         onError={showError}
         onLogout={async () => {
@@ -311,6 +314,35 @@ export default function App() {
             setDialog(null);
             select(a.sessionId);
           }}
+        />
+      )}
+      {dialog?.type === 'palette' && (
+        <Palette
+          sessions={sessions}
+          cprojects={cprojects}
+          active={active}
+          onClose={() => setDialog((d) => (d?.type === 'palette' ? null : d))}
+          onSelect={select}
+          onOpenProject={(id) => openProject(id)}
+          onOpenArtifact={(a) => {
+            location.hash = `s=${a.sessionId}&a=${encodeURIComponent(a.path)}`;
+            setActiveId(a.sessionId);
+          }}
+          onOpenFile={(id, f) => {
+            location.hash = `s=${id}&f=${encodeURIComponent(f)}`;
+            setActiveId(id);
+          }}
+          actions={[
+            { id: 'new', icon: '＋', label: 'New chat', keywords: 'start create', run: newChat },
+            { id: 'new-project', icon: '▣', label: 'New project', keywords: 'create', run: () => setDialog({ type: 'new-project' }) },
+            { id: 'artifacts', icon: '◇', label: 'Artifacts', keywords: 'gallery pages reports', run: () => setDialog({ type: 'artifacts' }) },
+            { id: 'scheduled', icon: '◷', label: 'Scheduled tasks', keywords: 'cron routine', run: () => setDialog({ type: 'scheduled' }) },
+            { id: 'settings', icon: '⚙', label: 'Settings', kbd: 'Ctrl ,', keywords: 'preferences', run: () => setDialog({ type: 'settings' }) },
+            { id: 'customize', icon: '⚒', label: 'Customize: plugins, skills and MCP', keywords: 'plugins mcp servers skills', run: () => setDialog({ type: 'settings', tab: 'plugins' }) },
+            { id: 'keys', icon: '⌨', label: 'Keyboard shortcuts', kbd: 'Ctrl /', run: () => setDialog({ type: 'keys' }) },
+            { id: 'sidebar', icon: '⇤', label: collapsed ? 'Show sidebar' : 'Hide sidebar', kbd: 'Ctrl B', run: () => setSidebarHidden(!collapsed) },
+            ...themeActions(),
+          ]}
         />
       )}
       {dialog?.type === 'scheduled' && (
