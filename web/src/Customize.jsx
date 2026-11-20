@@ -10,7 +10,7 @@ export function ProjectPicker({ projects, value, onChange, allowNone = true }) {
   const options = [...new Set([value, ...projects.projects.map((p) => p.path)].filter(Boolean))];
   return (
     <select className="field sm proj-pick" value={value || ''} onChange={(e) => onChange(e.target.value)}>
-      {allowNone && <option value="">No project (user settings)</option>}
+      {allowNone && <option value="">No folder (user settings)</option>}
       {options.map((p) => (
         <option key={p} value={p}>
           {p.split(/[\\/]/).filter(Boolean).pop()} — {p}
@@ -236,12 +236,12 @@ function ServerForm({ cwd, edit, onDone, onError }) {
         )}
         <label>Available in</label>
         <select value={f.scope} onChange={set('scope')} disabled={!!edit}>
-          <option value="user">All projects (user)</option>
+          <option value="user">All folders (user)</option>
           <option value="local" disabled={!cwd}>
-            This project, just me (local)
+            This folder, just me (local)
           </option>
           <option value="project" disabled={!cwd}>
-            This project, shared in .mcp.json (project)
+            This folder, shared in .mcp.json (project)
           </option>
         </select>
       </div>
@@ -254,7 +254,7 @@ function ServerForm({ cwd, edit, onDone, onError }) {
         </Button>
       </div>
       <p className="muted set-note">
-        Saved in Claude Code’s own config ({f.scope === 'project' ? '.mcp.json in the project, which may be committed' : '~/.claude.json'}
+        Saved in Claude Code’s own config ({f.scope === 'project' ? '.mcp.json in the folder, which may be committed' : '~/.claude.json'}
         ), the same place `claude mcp add` writes. Servers that need a browser sign-in (OAuth) can be signed in under Logins below, or from a chat’s + menu under Connectors.
       </p>
     </form>
@@ -338,7 +338,7 @@ export function McpTab({ projects, activeCwd, onError }) {
           </div>
         ))}
       </div>
-      {!cwd && data?.servers.length > 0 && <p className="muted set-note">Pick a project to turn servers on or off for it.</p>}
+      {!cwd && data?.servers.length > 0 && <p className="muted set-note">Pick a folder to turn servers on or off for it.</p>}
       <McpLogins cwd={cwd} onError={onError} onChange={load} />
       <PasteCallback onError={onError} />
     </>
@@ -653,9 +653,9 @@ export function SkillsTab({ projects, activeCwd, onError }) {
                 }
               />
               <select className="field sm proj-pick" value={edit.scope} onChange={(e) => setEdit({ ...edit, scope: e.target.value })}>
-                <option value="user">All projects</option>
+                <option value="user">All folders</option>
                 <option value="project" disabled={!cwd}>
-                  This project
+                  This folder
                 </option>
               </select>
             </>

@@ -36,6 +36,8 @@ import * as notes from './notes.js';
 import { controlSession } from './session-control.js';
 import { transcriptTitle } from './chat-title.js';
 import { createDesktopMcp, getToken as getMcpToken, rotateToken as rotateMcpToken } from './desktop-mcp.js';
+import { ProjectEngine } from './cprojects.js';
+import { mountProjectRoutes } from './cproject-routes.js';
 import { authStatus, mcpList, pluginList, cliVersion, permissionRules, removePermissionRule } from './claude-admin.js';
 
 if (!config.password && !config.passwordHash) {
@@ -49,7 +51,11 @@ const distDir = path.resolve(__dirname, '..', 'dist');
 const app = express();
 if (config.trustProxy) app.set('trust proxy', 'loopback, linklocal, uniquelocal');
 app.disable('x-powered-by');
-app.use(express.json({ limit: '1mb' }));
+// Library uploads (base64 in JSON) may be bigger than everything else.
+const jsonSmall = express.json({ limit: '1mb' });
+const jsonBig = express.json({ limit: '40mb' });
+// The project hook (after every tool call of a thread) needs no body, which can be a large tool result.
+app.use((req, res, next) => (req.path === '/internal/cproject/hook' ? next() : req.method === 'POST' && /^\/api\/cprojects\/[^/]+\/library$/.test(req.path) ? jsonBig(req, res, next) : jsonSmall(req, res, next)));
 app.use((req, res, next) => {
   res.setHeader('X-Frame-Options', 'DENY');
   res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -358,6 +364,9 @@ app.post(
   })
 );
 
+// ---------- Projects (coordinator + threads) ----------
+const engine = new ProjectEngine(store);
+
 app.get('/internal/sessions', (req, res) => {
   let list = [...store.sessions.values()];
   if (req.query.parentId) list = list.filter((s) => s.meta.parentId === req.query.parentId);
@@ -390,11 +399,20 @@ app.get('/api/me', (req, res) => res.json({ authed: isAuthed(req) }));
 
 // Handoff MCP for Claude Desktop (bearer token, not the login cookie).
 if (config.desktopMcp) {
-  createDesktopMcp({ store, resolveDir, createWorktree, getChanges, listProjects }).mount(app);
+  createDesktopMcp({ store, resolveDir, createWorktree, getChanges, listProjects, engine }).mount(app);
 }
 
 // Artifact files, authorised by a per-session signature in the path (no cookie: sandboxed
 // HTML artifacts load their own CSS/JS from here with an opaque origin).
+// Live project data for Custom view pages (sandboxed, opaque origin): signed per project, read-only.
+app.get('/view-data/:pid/:file', (req, res) => {
+  const sig = String(req.params.file).replace(/\.json$/, '');
+  const p = engine.projects.get(req.params.pid);
+  if (!p || !p.viewDataOk(sig)) return res.status(404).json({ error: 'not found' });
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Cache-Control', 'no-store');
+  res.json(p.viewData());
+});
 app.get('/raw/:sid/:sig/*', (req, res, next) => {
   try {
     rawHandler(store)(req, res);
@@ -410,6 +428,9 @@ app.use('/api', (req, res, next) => {
 
 // Pictures from tool results (MCP screenshots and the like), shown inline in chats.
 mountToolImages(app);
+
+// Projects API (behind the login check above; the internal tool route checks its own token).
+mountProjectRoutes(app, { engine, store, resolveDir: (d) => resolveDir(d), wrap });
 
 // ---------- helpers ----------
 function resolveDir(input) {
@@ -988,7 +1009,9 @@ app.post(
 // ---------- artifacts ----------
 app.get('/api/artifacts', (req, res) => {
   const all = store.list().map((j) => store.get(j.id)).filter(Boolean);
-  const list = listArtifacts(req.query.session ? all.filter((s) => s.meta.id === req.query.session) : all);
+  const pick = req.query.session ? (s) => s.meta.id === req.query.session : req.query.cproject ? (s) => s.meta.cproject === req.query.cproject : () => true;
+  let list = listArtifacts(all.filter(pick));
+  if (req.query.published) list = list.filter((a) => a.published);
   res.json({ artifacts: list });
 });
 app.get(
@@ -1185,9 +1208,14 @@ function handleEvents(ws) {
   };
   store.listeners.add(push);
   push();
+  // Projects: the list with badges, and which projects changed (open project views refetch).
+  const onProject = (msg) => ws.readyState === 1 && ws.send(JSON.stringify(msg));
+  engine.listeners.add(onProject);
+  ws.send(JSON.stringify({ t: 'cprojects', projects: engine.list(), changed: [] }));
   const ping = setInterval(() => ws.readyState === 1 && ws.ping(), 25_000);
   ws.on('close', () => {
     store.listeners.delete(push);
+    engine.listeners.delete(onProject);
     clearInterval(ping);
     clearTimeout(timer);
   });

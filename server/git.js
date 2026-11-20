@@ -186,11 +186,11 @@ const slugify = (name) => (name || 'chat').toLowerCase().replace(/[^a-z0-9]+/g, 
  * base: branch to start from (a local branch, or one only on a remote); default is the checked-out commit.
  * Returns { path, branch, repo, base (commit it started at), from (base branch name) }.
  */
-export async function createWorktree(cwd, name, { base } = {}) {
+export async function createWorktree(cwd, name, { base, at } = {}) {
   if (!(await isGitRepo(cwd))) throw new Error('Worktrees need a git repository');
   const top = (await git(cwd, ['rev-parse', '--show-toplevel'])).trim();
   const id = `${slugify(name)}-${Date.now().toString(36)}`;
-  const dir = path.join(top, '.claude', 'worktrees', id);
+  const dir = at && !fs.existsSync(at) ? at : path.join(top, '.claude', 'worktrees', id); // at: reuse a removed worktree's folder
   const branch = `claude/${id}`;
   let start = 'HEAD';
   if (base) {
@@ -230,6 +230,28 @@ export async function checkoutBranch(cwd, branch) {
   } catch (e) {
     throw new Error(`Couldn't switch ${path.basename(cwd)} to ${branch}: ${e.message.split('\n').slice(0, 3).join(' ')}`);
   }
+}
+
+/** True when removing the worktree loses no commits: it has none of its own, or they are all in its repo's checked-out branch. */
+export async function worktreeMerged(wt) {
+  if (!wt?.path || !fs.existsSync(wt.path)) return false;
+  const repo = wt.repo || (await git(wt.path, ['rev-parse', '--path-format=absolute', '--git-common-dir']).catch(() => '')).trim().replace(/[\\/]\.git$/, '');
+  if (!repo) return false;
+  const head = await revParse(wt.path, 'HEAD').catch(() => null);
+  if (!head) return false;
+  if (head === wt.base) return true; // no commits of its own
+  return git(repo, ['merge-base', '--is-ancestor', head, 'HEAD']).then(() => true, () => false);
+}
+
+/** Files a worktree changed against the commit it started from: committed, staged, unstaged and new. */
+export async function changedFiles(wt, max = 200) {
+  if (!wt?.path || !fs.existsSync(wt.path)) return [];
+  const out = new Set();
+  const add = (txt) => txt.split('\n').map((l) => l.trim()).filter(Boolean).forEach((l) => out.size < max && out.add(l));
+  if (wt.base) add(await git(wt.path, ['diff', '--name-only', wt.base]).catch(() => ''));
+  else add(await git(wt.path, ['diff', '--name-only', 'HEAD']).catch(() => ''));
+  add(await git(wt.path, ['ls-files', '--others', '--exclude-standard']).catch(() => ''));
+  return [...out].sort();
 }
 
 /**

@@ -46,6 +46,7 @@ const ARTIFACTS_PROMPT =
   'use mcp__ui__publish_artifact: path for an existing file, or content for new HTML or Markdown. It opens in a side panel next to this chat and on the Artifacts page. ' +
   'This is the Artifact tool here: use it instead of any claude.ai Artifact tool, unless the user asks for a claude.ai link. ' +
   'HTML and SVG files you create with the Write tool open there automatically too.';
+const MCP_PROJECT = path.join(path.dirname(fileURLToPath(import.meta.url)), 'mcp-project.js');
 const MCP_NOTES = path.join(path.dirname(fileURLToPath(import.meta.url)), 'mcp-notes.js');
 const MCP_SCHEDULE = path.join(path.dirname(fileURLToPath(import.meta.url)), 'mcp-schedule.js');
 
@@ -266,6 +267,23 @@ export class ChatSession {
       fs.appendFile(this.logFile, JSON.stringify(ev) + '\n', () => {});
     }
     this.broadcast({ t: 'ev', ev });
+    // Projects: the engine sees every event of its sessions (turns, prompts, permissions).
+    if (this.meta.cproject) {
+      try {
+        this.store.onRecord?.(this, ev);
+      } catch (e) {
+        console.error('project hook failed', e);
+      }
+    }
+  }
+
+  /** Whether Claude's transcript contains this text (used to confirm a wake was delivered). */
+  transcriptHas(text) {
+    try {
+      return fs.readFileSync(transcriptPath(this.meta.cwd, this.meta.claudeSessionId), 'utf8').includes(text);
+    } catch {
+      return false;
+    }
   }
 
   broadcastState() {
@@ -342,13 +360,16 @@ export class ChatSession {
       ...config.claudeArgs,
     ];
     const builtin = {};
-    if (config.childSessions) builtin.sessions = { type: 'stdio', command: process.execPath, args: [MCP_SCRIPT] };
+    // A session in a Project gets the project tools, its role prompt and the project's folders.
+    const proj = m.cproject ? this.store.projectLaunch?.(this) : null;
+    if (proj) builtin.project = { type: 'stdio', command: process.execPath, args: [MCP_PROJECT, proj.role] };
+    if (config.childSessions && !proj) builtin.sessions = { type: 'stdio', command: process.execPath, args: [MCP_SCRIPT] };
     if (config.schedules) builtin.schedule = { type: 'stdio', command: process.execPath, args: [MCP_SCHEDULE] };
     builtin.ui = { type: 'stdio', command: process.execPath, args: [MCP_UI] };
     if (config.desktopMcp) builtin.notes = { type: 'stdio', command: process.execPath, args: [MCP_NOTES] };
     if (browserAvailable()) builtin.browser = { type: 'stdio', command: process.execPath, args: [MCP_BROWSER] };
     if (Object.keys(builtin).length) args.push('--mcp-config', JSON.stringify({ mcpServers: builtin }));
-    const extra = [ARTIFACTS_PROMPT, builtin.sessions ? this.sessionsPrompt() : '', builtin.notes ? globalNotesPrompt() : ''].filter(Boolean).join('\n\n');
+    const extra = [proj?.prompt, ARTIFACTS_PROMPT, builtin.sessions ? this.sessionsPrompt() : '', builtin.notes ? globalNotesPrompt() : ''].filter(Boolean).join('\n\n');
     if (extra) args.push('--append-system-prompt', extra);
     // Talking to other chats and looking at the browser page never need a prompt; starting
     // sessions, changing their options, and navigating, clicking and typing still ask.
@@ -358,7 +379,12 @@ export class ChatSession {
     if (builtin.schedule) allowed.push('mcp__schedule__list_scheduled_tasks');
     allowed.push('mcp__ui__update_plan', 'mcp__ui__publish_artifact');
     if (builtin.notes) allowed.push(...['list_notes', 'read_note', 'write_note'].map((t) => `mcp__notes__${t}`));
+    if (proj?.allowed) allowed.push(...proj.allowed);
     if (allowed.length) args.push('--allowedTools', allowed.join(','));
+    if (proj?.disallowed?.length) args.push('--disallowedTools', proj.disallowed.join(','));
+    if (proj?.settings) args.push('--settings', JSON.stringify(proj.settings));
+    if (proj && typeof proj.tools === 'string') args.push('--tools', proj.tools);
+    for (const d of proj?.addDirs || []) args.push('--add-dir', d);
     // 'default' is the CLI's normal ask-first mode; newer CLIs call it 'manual', so just omit the flag.
     if (m.permissionMode && m.permissionMode !== 'default') args.push('--permission-mode', m.permissionMode);
     if (m.model) args.push('--model', m.model);
@@ -607,6 +633,7 @@ export class ChatSession {
         break;
       case 'rate_limit_event':
         m.rateLimit = msg.rate_limit_info;
+        if (m.cproject) this.store.onSignal?.(this, 'rate_limit', msg.rate_limit_info);
         this.broadcastState();
         break;
       case 'control_request':
@@ -836,7 +863,7 @@ export class ChatSession {
     if (this.waiting) this.settleWait(this.waiting, { answered: false, reason });
   }
 
-  send({ text, images, refs, from, batch }) {
+  send({ text, images, refs, from, batch, envelope, wake }) {
     if (batch) {
       // Several queued messages (yours and other sessions') sent as one turn, in order.
       text = batch.map((b) => (b.from?.name ? `${fromLabel(b.from)}\n\n${b.text}` : b.text)).join('\n\n---\n\n');
@@ -876,7 +903,9 @@ export class ChatSession {
       prompt = `The user ran these shell commands (output below) before this message:\n${this.shellContext.join('\n\n')}\n\n${prompt}`;
       this.shellContext = [];
     }
-    if (!batch && from?.name) prompt = `${fromLabel(from)}\n\n${prompt}`;
+    // A project wake: the chat shows the readable text, Claude gets the labelled envelope.
+    if (envelope) prompt = envelope;
+    else if (!batch && from?.name) prompt = `${fromLabel(from)}\n\n${prompt}`;
     const content = imgs.length
       ? [...imgs.map((i) => ({ type: 'image', source: { type: 'base64', media_type: i.media_type, data: i.data } })), ...(prompt ? [{ type: 'text', text: prompt }] : [])]
       : prompt;
@@ -892,7 +921,7 @@ export class ChatSession {
     }, 60_000);
     this.watchdog.unref?.();
     if (batch) for (const b of batch) this.record({ k: 'user', text: b.text, images: b.imageData?.length || 0, ...(b.refs?.length ? { refs: b.refs } : {}), ...(b.from ? { from: b.from } : {}) });
-    else this.record({ k: 'user', text, images: imgs.length, ...(chats.length ? { refs: chats.map((c) => ({ id: c.id, name: c.meta.name })) } : {}), ...(from?.name ? { from } : {}) });
+    else this.record({ k: 'user', text, images: imgs.length, ...(chats.length ? { refs: chats.map((c) => ({ id: c.id, name: c.meta.name })) } : {}), ...(from?.name ? { from } : {}), ...(wake ? { wake } : {}) });
     clearTimeout(this.idleTimer);
     this.store.save();
     this.broadcastState();
@@ -1145,12 +1174,12 @@ export class ChatSession {
   }
 
   /** Restart Claude on the same conversation (--resume) and ask it to carry on. */
-  async resume() {
+  async resume({ from } = {}) {
     if (this.proc && (this.turns > 0 || !this.heard)) {
       this.quietExit = true;
       await this.stopAndWait();
     }
-    this.send({ text: 'Continue from where you left off.' });
+    this.send({ text: 'Continue from where you left off.', ...(from ? { from } : {}) });
   }
 
   /** The server is going down: note it in the chat, since the process may outlive our exit handler. */

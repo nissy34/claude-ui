@@ -173,17 +173,43 @@ Set `CW_TRUST_PROXY=1`. WebSockets pass through Caddy without extra config; on n
 
 Then use "Add to Home Screen" for a full-screen app.
 
+## Projects (coordinator + threads)
+
+A **Project** is one conversation with a coordinator that hands work to parallel **threads**, like Projects in Claude Code. Create one with **＋** next to *Projects* in the sidebar: pick folders and the models for each role.
+
+- **Project chat**: you talk to the coordinator. It answers quick questions itself (it can read the code but has no shell or edit tools) and starts threads for real work. Thread cards and decision cards show up inline, with live status.
+- **Threads** are ordinary chats in their own git worktree and branch, started with a brief and the exact words you wrote (cited, not paraphrased). Open one to talk to it directly, answer its permission prompts, or watch it work. A checklist and decision cards sit above its chat.
+- **Overview** groups threads by status: Waiting on you, Ready for review, Working, Queued, Landing, Snoozed, Idle, Resolved. Stop, resolve, snooze or fork a thread from its card.
+- **Suggested threads**: work you didn't ask for but may want (a missing test, a cleanup) arrives as a card with Start and Dismiss instead of a thread.
+- **Notes between threads.** A thread that learns something others could hit (a fix, a gotcha, a reusable helper, a fact, a warning) shares it in one line. The engine hands each note only where it matters: warnings to every open thread, notes naming files to running threads in the same repo whose brief or changed files match, and the rest only to search. Notes arrive at a thread's next wake or, mid-turn, after its next tool call (a PostToolUse HTTP hook); they never start a turn. Your answers to decision cards reach every open thread and memory. Threads resolve with what they learned, search the project before digging (`project_search`), and start with the top search hits and the board in their brief. The coordinator only does judgment: it gets board changes, notes marked for it, and signals (two threads changed the same file, a thread looks stuck, a dependency landed). Context › Activity lists what passed between threads.
+- **Side question** (in a thread's bar) forks the thread into a side thread that looks at the same worktree and answers you there, without interrupting the thread or waking the coordinator.
+- **Move into a project…** (a regular chat's ⋯ menu) turns an existing chat into a thread of a project, keeping its folder, branch and history.
+- **Models per role**: coordinator default Sonnet at low effort, threads Opus at high effort. Change them in the project's Settings; the coordinator can pick a cheaper model per thread for small jobs.
+
+How it works (server/cprojects.js): code, not a model, owns the project. Every input becomes an event in an append-only log (`~/.claude-web/cprojects/<id>/events.jsonl`); a reducer derives statuses; a router decides which session to wake; the engine delivers queued events to an idle session as one labelled envelope per turn and marks it delivered when the CLI echoes it. So:
+
+- Thread results are batched for the coordinator (held 10 s after the last one, at most 60 s, sent at once when no other thread is working). Ten threads finishing together cost one coordinator turn.
+- Proactivity (quiet / normal / chatty) changes routing rules, so it is enforced; what you tell the coordinator ("only tell me when something finishes") is saved as a setting.
+- Every message carries a trust label stamped by the server (principal = you, relay = another Claude, system = the engine) inside a per-session random marker, so a thread's text can't pose as you. Decision cards for steps that can't be undone can only be answered in the web UI. "Always ask before" rules (project Settings > Advanced) still prompt in Auto mode.
+- The coordinator's context is reset to a digest (recent chat, thread table, open cards and promises) past a token threshold; promises it makes ("I'll tell you when both are done") are recorded with `follow_up` and survive the reset.
+- Restarts replay the log: queued wakes are delivered, wakes in flight are re-sent unless the transcript shows them, and turns cut off get a "check what was already done" wake. A session woken more than 20 times in 10 minutes pauses the project.
+- Project memory (`memory/`, one file per subject, versioned writes, generated MEMORY.md) and a shared library folder are given to every session.
+
+The handoff MCP has project tools too: `projects_list`, `project_status`, `project_send`, `project_thread`, `project_message_thread`, `project_answer_decision`, `project_answer_suggestion`, `project_move_chat`, `project_create`, `project_update`.
+
+Tests: `node scripts/test-projects.mjs` runs the engine end to end against a scripted fake CLI (`scripts/fake-claude.mjs`).
+
 ## Claude Desktop handoff
 
 The server is also an MCP server that the Claude Desktop app can use, so the two can hand work to each other. From Desktop you can say "continue this tonight on my machine" (starts a chat here, or leaves the brief in a new chat's message box for you to send later), ask "what did that chat do?", send a chat new instructions, and keep **notes** that every chat here can read and write too (the built-in `notes` tools).
 
 Notes have two scopes:
-- **Project notes** are Claude Code's own memory for that project (`~/.claude/projects/<repo path>/memory/`, one file per note plus the `MEMORY.md` index). Every Claude Code session in the project loads the index, so chats here, the terminal and the Desktop app's Code tab on this machine all see them, and listing a project's notes also shows what Claude remembered by itself. Worktrees share their repo's memory. A user-level `autoMemoryDirectory` setting is respected.
-- **Global notes** (preferences, things that span projects) live in `~/.claude-web/notes.json`; chats here get a short list of them in their system prompt.
+- **Folder notes** are Claude Code's own memory for that folder (`~/.claude/projects/<repo path>/memory/`, one file per note plus the `MEMORY.md` index). Every Claude Code session in the folder loads the index, so chats here, the terminal and the Desktop app's Code tab on this machine all see them, and listing a folder's notes also shows what Claude remembered by itself. Worktrees share their repo's memory. A user-level `autoMemoryDirectory` setting is respected.
+- **Global notes** (preferences, things that span folders) live in `~/.claude-web/notes.json`; chats here get a short list of them in their system prompt.
 
-A chat's notes tools default to its own project (`scope: "global"` for global notes). From Desktop, pass `project` (from `list_projects`) for project notes; leave it out for global notes. Settings > Claude Desktop > Notes lists, adds, edits and deletes both.
+A chat's notes tools default to its own folder (`scope: "global"` for global notes). From Desktop, pass `folder` (from `list_folders`) for folder notes; leave it out for global notes. Settings > Claude Desktop > Notes lists, adds, edits and deletes both.
 
-Tools Desktop gets: `list_projects`, `list_sessions`, `get_session` (transcript, files edited, commands run, uncommitted changes), `handoff`, `send_message`, `stop_session`, `rename_session`, `archive_session`, `set_session_options` (model, effort, permission mode), `list_notes`, `read_note`, `write_note`, `delete_note`. `get_session` also returns the chat's current task list.
+Tools Desktop gets: `list_folders` (the old name `list_projects` still works), `list_sessions`, `get_session` (transcript, files edited, commands run, uncommitted changes), `handoff`, `send_message`, `stop_session`, `rename_session`, `archive_session`, `set_session_options` (model, effort, permission mode), `list_notes`, `read_note`, `write_note`, `delete_note`. `get_session` also returns the chat's current task list.
 
 Chats here get the same session control (`stop_session`, `rename_session`, `archive_session` next to `set_session_options`), and an `update_plan` tool that shows a live task list with a progress bar above the message box.
 

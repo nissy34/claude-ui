@@ -317,6 +317,7 @@ class Store {
   }
 
   shutdown() {
+    this.shuttingDown = true;
     clearInterval(this.saveTimer);
     for (const s of this.sessions.values()) {
       s.saveScreen(true);

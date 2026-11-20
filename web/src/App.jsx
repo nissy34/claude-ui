@@ -11,10 +11,19 @@ import ArtifactsGallery from './ArtifactsGallery.jsx';
 import SigninWindow from './SigninWindow.jsx';
 import { setBrowserAvailable } from './chat/McpAuth.jsx';
 import Scheduled from './Scheduled.jsx';
+import ProjectView, { MoveToProjectDialog, ThreadBar, ThreadConversation } from './project/ProjectView.jsx';
+import { NewProjectDialog } from './project/ProjectSettings.jsx';
 
 function readHash() {
   const m = location.hash.match(/s=([0-9a-f-]{36})/i);
   return m ? m[1] : null;
+}
+// #p=<project id>[&tab=overview|settings]: a Project (coordinator chat + threads).
+function readProjectHash() {
+  const m = location.hash.match(/p=(prj_[\w]+)/);
+  const t = location.hash.match(/tab=(\w+)/);
+  const th = location.hash.match(/[&#]t=([\w-]+)/);
+  return m ? { id: m[1], tab: t ? t[1] : null, thread: th ? th[1] : null } : null;
 }
 
 export default function App() {
@@ -22,6 +31,8 @@ export default function App() {
   const [sessions, setSessions] = useState([]);
   const [projects, setProjects] = useState({ root: '', projects: [] });
   const [activeId, setActiveId] = useState(readHash);
+  const [projectRoute, setProjectRoute] = useState(readProjectHash);
+  const [cprojects, setCprojects] = useState([]);
   const [drawer, setDrawer] = useState(false);
   const [collapsed, setCollapsed] = useState(() => {
     try {
@@ -74,6 +85,10 @@ export default function App() {
       ws.onmessage = (ev) => {
         const msg = JSON.parse(ev.data);
         if (msg.t === 'sessions') setSessions(msg.sessions);
+        else if (msg.t === 'cprojects') {
+          setCprojects(msg.projects);
+          if (msg.changed?.length) window.dispatchEvent(new CustomEvent('cw-cproject-changed', { detail: msg.changed }));
+        } else if (msg.t === 'cproject-notify') notifyUser(msg.title, msg.body || '');
         else if (msg.t === 'signin-page') {
           setSigninInfos((m) => ({ ...m, [msg.id]: msg }));
           setSignin({ open: true, active: msg.id });
@@ -112,7 +127,10 @@ export default function App() {
   }, [authed, loadProjects]);
 
   useEffect(() => {
-    const onHash = () => setActiveId(readHash());
+    const onHash = () => {
+      setActiveId(readHash());
+      setProjectRoute(readProjectHash());
+    };
     window.addEventListener('hashchange', onHash);
     return () => window.removeEventListener('hashchange', onHash);
   }, []);
@@ -120,6 +138,13 @@ export default function App() {
   const select = useCallback((id) => {
     location.hash = id ? `s=${id}` : '';
     setActiveId(id);
+    setProjectRoute(null);
+    setDrawer(false);
+  }, []);
+  const openProject = useCallback((id, tab) => {
+    location.hash = `p=${id}${tab ? `&tab=${tab}` : ''}`;
+    setProjectRoute({ id, tab: tab || null });
+    setActiveId(null);
     setDrawer(false);
   }, []);
 
@@ -158,7 +183,7 @@ export default function App() {
       if (e.key === 'Escape' && dialog && (dialog.type === 'settings' || dialog.type === 'keys')) return setDialog(null);
       // Alt+↑/↓: previous or next chat in the sidebar order (Ctrl+Tab belongs to the browser).
       if (e.altKey && !e.ctrlKey && !e.metaKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
-        const list = sessions.filter((x) => !x.archived && x.kind !== 'shell');
+        const list = sessions.filter((x) => !x.archived && x.kind !== 'shell' && !x.cproject);
         const i = list.findIndex((x) => x.id === activeId);
         const next = list[(i + (e.key === 'ArrowDown' ? 1 : -1) + list.length) % list.length];
         if (next) (e.preventDefault(), select(next.id));
@@ -186,9 +211,9 @@ export default function App() {
   const active = sessions.find((s) => s.id === activeId) || null;
 
   useEffect(() => {
-    const waiting = sessions.filter((s) => s.state === 'waiting' || s.attention).length;
+    const waiting = sessions.filter((s) => !s.cproject && (s.state === 'waiting' || s.attention)).length + cprojects.reduce((n, p) => n + (p.attention || 0), 0);
     document.title = `${waiting ? `(${waiting}) ` : ''}${active ? active.name + ' · ' : ''}Claude Web`;
-  }, [active, sessions]);
+  }, [active, sessions, cprojects]);
 
   if (authed === null) return <div className="splash" />;
   if (!authed) return <Login onLogin={() => setAuthed(true)} />;
@@ -209,6 +234,10 @@ export default function App() {
         onCustomize={() => (setDrawer(false), setDialog({ type: 'settings', tab: 'plugins' }))}
         onArtifacts={() => (setDrawer(false), setDialog({ type: 'artifacts' }))}
         onScheduled={() => (setDrawer(false), setDialog({ type: 'scheduled' }))}
+        cprojects={cprojects}
+        activeProjectId={projectRoute?.id}
+        onOpenProject={(id) => openProject(id)}
+        onNewProject={() => (setDrawer(false), setDialog({ type: 'new-project' }))}
         onError={showError}
         onLogout={async () => {
           await api('/api/logout', { method: 'POST' }).catch(() => {});
@@ -219,8 +248,21 @@ export default function App() {
       />
       <div className="scrim" onClick={() => setDrawer(false)} />
       <main className="main">
-        {active && active.kind === 'chat' ? (
-          <ChatView key={active.id} session={active} sessions={sessions} onSelect={select} onCreate={createSession} onSettings={(tab) => setDialog({ type: 'settings', tab })} {...common} />
+        {projectRoute && !active ? (
+          <ProjectView key={projectRoute.id} projectId={projectRoute.id} tab={projectRoute.tab} thread={projectRoute.thread} projects={projects} onSelect={select} onMenu={openMenu} onError={showError} onDeleted={() => select(null)} />
+        ) : active && active.kind === 'chat' ? (
+          <ChatView
+            key={active.id}
+            session={active}
+            sessions={sessions}
+            onSelect={select}
+            onCreate={createSession}
+            onSettings={(tab) => setDialog({ type: 'settings', tab })}
+            projectBar={active.cproject ? ({ view, setView }) => <ThreadBar session={active} onSelect={select} onError={showError} view={view} setView={active.role === 'thread' ? setView : null} /> : null}
+            projectConversation={active.cproject && active.role === 'thread' ? <ThreadConversation session={active} onSelect={select} onError={showError} /> : null}
+            onMoveToProject={active.cproject ? null : () => setDialog({ type: 'move-project', session: active })}
+            {...common}
+          />
         ) : active ? (
           <TerminalView key={active.id} session={active} onCreate={createSession} onSelect={select} {...common} />
         ) : (
@@ -243,6 +285,19 @@ export default function App() {
       {dialog?.type === 'history' && <HistoryDialog path={dialog.path} onCreate={createSession} onClose={() => setDialog(null)} onError={showError} />}
       {dialog?.type === 'settings' && <Settings initialTab={dialog.tab} projects={projects} activeCwd={active?.cwd} onClose={() => setDialog(null)} onError={showError} onKeys={() => setDialog({ type: 'keys' })} />}
       {dialog?.type === 'keys' && <Shortcuts onClose={() => setDialog(null)} />}
+      {dialog?.type === 'move-project' && <MoveToProjectDialog session={dialog.session} onClose={() => setDialog(null)} onError={showError} onMoved={() => setDialog(null)} />}
+      {dialog?.type === 'new-project' && (
+        <NewProjectDialog
+          projects={projects}
+          defaultFolder={active?.project && !active.noFolder ? active.project : ''}
+          onClose={() => setDialog(null)}
+          onError={showError}
+          onCreated={(p) => {
+            setDialog(null);
+            openProject(p.id);
+          }}
+        />
+      )}
       {dialog?.type === 'artifacts' && (
         <ArtifactsGallery
           onClose={() => setDialog(null)}

@@ -4,6 +4,7 @@ import { getThemePref, setThemePref } from './theme.js';
 import { Button, IconButton, Menu, Modal, ModalHead, useDismiss } from './ui/index.jsx';
 import { promptDialog } from './ui/dialogs.jsx';
 import { deleteChat } from './chat/deleteChat.js';
+import { ProjectList } from './project/ProjectView.jsx';
 
 function dotState(s) {
   if (s.kind === 'chat') {
@@ -24,7 +25,7 @@ export function baseName(p) {
   return (p || '').split(/[\\/]/).filter(Boolean).pop() || p;
 }
 
-export default function Sidebar({ sessions, activeId, onSelect, onCreate, onNewChat, onHistory, onSettings, onArtifacts, onScheduled, onCustomize, onLogout, onClose, onCollapse, onError }) {
+export default function Sidebar({ sessions, activeId, onSelect, onCreate, onNewChat, onHistory, onSettings, onArtifacts, onScheduled, onCustomize, onLogout, onClose, onCollapse, onError, cprojects = [], activeProjectId, onOpenProject, onNewProject }) {
   const [q, setQ] = useState('');
   const [showArchived, setShowArchived] = useState(false);
   const [collapsed, setCollapsed] = useState(() => {
@@ -50,6 +51,7 @@ export default function Sidebar({ sessions, activeId, onSelect, onCreate, onNewC
     const needle = q.trim().toLowerCase();
     const visible = sessions.filter((s) => {
       if (s.kind === 'shell' && s.parentId) return false; // a chat's terminal drawer
+      if (s.cproject && !needle) return false; // a Project's coordinator and threads live under Projects
       if (!!s.archived !== showArchived) return false;
       if (needle && !`${s.name} ${s.cwd}`.toLowerCase().includes(needle)) return false;
       return true;
@@ -223,8 +225,9 @@ export default function Sidebar({ sessions, activeId, onSelect, onCreate, onNewC
             ))}
           </div>
         )}
-        {groups.length > 0 && !q && <div className="section-head">Projects</div>}
-        {groups.length === 0 && <div className="side-empty">{q ? 'No matching chats' : showArchived ? 'No archived chats' : 'No chats yet. Start one with New chat.'}</div>}
+        {!q && !showArchived && <ProjectList projects={cprojects} activeId={activeProjectId} onOpen={onOpenProject} onNew={onNewProject} />}
+        {groups.length > 0 && !q && <div className="section-head">Chats</div>}
+        {groups.length === 0 && !(cprojects.length && !q && !showArchived) && <div className="side-empty">{q ? 'No matching chats' : showArchived ? 'No archived chats' : 'No chats yet. Start one with New chat.'}</div>}
         {groups.map((g) => (
           <div key={g.path} className="group">
             <div className="group-head">
