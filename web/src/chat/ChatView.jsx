@@ -599,7 +599,8 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
   const lastError = [...items].reverse().find((i) => i.type === 'error' || i.type === 'result');
   const authProblem = lastError && (lastError.type === 'error' || lastError.isError) && AUTH_RE.test(lastError.text || '');
   const parent = meta.parentId && sessions.find((s) => s.id === meta.parentId);
-  const showRail = rail && !projectConversation && (!panel || roomy);
+  // A wide panel (or one split side by side) needs the room: the rail steps aside.
+  const showRail = rail && !projectConversation && (!panel || (roomy && !wide));
   const children = sessions.filter((s) => s.parentId === session.id && s.kind === 'chat');
   const drawerSession = sessions.find((s) => s.parentId === session.id && s.kind === 'shell');
 
@@ -826,6 +827,7 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
                   if (showRail) return toggleRail(false);
                   toggleRail(true);
                   if (panel && !roomy) setPanel(null);
+                  else if (panel && wide) setWide(false);
                 }}
               >
                 ▤ <span className="lbl hide-mobile">Details</span>
