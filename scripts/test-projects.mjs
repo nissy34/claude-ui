@@ -88,10 +88,10 @@ async function stop() {
 async function main() {
   await start();
   console.log('Create a project');
-  let { project } = await api('/api/cprojects', { method: 'POST', body: { name: 'Demo', goal: 'Test the engine', folders: [repo], models: { coordinator: { model: 'haiku', effort: 'low' }, thread: { model: 'sonnet', effort: 'medium' } }, policy: { maxRunning: 1 } } });
+  let { project } = await api('/api/cprojects', { method: 'POST', body: { name: 'Demo', goal: 'Test the engine', folders: [repo], models: { coordinator: { model: 'haiku', effort: 'low' }, thread: { model: 'sonnet', effort: 'medium' } } } });
   const id = project.id;
   check(project.coordinatorId, 'coordinator session exists');
-  check(project.settings.policy.maxRunning === 1, 'cap saved');
+  check(project.settings.policy.maxRunning === undefined && project.settings.policy.budgetUsd === undefined, 'no running cap or budget settings');
   const sessions = (await api('/api/sessions')).sessions;
   const coord = sessions.find((s) => s.id === project.coordinatorId);
   check(coord?.model === 'haiku' && coord?.effort === 'low' && coord?.cproject === id, 'coordinator uses the coordinator model and effort', coord);
@@ -102,12 +102,15 @@ async function main() {
     const d = await detail(id);
     return d.feed.some((e) => e.type === 'chat.post') && d;
   }, 10_000, 'coordinator reply');
+  const coordArgv = fs.readFileSync(env.FAKE_CLAUDE_LOG, 'utf8').trim().split('\n').map((l) => JSON.parse(l)).find((x) => x.argv && x.sessionId && x.argv.includes('coordinator') === false && x.argv.join(' ').includes('mcp-project.js","coordinator'))?.argv;
+  const ti = coordArgv ? coordArgv.indexOf('--tools') : -1;
+  check(ti >= 0 && coordArgv[ti + 1] === '' && !coordArgv.some((a) => String(a).endsWith('/demo')), 'the coordinator runs with no built-in tools and no checkout of the repo', coordArgv);
   const post = project.feed.find((e) => e.type === 'chat.post');
   check(post.body.auto && /ok: <project-digest>|ok: <project-wake/.test(post.body.text), 'auto post from final text', post.body);
 
-  console.log('Coordinator starts two threads; cap 1 queues the second');
+  console.log('Coordinator starts two threads');
   const briefA = [call('update_checklist', { title: 'A', steps: [{ step: 'one', status: 'completed' }, { step: 'two', status: 'in_progress' }] }), '@@sleep 1500', call('post_message', { kind: 'result', text: 'A is done' })].join('\n');
-  const briefB = [call('post_message', { kind: 'result', text: 'B is done' }), call('resolve', {})].join('\n');
+  const briefB = [call('post_message', { kind: 'result', text: 'B is done' }), call('resolve', { learned: [] })].join('\n');
   const msg = [call('start_thread', { title: 'Thread A', brief: briefA }), call('start_thread', { title: 'Thread B', brief: briefB }), call('start_thread', { title: 'Thread B', brief: briefB }), call('post_message', { text: 'Started A and B' })].join('\n');
   await api(`/api/cprojects/${id}/messages`, { method: 'POST', body: { text: msg } });
   project = await until(async () => {
@@ -124,16 +127,15 @@ async function main() {
     const d = await detail(id);
     const a = d.threads.find((t) => t.id === A.id);
     const b = d.threads.find((t) => t.id === B.id);
-    return a.status === 'working' && d;
-  }, 5000, 'A working');
-  check(project.threads.find((t) => t.id === B.id).status === 'queued', 'B is queued while A runs (cap 1)', project.threads.map((t) => [t.title, t.status]));
+    return a.status === 'working' && a.progress && d;
+  }, 5000, 'A working with its checklist');
   check(project.threads.find((t) => t.id === A.id).progress?.total === 2, 'checklist shows on the thread', project.threads.find((t) => t.id === A.id).checklist);
 
   project = await until(async () => {
     const d = await detail(id);
     return d.threads.find((t) => t.id === B.id).status === 'resolved' && d.threads.find((t) => t.id === A.id).status === 'idle' && d;
   }, 15_000, 'both threads done');
-  check(true, 'A finished, then B ran and resolved itself');
+  check(true, 'both threads ran in parallel; B resolved itself');
   const ev = await until(async () => {
     const log = fs.readFileSync(path.join(env.CW_DATA_DIR, 'cprojects', id, 'events.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
     const coordWakes = log.filter((e) => e.type === 'wake.sent' && e.body.session === project.coordinatorId);
@@ -144,8 +146,9 @@ async function main() {
   const delivered = ev.filter((e) => e.type === 'wake.delivered').length;
   const sent = ev.filter((e) => e.type === 'wake.sent').length;
   check(delivered === sent, `every wake was acknowledged by the CLI echo (${delivered}/${sent})`);
-  const prompts = fs.readFileSync(env.FAKE_CLAUDE_LOG, 'utf8').trim().split('\n').map((l) => JSON.parse(l)).filter((x) => x.prompt);
-  const coordPrompt = prompts.find((x) => x.prompt.includes('[result] status now') && x.prompt.includes('A is done'));
+  const readPrompts = () => fs.readFileSync(env.FAKE_CLAUDE_LOG, 'utf8').trim().split('\n').map((l) => JSON.parse(l)).filter((x) => x.prompt);
+  const coordPrompt = await until(() => readPrompts().find((x) => x.prompt.includes('[result] status now') && x.prompt.includes('A is done')), 8000, 'coordinator prompt with results').catch(() => null);
+  const prompts = readPrompts();
   check(coordPrompt && /trust: relay/.test(coordPrompt.prompt), 'coordinator sees thread results with trust relay', coordPrompt?.prompt);
   const userPrompt = prompts.find((x) => x.prompt.includes('hello there'));
   check(/trust: principal/.test(userPrompt.prompt) && /<project-digest>/.test(userPrompt.prompt), 'first coordinator wake has a digest and the user message as principal');
@@ -196,38 +199,47 @@ async function main() {
   check(sent2.ok, 'project_send');
   await until(() => fs.readFileSync(env.FAKE_CLAUDE_LOG, 'utf8').includes('Claude Desktop, on behalf of the user · trust: relay'), 8000, 'desktop message labelled relay');
   check(true, 'desktop message reaches the coordinator labelled relay');
-  const created = await mcp('project_create', { name: 'From MCP', folders: ['demo'], thread_model: 'haiku', max_running: 2 });
-  check(created.project_id && created.settings.models.thread.model === 'haiku' && created.settings.policy.maxRunning === 2, 'project_create', created);
+  const created = await mcp('project_create', { name: 'From MCP', folders: ['demo'], thread_model: 'haiku' });
+  check(created.project_id && created.settings.models.thread.model === 'haiku', 'project_create', created);
 
   console.log('Memory');
   const memBrief = [call('memory_write', { name: 'Build Steps', description: 'How to build', content: 'npm run build' }), call('memory_write', { name: 'build-steps', description: 'How to build', content: 'other' })].join('\n');
   await api(`/api/cprojects/${id}/threads`, { method: 'POST', body: { title: 'Thread M', brief: memBrief } });
-  await until(async () => (await api(`/api/cprojects/${id}/memory`)).files.length === 1, 8000, 'memory file');
+  await until(async () => (await api(`/api/cprojects/${id}/memory`)).files.some((f) => f.name === 'build-steps'), 8000, 'memory file');
   const mem = await api(`/api/cprojects/${id}/memory/build-steps`);
   check(mem.content === 'npm run build', 'second write without base_version was refused (no lost update)', mem);
   const idx = fs.readFileSync(path.join(env.CW_DATA_DIR, 'cprojects', id, 'memory', 'MEMORY.md'), 'utf8');
   check(idx.includes('[build-steps](build-steps.md): How to build'), 'MEMORY.md generated from frontmatter', idx);
+  const pin = await api(`/api/cprojects/${id}/memory-pinned`, { method: 'PUT', body: { text: '- Staging: https://staging.example.com' } });
+  const idx2 = fs.readFileSync(path.join(env.CW_DATA_DIR, 'cprojects', id, 'memory', 'MEMORY.md'), 'utf8');
+  check(pin.cap === 16384 && idx2.includes('## Pinned\n- Staging') && idx2.includes('[build-steps]'), 'MEMORY.md keeps a pinned part next to the file lines', idx2);
+  const big = await api(`/api/cprojects/${id}/memory-pinned`, { method: 'PUT', body: { text: 'x'.repeat(17000) }, allowError: true });
+  check(/16 KB/.test(big.error || ''), 'MEMORY.md is capped at 16 KB', big);
+  await api(`/api/cprojects/${id}/memory/team-prefs`, { method: 'PUT', body: { description: 'How the team likes work done', content: 'Small PRs. See [[build-steps]].', type: 'feedback' } });
+  const typed = await api(`/api/cprojects/${id}/memory/team-prefs`);
+  check(typed.type === 'feedback' && typed.modified, 'memory files keep a type and modified time', typed);
 
   console.log('Restart: state and queued wakes survive');
-  await api(`/api/cprojects/${id}`, { method: 'PATCH', body: { policy: { maxRunning: 1 } } });
   const slow = ['@@sleep 4000', call('post_message', { kind: 'result', text: 'slow done' })].join('\n');
-  await api(`/api/cprojects/${id}/threads`, { method: 'POST', body: { title: 'Slow', brief: slow } });
-  await api(`/api/cprojects/${id}/threads`, { method: 'POST', body: { title: 'After restart', brief: call('post_message', { kind: 'result', text: 'after restart done' }) } });
-  await sleep(1000);
+  const slowT = (await api(`/api/cprojects/${id}/threads`, { method: 'POST', body: { title: 'Slow', brief: slow } })).thread;
+  await until(async () => (await detail(id)).threads.find((t) => t.id === slowT.id)?.status === 'working', 8000, 'slow working');
+  // A message for a busy thread waits in its queue.
+  await api(`/api/cprojects/${id}/threads/${slowT.id}/message`, { method: 'POST', body: { text: call('post_message', { kind: 'result', text: 'after restart done' }) } });
+  await sleep(300);
   const before = await detail(id);
-  check(before.threads.find((t) => t.title === 'After restart').status === 'queued', 'second thread queued before restart', before.threads.map((t) => [t.title, t.status]));
+  check(before.threads.find((t) => t.id === slowT.id).queuedWakes > 0, 'a message for a busy thread is queued before the restart', before.threads.map((t) => [t.title, t.status, t.queuedWakes]));
   await stop();
   await start();
   await until(async () => {
     const d = await detail(id);
-    return d.threads.find((t) => t.title === 'After restart').lastPost?.text === 'after restart done';
+    return d.threads.find((t) => t.id === slowT.id).lastPost?.text === 'after restart done';
   }, 20_000, 'queued thread runs after restart');
   check(true, 'queued wake delivered after a restart');
   const got = await until(() => fs.readFileSync(env.FAKE_CLAUDE_LOG, 'utf8').includes('Your last turn was interrupted'), 10_000, 'interrupted wake').catch(() => false);
   check(got, 'interrupted thread got the "check before repeating" wake');
 
-  console.log('Suggested threads, side questions, moving a chat in, budget');
-  const { project: q } = await api('/api/cprojects', { method: 'POST', body: { name: 'Extras', folders: [repo], policy: { maxRunning: 3 } } });
+  console.log('Suggested threads, side questions, moving a chat in');
+  const { project: q } = await api('/api/cprojects', { method: 'POST', body: { name: 'Extras', folders: [repo] } });
   const sugBrief = call('post_message', { kind: 'result', text: 'suggested done' });
   await api(`/api/cprojects/${q.id}/messages`, { method: 'POST', body: { text: [call('suggest_thread', { title: 'Suggested one', brief: sugBrief, reason: 'worth it' }), call('suggest_thread', { title: 'Suggested two', brief: 'never' }), call('post_message', { text: 'suggested two' })].join('\n') } });
   let qd = await until(async () => {
@@ -249,6 +261,11 @@ async function main() {
     const t = d.threads.find((x) => x.id === started.thread.id);
     return t?.lastPost?.text === 'suggested done' && t;
   }, 10_000, 'suggested thread ran');
+  await api(`/api/cprojects/${q.id}/threads/${T1.id}/message`, { method: 'POST', body: { text: `steer it\n${call('post_message', { kind: 'result', text: 'steered done' })}` } });
+  await until(async () => (await detail(q.id)).threads.find((x) => x.id === T1.id)?.lastPost?.text === 'steered done', 10_000, 'steered thread replied');
+  check(true, 'steering a thread from the project page delivers to that thread');
+  const sfeed = (await api(`/api/cprojects/${q.id}/threads/${T1.id}/feed`)).feed;
+  check(sfeed.some((e) => e.type === 'user.message' && e.body.where === 'steer'), 'the steer message shows in the thread feed', sfeed.map((e) => e.type));
   const side = await api(`/api/cprojects/${q.id}/threads/${T1.id}/side`, { method: 'POST', body: { question: `what is up?\n${call('post_message', { kind: 'result', text: 'side answer' })}` } });
   check(side.thread?.sideOf === T1.id && side.thread.cwd === T1.cwd, 'a side question forks the thread and uses its worktree', side.thread);
   qd = await until(async () => {
@@ -264,20 +281,190 @@ async function main() {
   check(plainNow.cproject === q.id && plainNow.role === 'thread', 'the moved chat is now a project thread', plainNow);
   const twice = await api(`/api/cprojects/${q.id}/adopt`, { method: 'POST', body: { session: plain.id }, allowError: true });
   check(/already in this project/.test(twice.error || ''), 'a chat moves in only once', twice);
-  const spent = (await detail(q.id)).usage.total;
-  await api(`/api/cprojects/${q.id}`, { method: 'PATCH', body: { policy: { budgetUsd: Math.round((spent + 0.0005) * 10_000) / 10_000 } } });
-  await api(`/api/cprojects/${q.id}/messages`, { method: 'POST', body: { text: 'one more' } });
-  qd = await until(async () => {
-    const d = await detail(q.id);
-    return d.paused && d;
-  }, 10_000, 'budget pause');
-  check(/budget/.test(qd.paused.reason) && qd.feed.some((e) => e.type === 'budget.reached'), 'reaching the budget pauses the project', qd.paused);
+
+  console.log('Coordination: notes, search, warm briefs, board, signals');
+  await coordination();
+  await steering();
 
   await stop();
   console.log(`\n${passes} passed, ${failures} failed`);
   if (!process.env.KEEP) fs.rmSync(tmp, { recursive: true, force: true });
   else console.log(`kept ${tmp}`);
   process.exit(failures ? 1 : 0);
+}
+
+const fakeLog = () =>
+  fs
+    .readFileSync(env.FAKE_CLAUDE_LOG, 'utf8')
+    .split('\n')
+    .filter(Boolean)
+    .map((l) => {
+      try {
+        return JSON.parse(l);
+      } catch {
+        return {};
+      }
+    });
+
+async function steering() {
+  console.log('Follow-ups reach a busy thread mid-turn; pause, restart');
+  const { project: r } = await api('/api/cprojects', { method: 'POST', body: { name: 'Steer', folders: [repo] } });
+  const startT = async (title, brief) => (await api(`/api/cprojects/${r.id}/threads`, { method: 'POST', body: { title, brief } })).thread;
+  const A = await startT('Guide', ['Write the guide', '@@sleep 1500', call('board', {}), '@@say guide written'].join('\n'));
+  await until(async () => (await detail(r.id)).threads.find((t) => t.id === A.id)?.status === 'working', 8000, 'A working');
+  await api(`/api/cprojects/${r.id}/threads/${A.id}/message`, { method: 'POST', body: { text: 'STEER-ONE also cover the tests' } });
+  await until(() => fakeLog().some((l) => l.hookContext?.includes('STEER-ONE')), 8000, 'mid-turn message');
+  check(true, 'a message for a busy thread reaches it at its next tool call, not after its turn');
+  await until(async () => (await detail(r.id)).threads.find((t) => t.id === A.id)?.status !== 'working', 8000, 'A done');
+  await sleep(800);
+  check(!fakeLog().some((l) => l.prompt?.includes('STEER-ONE') && l.prompt.includes('user.message')), 'it is not delivered a second time as a new turn', fakeLog().filter((l) => l.prompt?.includes('STEER-ONE')).map((l) => l.prompt.slice(0, 1500)));
+  // resolve waits for a message that arrived meanwhile
+  const B = await startT('Resolver', ['Do it', '@@sleep 1500', call('resolve', { summary: 'done', learned: [] })].join('\n'));
+  await until(async () => (await detail(r.id)).threads.find((t) => t.id === B.id)?.status === 'working', 8000, 'B working');
+  await api(`/api/cprojects/${r.id}/threads/${B.id}/message`, { method: 'POST', body: { text: 'STEER-TWO one more thing' } });
+  const res = await until(() => fakeLog().find((l) => l.call === 'project__resolve' && l.result?.includes('STEER-TWO')), 8000, 'resolve refused');
+  check(JSON.parse(res.result).resolved === false, 'resolve hands over a waiting message instead of resolving', res.result.slice(0, 200));
+  check((await detail(r.id)).threads.find((t) => t.id === B.id).status !== 'resolved', 'the thread stays open');
+  // Custom view: a thread pins a page it wrote; the tab shows it; the user can remove it.
+  const V = await startT('Dashboard', ['Make a dashboard', '@@write view/dash.html <h1>Threads</h1>', call('pin_view', { path: 'view/dash.html', title: 'Threads dashboard' }), '@@say pinned'].join('\n'));
+  const vd = await until(async () => { const d = await detail(r.id); return d.view?.url && d; }, 8000, 'view pinned');
+  check(vd.view.title === 'Threads dashboard' && vd.view.path.endsWith('view/dash.html') && vd.view.url.startsWith('/raw/'), 'pin_view pins a page as the Custom view', vd.view);
+  const page = await fetch(base + vd.view.url, { headers: { cookie } }).then((x) => x.text());
+  check(page.includes('<h1>Threads</h1>'), 'the view URL serves the page', page.slice(0, 80));
+  const dataUrl = fakeLog().map((l) => (l.argv || []).join(' ')).filter((a) => a.includes('/view-data/') && a.includes('"Steer"')).pop()?.match(/\/view-data\/[^\s)]+\.json/)?.[0];
+  check(dataUrl, 'threads are told the live data URL for pages');
+  if (dataUrl) {
+    const live = await fetch(base + dataUrl).then((x) => x.json());
+    check(live.threads?.some((t) => t.title === 'Dashboard') && live.project === 'Steer', 'the data URL serves the live board without a login', live);
+    check((await fetch(base + dataUrl.replace(/\/[^/]+\.json$/, '/bad.json'))).status === 404, 'a wrong signature gets nothing');
+  }
+  await api(`/api/cprojects/${r.id}/view`, { method: 'POST', body: { remove: true } });
+  check(!(await detail(r.id)).view, 'Remove takes the tab away');
+  await api(`/api/cprojects/${r.id}/view`, { method: 'POST', body: {} });
+  check((await detail(r.id)).view?.empty, 'adding the tab without a page shows the empty state');
+  void V;
+  // Review fixes: follow_up waits for a real change; "memory" is reserved; unknown view-data is a 404.
+  await api(`/api/cprojects/${r.id}/messages`, { method: 'POST', body: { text: call('follow_up', { thread_ids: [B.id], note: 'tell the user when B settles' }) } });
+  await until(() => fakeLog().some((l) => l.call === 'project__follow_up' && l.result.includes('follow_up_id')), 8000, 'follow_up recorded');
+  await sleep(1500);
+  check((await detail(r.id)).followUps.length === 1, 'a follow_up on a settled thread does not fire at the next turn end');
+  const reserved = await api(`/api/cprojects/${r.id}/memory/MEMORY`, { method: 'PUT', body: { description: 'x', content: 'y' }, allowError: true });
+  check(/reserved/.test(reserved.error || ''), 'a memory file called "memory" is refused (it is the index)', reserved);
+  check((await fetch(base + '/view-data/prj_nope/abc.json')).status === 404, 'view data for an unknown project is a 404');
+  // pause / restart the coordinator
+  await api(`/api/cprojects/${r.id}/pause`, { method: 'POST' });
+  check((await detail(r.id)).paused, 'Pause pauses the project');
+  await api(`/api/cprojects/${r.id}/resume`, { method: 'POST' });
+  await api(`/api/cprojects/${r.id}/restart-coordinator`, { method: 'POST' });
+  const d = await detail(r.id);
+  check(!d.paused && d.feed.some((e) => e.type === 'coordinator.rotated' && e.body.manual), 'Resume, then Restart starts the coordinator over', d.feed.slice(-3).map((e) => e.type));
+}
+
+async function coordination() {
+  const { project: r } = await api('/api/cprojects', { method: 'POST', body: { name: 'Coord', folders: [repo] } });
+  const startT = async (title, brief, extra = {}) => (await api(`/api/cprojects/${r.id}/threads`, { method: 'POST', body: { title, brief, ...extra } })).thread;
+  // A running thread whose brief names lib/util.js gets a matching note mid-turn (PostToolUse hook).
+  const U = await startT('Util helpers', ['Improve the parsing helpers in lib/util.js', '@@write lib/util.js export const a = 1', '@@sleep 2500', call('board', {})].join('\n'));
+  await until(async () => (await detail(r.id)).threads.find((t) => t.id === U.id)?.status === 'working', 8000, 'U working');
+  const noteText = 'parseX in lib/util.js trims input now; callers must not trim again';
+  const S = await startT('Parser cleanup', [call('share', { note: noteText, kind: 'gotcha', files: ['lib/util.js'] }), call('share', { note: noteText, kind: 'fix', files: ['./lib/util.js'] }), call('share', { note: 'the staging database resets every night at 02:00', kind: 'fact' }), '@@say shared'].join('\n'));
+  await until(() => fakeLog().some((l) => l.call === 'project__share' && l.input.note === noteText), 8000, 'share call');
+  const shares = fakeLog().filter((l) => l.call === 'project__share');
+  const first = JSON.parse(shares.find((l) => l.input.note === noteText).result);
+  check(first.delivered_to?.includes('Util helpers'), 'a gotcha naming a file goes to the running thread whose brief names it', first);
+  await until(() => fakeLog().filter((l) => l.call === 'project__share').length >= 3, 8000, 'three shares');
+  const all = fakeLog().filter((l) => l.call === 'project__share').map((l) => JSON.parse(l.result));
+  check(all.some((x) => x.merged), 'an identical note is merged, not sent twice', all);
+  const fact = all.find((x) => !x.merged && x.note_id && !x.delivered_to?.length);
+  check(fact, 'a note naming no files or repo is pushed to nobody (search only)', all);
+  await until(() => fakeLog().some((l) => l.hookContext?.includes('parseX in lib/util.js')), 8000, 'hook delivery');
+  check(true, 'the note reaches the running thread at its next tool call through the hook');
+  let rd = await until(async () => {
+    const d = await detail(r.id);
+    return d.threads.find((t) => t.id === U.id)?.changedFiles?.includes('lib/util.js') && d;
+  }, 10_000, 'changed files');
+  check(true, "a thread's changed files come from git after its turn");
+  check(rd.activity.some((a) => a.type === 'delivered' && a.to === U.id && a.via === 'tool'), 'the handover shows in the project activity', rd.activity.slice(0, 5));
+  const ufeed = (await api(`/api/cprojects/${r.id}/threads/${U.id}/feed`)).feed;
+  check(ufeed.some((e) => e.type === 'notes.delivered' && e.body.notes?.[0]?.text === noteText), "the handover shows as an activity row in the receiving thread's feed", ufeed.map((e) => e.type));
+
+  // Search finds notes and reports; a new thread starts warm with the hits.
+  const hits = (await api(`/api/cprojects/${r.id}/search?q=${encodeURIComponent('parseX trims')}`)).hits;
+  check(hits.some((h) => h.source.startsWith('note:')), 'project search finds the note', hits);
+  const W = await startT('Fix parseX callers', 'Remove the extra trim in callers of parseX\n@@say warm');
+  await until(() => fakeLog().some((l) => l.prompt?.includes(`thread_id ${W.id}`) && l.prompt.includes('Possibly relevant')), 8000, 'warm brief');
+  const warm = fakeLog().find((l) => l.prompt?.includes(`thread_id ${W.id}`) && l.prompt.includes('Possibly relevant'));
+  check(warm.prompt.includes('parseX in lib/util.js trims') && warm.prompt.includes('Other open threads right now'), 'a new thread starts with search hits on its brief and the board', warm.prompt.slice(0, 600));
+
+  // A warning reaches an idle thread at its next wake, inside the envelope.
+  await until(async () => (await detail(r.id)).threads.find((t) => t.id === U.id)?.status !== 'working', 10_000, 'U idle');
+  await startT('Main branch guard', [call('share', { note: 'main is broken until the lockfile PR lands; do not rebase on it', kind: 'warning' }), '@@say warned'].join('\n'));
+  await until(async () => ((await detail(r.id)).threads.find((t) => t.id === U.id)?.pendingNotes || 0) > 0, 8000, 'warning queued for U');
+  await api(`/api/cprojects/${r.id}/threads/${U.id}/message`, { method: 'POST', body: { text: '@@say got it' } });
+  await until(() => fakeLog().some((l) => l.prompt?.includes('main is broken until the lockfile PR lands') && l.prompt.includes('Project notes')), 8000, 'warning in wake');
+  check(true, 'a warning reaches an idle thread at its next wake');
+
+  // Two threads changing the same file: an overlap signal for the coordinator.
+  const V = await startT('Util docs', '@@write lib/util.js export const b = 2\n@@say wrote');
+  rd = await until(async () => {
+    const d = await detail(r.id);
+    return d.activity.some((a) => a.type === 'signal' && a.kind === 'overlap') && d;
+  }, 10_000, 'overlap signal');
+  const sig = rd.activity.find((a) => a.type === 'signal' && a.kind === 'overlap');
+  check(sig.threads.includes(U.id) && sig.threads.includes(V.id), 'an overlap signal names both threads', sig);
+  await until(() => fakeLog().some((l) => l.sessionId && l.prompt?.includes('Signal (file overlap)')), 10_000, 'coordinator gets the signal');
+  check(true, 'the coordinator is woken with the overlap signal');
+  check(fakeLog().some((l) => l.prompt?.includes('board changes since your last turn') || l.prompt?.includes('<project-digest>')), 'coordinator wakes carry the board (digest first, then changes)');
+
+  // A dependency that lands wakes the waiting thread directly.
+  const D = await startT('Use parser cleanup', '@@say waiting for the cleanup', { dependsOn: [S.id] });
+  await until(async () => (await detail(r.id)).threads.find((t) => t.id === D.id)?.status === 'idle', 8000, 'D idle');
+  await api(`/api/cprojects/${r.id}/threads/${S.id}/resolve`, { method: 'POST' });
+  await until(() => fakeLog().some((l) => l.prompt?.includes('which you depend on, has resolved')), 8000, 'dependency landed');
+  check(true, 'resolving a thread wakes the thread that depends on it');
+
+  // The same command failing three times is a stuck signal.
+  const F = await startT('Run the tests', ['@@bashfail npm test', '@@bashfail npm test', '@@bashfail npm test', '@@say failing'].join('\n'));
+  rd = await until(async () => {
+    const d = await detail(r.id);
+    return d.activity.some((a) => a.type === 'signal' && a.kind === 'stuck' && a.threads.includes(F.id)) && d;
+  }, 10_000, 'stuck signal');
+  check(true, 'a command failing three times raises a stuck signal');
+
+  // resolve needs learned; learned goes to memory and is shared.
+  const L = await startT('Learned resolve', [call('resolve', {}), call('resolve', { summary: 'all done', learned: [{ note: 'tests need NODE_ENV=test or the config loader throws', kind: 'gotcha', files: ['config.js'] }] })].join('\n'));
+  rd = await until(async () => {
+    const d = await detail(r.id);
+    return d.threads.find((t) => t.id === L.id)?.status === 'resolved' && d;
+  }, 8000, 'learned resolve');
+  const refused = fakeLog().find((l) => l.call === 'project__resolve' && l.result.includes('learned is required'));
+  check(refused, 'resolve without learned is refused', fakeLog().filter((l) => l.call === 'project__resolve').map((l) => l.result));
+  check(rd.threads.find((t) => t.id === L.id).lastPost?.text === 'all done', "resolve's summary becomes the result post");
+  const gf = await api(`/api/cprojects/${r.id}/memory/gotchas-and-fixes`);
+  check(gf.content.includes('NODE_ENV=test'), 'learned items are saved to memory', gf);
+
+  // Your decision reaches the other open threads and memory.
+  const Q = await startT('Ask a question', [call('request_decision', { question: 'Use tabs or spaces?', options: [{ label: 'Tabs' }, { label: 'Spaces' }], recommended: 1 }), '@@say asked'].join('\n'));
+  rd = await until(async () => {
+    const d = await detail(r.id);
+    return d.decisions.find((x) => x.thread === Q.id && !x.answer) && d;
+  }, 8000, 'decision card');
+  const dec = rd.decisions.find((x) => x.thread === Q.id && !x.answer);
+  await api(`/api/cprojects/${r.id}/decisions/${dec.id}`, { method: 'POST', body: { choice: 1, note: 'two of them' } });
+  rd = await until(async () => {
+    const d = await detail(r.id);
+    return (d.threads.find((t) => t.id === V.id)?.pendingNotes || 0) > 0 && d;
+  }, 8000, 'decision note queued');
+  check(rd.notes.some((n) => n.kind === 'decision' && n.text.includes('Spaces')), 'the answer is recorded as a decision note with your words');
+  const ud = await api(`/api/cprojects/${r.id}/memory/user-decisions`);
+  check(ud.content.includes('Use tabs or spaces?') && ud.content.includes('two of them'), 'your decision is saved to memory', ud);
+
+  // The coordinator's start_thread refuses a near-duplicate until new: true.
+  await api(`/api/cprojects/${r.id}/messages`, { method: 'POST', body: { text: [call('start_thread', { title: 'Util helpers parsing cleanup', brief: 'Clean up the parsing helpers in lib/util.js' }), call('start_thread', { title: 'Util helpers parsing cleanup', brief: 'Clean up the parsing helpers in lib/util.js', new: true }), call('post_message', { text: 'checked' })].join('\n') } });
+  await until(() => fakeLog().filter((l) => l.call === 'project__start_thread' && l.input.title === 'Util helpers parsing cleanup').length >= 2, 10_000, 'similar check');
+  const st = fakeLog().filter((l) => l.call === 'project__start_thread' && l.input.title === 'Util helpers parsing cleanup').map((l) => JSON.parse(l.result));
+  check(st[0].started === false && st[0].similar.some((x) => x.title === 'Util helpers'), 'start_thread returns similar threads instead of starting', st[0]);
+  check(st[1].ok && st[1].thread_id, 'start_thread with new: true starts it', st[1]);
 }
 
 main().catch(async (e) => {

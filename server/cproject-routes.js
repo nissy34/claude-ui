@@ -2,6 +2,7 @@
 // route the built-in project MCP server calls.
 import fs from 'node:fs';
 import path from 'node:path';
+import { PROJECT_FROM } from './cprojects.js';
 
 export function mountProjectRoutes(app, { engine, store, resolveDir, wrap }) {
   // ---- internal: tool calls from the project MCP server (x-cw-session names the caller) ----
@@ -13,6 +14,19 @@ export function mountProjectRoutes(app, { engine, store, resolveDir, wrap }) {
       res.json(await engine.tool(s, String(req.body?.name || ''), req.body?.args || {}));
     })
   );
+
+  // ---- internal: PostToolUse hook of a thread; answers with pending notes (or nothing) ----
+  app.post('/internal/cproject/hook', (req, res) => {
+    req.resume(); // the tool result in the body is not needed
+    const s = store.get(req.headers['x-cw-session']);
+    let out = {};
+    try {
+      out = s ? engine.hookNotes(s) : {};
+    } catch (e) {
+      console.warn('project hook:', e.message);
+    }
+    res.json(out);
+  });
 
   const cleanFolders = (folders) => (Array.isArray(folders) ? folders : []).map((f) => ({ path: resolveDir(typeof f === 'string' ? f : f.path) }));
   const project = (req) => engine.get(req.params.id);
@@ -65,6 +79,35 @@ export function mountProjectRoutes(app, { engine, store, resolveDir, wrap }) {
     })
   );
 
+  // The Custom view tab: add it (empty), pin one of the project's pages, or remove it.
+  app.post(
+    '/api/cprojects/:id/view',
+    wrap(async (req, res) => {
+      const p = project(req);
+      const b = req.body || {};
+      if (b.remove) p.append({ type: 'view.removed', from: { kind: 'user' }, trust: 'principal', body: {} });
+      else if (b.session && b.path) p.pinView(b.session, b.path, b.title, { kind: 'user' });
+      else p.append({ type: 'view.added', from: { kind: 'user' }, trust: 'principal', body: {} });
+      res.json({ view: p.viewInfo() });
+    })
+  );
+
+  app.post(
+    '/api/cprojects/:id/pause',
+    wrap(async (req, res) => {
+      engine.pause(project(req));
+      res.json({ ok: true });
+    })
+  );
+
+  app.post(
+    '/api/cprojects/:id/restart-coordinator',
+    wrap(async (req, res) => {
+      await engine.restartCoordinator(project(req));
+      res.json({ ok: true });
+    })
+  );
+
   app.post(
     '/api/cprojects/:id/resume',
     wrap(async (req, res) => {
@@ -106,7 +149,7 @@ export function mountProjectRoutes(app, { engine, store, resolveDir, wrap }) {
     '/api/cprojects/:id/threads',
     wrap(async (req, res) => {
       const p = project(req);
-      const s = await engine.startThread(p, { title: req.body?.title, brief: req.body?.brief, model: req.body?.model, effort: req.body?.effort, startedBy: 'user' });
+      const s = await engine.startThread(p, { title: req.body?.title, brief: req.body?.brief, model: req.body?.model, effort: req.body?.effort, dependsOn: req.body?.dependsOn, startedBy: 'user' });
       res.json({ thread: p.threadSummary(p.state.threads[s.id]) });
     })
   );
@@ -117,9 +160,45 @@ export function mountProjectRoutes(app, { engine, store, resolveDir, wrap }) {
     wrap(async (req, res) => {
       const p = project(req);
       const tid = thread(p, req);
-      const types = new Set(['thread.started', 'user.message', 'thread.post', 'decision.requested', 'session.message', 'reminder.set', 'reminder.due', 'thread.resolved', 'thread.reopened', 'pr.updated', 'notice']);
-      const feed = p.events.filter((e) => types.has(e.type) && (e.thread === tid || (e.type === 'session.message' && e.from?.id === tid)));
+      const types = new Set(['thread.started', 'user.message', 'thread.post', 'checklist.updated', 'decision.requested', 'session.message', 'reminder.set', 'reminder.due', 'thread.resolved', 'thread.reopened', 'pr.updated', 'notice']);
+      const feed = [];
+      for (const e of p.events) {
+        if (types.has(e.type) && (e.thread === tid || (e.type === 'session.message' && e.from?.id === tid))) feed.push(e);
+        // What passed between threads shows as activity rows: notes it shared, notes handed to it, signals about it.
+        else if (e.type === 'note.shared' && e.thread === tid && e.body.kind !== 'decision') feed.push(e);
+        else if (e.type === 'signal' && (e.thread === tid || (e.body.threads || []).includes(tid))) feed.push(e);
+        else if (e.type === 'memory.changed' && e.from?.id === tid) {
+          // Consecutive memory writes collapse into one "Updated project memory" row.
+          const last = feed[feed.length - 1];
+          if (last?.type === 'memory.changed') last.body = { ...last.body, names: [...new Set([...(last.body.names || [last.body.name]), e.body.name])] };
+          else feed.push({ ...e, body: { ...e.body, names: [e.body.name] } });
+        }
+        else if (e.type === 'notes.delivered' && e.body.session === tid && !e.body.dropped) {
+          const notes = e.body.ids.map((id) => p.state.notes?.[id]).filter(Boolean).map((n) => ({ id: n.id, kind: n.kind, text: n.text, files: n.files, from: n.by ? p.state.threads[n.by]?.title || n.by : 'the user' }));
+          if (notes.length) feed.push({ ...e, body: { ...e.body, notes } });
+        }
+      }
       res.json({ feed });
+    })
+  );
+
+  // Plain-text search over memory, notes, reports and threads' conversations (no model).
+  app.get(
+    '/api/cprojects/:id/search',
+    wrap(async (req, res) => {
+      const p = project(req);
+      res.json({ hits: p.search(String(req.query.q || ''), { limit: Math.min(Number(req.query.limit) || 12, 30) }) });
+    })
+  );
+
+  // Retract a note (it stops being delivered and found).
+  app.delete(
+    '/api/cprojects/:id/notes/:nid',
+    wrap(async (req, res) => {
+      const p = project(req);
+      if (!p.state.notes?.[req.params.nid]) throw new Error('No such note');
+      p.append({ type: 'note.retracted', from: { kind: 'user' }, trust: 'principal', body: { id: req.params.nid } });
+      res.json({ ok: true });
     })
   );
 
@@ -145,8 +224,12 @@ export function mountProjectRoutes(app, { engine, store, resolveDir, wrap }) {
         }
         case 'nudge': {
           const s = store.get(tid);
-          if (s) await s.resume();
+          if (s) await s.resume({ from: PROJECT_FROM });
           break;
+        }
+        case 'message': {
+          const ev = engine.steerThread(p, tid, req.body?.text);
+          return res.json({ event: ev });
         }
         case 'side': {
           const s = await engine.sideThread(p, tid, req.body?.question);
@@ -165,6 +248,10 @@ export function mountProjectRoutes(app, { engine, store, resolveDir, wrap }) {
   );
 
   // ---- memory ----
+  app.put(
+    '/api/cprojects/:id/memory-pinned',
+    wrap(async (req, res) => res.json(project(req).memory.setPinned(req.body?.text, { by: { kind: 'user' } })))
+  );
   app.get(
     '/api/cprojects/:id/memory',
     wrap(async (req, res) => res.json(project(req).memory.list()))
@@ -176,7 +263,7 @@ export function mountProjectRoutes(app, { engine, store, resolveDir, wrap }) {
   app.put(
     '/api/cprojects/:id/memory/:name',
     wrap(async (req, res) => {
-      const r = project(req).memory.write({ name: req.params.name, description: req.body?.description, content: req.body?.content, baseVersion: req.body?.version, by: { kind: 'user' } });
+      const r = project(req).memory.write({ name: req.params.name, description: req.body?.description, content: req.body?.content, type: req.body?.type, baseVersion: req.body?.version, by: { kind: 'user' } });
       if (r.conflict) return res.status(409).json({ error: r.note, current: r.current });
       res.json(r);
     })

@@ -3,7 +3,7 @@
 import { execFile } from 'node:child_process';
 
 const GH = process.env.CW_GH_BIN || 'gh';
-const FIELDS = 'number,title,url,state,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup,headRefName,baseRefName,autoMergeRequest';
+const FIELDS = 'number,title,url,state,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup,headRefName,baseRefName,autoMergeRequest,additions,deletions';
 
 function gh(cwd, args) {
   return new Promise((resolve, reject) => {
@@ -46,6 +46,8 @@ export async function prStatus(cwd) {
       head: j.headRefName,
       base: j.baseRefName,
       autoMerge: !!j.autoMergeRequest,
+      additions: j.additions ?? null,
+      deletions: j.deletions ?? null,
       checks,
       summary: { pass: checks.filter((c) => c.state === 'pass').length, fail: checks.filter((c) => c.state === 'fail').length, pending: checks.filter((c) => c.state === 'pending').length },
     },
