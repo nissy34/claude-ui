@@ -8,6 +8,7 @@
 //   @@write <path> <text>            write a file in the working folder (like an Edit)
 //   @@writetool <path> <text>        the same, shown as a Write tool_use + tool_result (as the real CLI does)
 //   @@bashfail <command>             a Bash call that fails (tool_result with is_error)
+//   @@usage <tokens>                 report this many input tokens on this turn's replies (context size)
 // PostToolUse HTTP hooks from --settings run after each tool call, like the real CLI's
 // ($VAR headers from allowedEnvVars); additionalContext they return is logged as hookContext.
 // Directives inside a JSON argument are passed along verbatim, so a test can make one session
@@ -88,13 +89,16 @@ async function runTurn(text) {
   const lines = text.split('\n');
   let said = false;
   let failed = false;
+  let inputTokens = 100;
   // Only top-level directives of the prompt (not ones nested inside JSON strings).
   for (const line of lines) {
-    const m = /^@@(call|say|sleep|fail|write|writetool|bashfail)\b\s*(.*)$/.exec(line.trim());
+    const m = /^@@(call|say|sleep|fail|write|writetool|bashfail|usage)\b\s*(.*)$/.exec(line.trim());
     if (!m) continue;
     const [, cmd, rest] = m;
-    if (cmd === 'say') {
-      out({ type: 'assistant', message: { id: `msg_${++msgN}`, role: 'assistant', content: [{ type: 'text', text: rest }], usage: { input_tokens: 100, output_tokens: 10 } }, parent_tool_use_id: null, session_id: sessionId });
+    if (cmd === 'usage') {
+      inputTokens = Number(rest) || 100;
+    } else if (cmd === 'say') {
+      out({ type: 'assistant', message: { id: `msg_${++msgN}`, role: 'assistant', content: [{ type: 'text', text: rest }], usage: { input_tokens: inputTokens, output_tokens: 10 } }, parent_tool_use_id: null, session_id: sessionId });
       said = true;
     } else if (cmd === 'sleep') {
       await new Promise((r) => setTimeout(r, Number(rest) || 100));
@@ -131,7 +135,7 @@ async function runTurn(text) {
       }
       const [server, tool] = full.split('__');
       const useId = `toolu_${crypto.randomBytes(6).toString('hex')}`;
-      out({ type: 'assistant', message: { id: `msg_${++msgN}`, role: 'assistant', content: [{ type: 'tool_use', id: useId, name: `mcp__${server}__${tool}`, input }] }, parent_tool_use_id: null, session_id: sessionId });
+      out({ type: 'assistant', message: { id: `msg_${++msgN}`, role: 'assistant', content: [{ type: 'tool_use', id: useId, name: `mcp__${server}__${tool}`, input }], usage: { input_tokens: inputTokens, output_tokens: 10 } }, parent_tool_use_id: null, session_id: sessionId });
       let result = 'no such server';
       const s = servers[server];
       if (s) {

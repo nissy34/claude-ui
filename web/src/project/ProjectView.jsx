@@ -344,7 +344,8 @@ function FeedItem({ e, project, threads, decisions, onSelect, onError }) {
         </div>
       );
     case 'coordinator.rotated':
-      return <div className="pj-notice">{b.manual ? 'Coordinator restarted' : 'Coordinator context reset to a digest'}</div>;
+      // An automatic reset is housekeeping the user can't act on; only a restart they asked for shows.
+      return b.manual ? <div className="pj-notice">Coordinator restarted</div> : null;
     case 'notice':
       return <div className="pj-notice">{b.text}</div>;
     case 'pr.updated':

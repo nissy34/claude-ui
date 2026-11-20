@@ -37,7 +37,9 @@ const THREAD_MODES = ['auto', 'acceptEdits', 'default', 'plan', 'bypassPermissio
 
 // Coordinator wakes for thread results are held this long after the last one arrived, and never
 // longer than the ceiling; they go at once when no other thread is working.
-const BATCH_QUIET_MS = Number(process.env.CW_PROJECT_BATCH_QUIET_MS) || 10_000;
+const BATCH_QUIET_MS = Number(process.env.CW_PROJECT_BATCH_QUIET_MS) || 4_000;
+// How long a lone result waits for its thread to resolve, so the result and the resolve share a wake.
+const RESOLVE_GRACE_MS = Number(process.env.CW_PROJECT_RESOLVE_GRACE_MS) || 6_000;
 const BATCH_MAX_MS = Number(process.env.CW_PROJECT_BATCH_MAX_MS) || 60_000;
 // Threads started for the same user message report together: a finished one waits this long at
 // most for its still-working siblings, so the user gets one combined answer instead of a post each.
@@ -958,6 +960,7 @@ export class Project {
       this.append({ type: 'queue.dropped', body: { session: sid, events: items.map((q) => q.e) } });
       return false;
     }
+    if (this.rotating === sid) return Date.now() + 300;
     if (this.state.inflight[sid] || s.isBusy() || s.inbox.length) return false;
     if (s.meta.worktreeRemoved && this.state.threads[sid]) {
       // Its worktree was removed after its branch merged: give it a fresh one before it works again,
@@ -979,7 +982,21 @@ export class Project {
       const now = Date.now();
       const first = items[0].at;
       const last = items[items.length - 1].at;
-      const othersWorking = Object.keys(this.state.threads).some((tid) => tid !== sid && this.liveOf(tid).busy);
+      // A thread whose result is in these items is done, even while its turn winds down (sharing notes,
+      // resolving). Counting it as "working" held every lone result for a full quiet window.
+      const posted = new Map();
+      const finished = new Set();
+      for (const q of items) {
+        const e = this.byId.get(q.e);
+        if (e?.type === 'thread.post' && e.thread) posted.set(e.thread, q.at);
+        if (e?.type === 'thread.resolved' && e.thread) finished.add(e.thread);
+      }
+      for (const [tid, at] of posted) {
+        if (finished.has(tid) || this.state.threads[tid]?.resolved || !this.liveOf(tid).busy) continue;
+        // It usually resolves a few seconds after its result: wait briefly, so both go in one wake.
+        if (now - at < RESOLVE_GRACE_MS) return at + RESOLVE_GRACE_MS;
+      }
+      const othersWorking = Object.keys(this.state.threads).some((tid) => tid !== sid && !posted.has(tid) && !finished.has(tid) && !this.state.threads[tid]?.resolved && this.liveOf(tid).busy);
       const siblings = isCoord ? this.workingSiblings(items) : [];
       if (siblings.length && now - first < SIBLING_MAX_MS) return Math.min(now + 5000, first + SIBLING_MAX_MS);
       const ready = !othersWorking || now - last >= BATCH_QUIET_MS || now - first >= BATCH_MAX_MS;
@@ -1118,7 +1135,9 @@ export class Project {
       const b = e.body || {};
       const where = e.thread ? ` · thread_id ${e.thread}` : b.where === 'chat' ? ' · in the project chat' : '';
       out.push(`\n⟦${marker}⟧ event ${e.id} · ${e.type}${where} · from ${this.senderLabel(e)} · trust: ${e.trust} · ${when(e.ts)}`);
-      out.push(esc(this.renderBody(e, sid)));
+      // A resolve right after its result in the same wake would repeat the result text.
+      const postedHere = e.type === 'thread.resolved' && evs.some((x) => x.type === 'thread.post' && x.thread === e.thread);
+      out.push(esc(postedHere ? `Thread "${this.state.threads[e.thread]?.title}" resolved itself after the result above.` : this.renderBody(e, sid)));
       for (const cid of e.cites || []) {
         const c = this.byId.get(cid);
         if (!c || c.type !== 'user.message') continue;
@@ -1399,14 +1418,29 @@ export class Project {
   maybeRotate(s) {
     const tokens = s.meta.contextTokens || 0;
     const sid = s.id;
-    if (tokens < this.settings.policy.rotateTokens) return;
+    // The threshold counts what the conversation added, not the fixed start (system prompt, tools,
+    // MCP servers, CLAUDE.md), which alone can pass 60k tokens with a real CLI setup. Counting the
+    // whole context reset the coordinator after every turn, so each reply paid a cold start.
+    if (!s.meta.rotateBase) {
+      s.meta.rotateBase = tokens;
+      return;
+    }
+    if (tokens - s.meta.rotateBase < this.settings.policy.rotateTokens) return;
     setTimeout(async () => {
-      if ((this.state.queue[sid] || []).length || s.isBusy()) return;
-      await s.stopAndWait();
+      if ((this.state.queue[sid] || []).length || s.isBusy() || this.state.inflight[sid]) return;
+      // Hold deliveries while the CLI stops: a wake sent into a stopping session would be lost.
+      this.rotating = sid;
+      try {
+        await s.stopAndWait();
+      } finally {
+        this.rotating = null;
+      }
       s.meta.claudeSessionId = null;
       s.meta.contextTokens = 0;
+      s.meta.rotateBase = 0;
       s.record({ k: 'notice', text: 'Conversation reset to a digest (context rotation)' });
       this.append({ type: 'coordinator.rotated', body: { coordinator: sid, tokens } });
+      this.schedulePump();
     }, 1000).unref?.();
   }
 
@@ -1835,6 +1869,7 @@ export class ProjectEngine {
     await s.stopAndWait();
     s.meta.claudeSessionId = null;
     s.meta.contextTokens = 0;
+    s.meta.rotateBase = 0;
     s.record({ k: 'notice', text: 'Restarted by you; starting over from a digest' });
     p.append({ type: 'coordinator.rotated', body: { coordinator: s.id, manual: true } });
     p.schedulePump();

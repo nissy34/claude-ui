@@ -30,6 +30,7 @@ const env = {
   CW_AUTO_TITLES: '0',
   CW_PROJECT_BATCH_QUIET_MS: '300',
   CW_PROJECT_BATCH_MAX_MS: '1500',
+  CW_PROJECT_RESOLVE_GRACE_MS: '3000',
   FAKE_CLAUDE_LOG: path.join(tmp, 'fake.log'),
   CLAUDE_CONFIG_DIR: path.join(tmp, 'claude'),
 };
@@ -287,6 +288,7 @@ async function main() {
   await steering();
   console.log('Threads started for one request report together');
   await siblings();
+  await rotation();
   await aboutLabel();
 
   await stop();
@@ -326,6 +328,40 @@ async function siblings() {
   await until(() => fakeLog().some((l) => l.prompt?.includes('which part was slower?') && l.prompt.includes('recently finished threads')), 10_000, 'recent threads hint');
   const w = fakeLog().find((l) => l.prompt?.includes('which part was slower?'));
   check(w.prompt.includes('"Slow part"') && w.prompt.includes('message_thread'), 'a user message wake lists recently finished threads to send follow-ups to', w.prompt.slice(-900));
+
+  // A lone result is relayed as soon as its thread resolves, not after a quiet window spent waiting
+  // on the thread's own winding-down turn; the result and the resolve go in one wake.
+  const lone = call('start_thread', { title: 'Lone part', brief: [call('post_message', { kind: 'result', text: 'LONE-RESULT' }), '@@sleep 700', call('resolve', { learned: [] }), '@@sleep 1500'].join('\n'), new: true });
+  const { project: q } = await api('/api/cprojects', { method: 'POST', body: { name: 'Lone', folders: [repo], prompt: `do it\n${lone}\n${call('post_message', { text: 'on it' })}` } });
+  const relayWakes = () => fakeLog().filter((l) => l.prompt?.includes('<project-wake') && !l.prompt.includes('You are thread') && !l.prompt.includes('Lone part","brief') && (l.prompt.includes('LONE-RESULT') || l.prompt.includes('"Lone part" resolved itself')));
+  await until(() => relayWakes().length, 10_000, 'coordinator hears the lone result');
+  await sleep(1500);
+  const lw = relayWakes();
+  check(lw.length === 1 && lw[0].prompt.includes('LONE-RESULT') && lw[0].prompt.includes('"Lone part" resolved itself after the result above.') && lw[0].prompt.split('LONE-RESULT').length === 2, 'the result and its resolve reach the coordinator in one wake, without repeating the result', lw.map((w) => w.prompt.slice(0, 1500)));
+  void q;
+}
+
+async function rotation() {
+  console.log('The coordinator resets to a digest only when its conversation grows');
+  // A real CLI starts big (system prompt, tools, MCP servers): 70k tokens on the first turn.
+  const { project: r } = await api('/api/cprojects', { method: 'POST', body: { name: 'Rotate', folders: [repo], prompt: `@@usage 70000\n@@say first\n${call('post_message', { text: 'first' })}` } });
+  const say = async (n, text) => {
+    await api(`/api/cprojects/${r.id}/messages`, { method: 'POST', body: { text: `@@usage ${n}\n${call('post_message', { text })}` } });
+    await until(async () => (await detail(r.id)).feed.some((e) => e.type === 'chat.post' && e.body.text === text), 8000, text);
+    await sleep(1500);
+  };
+  await until(async () => (await detail(r.id)).coordinator && !(await detail(r.id)).coordinator.busy, 8000, 'first turn');
+  await sleep(1500);
+  await say(72000, 'second');
+  await say(75000, 'third');
+  let d = await detail(r.id);
+  check(!d.feed.some((e) => e.type === 'coordinator.rotated'), 'a large fixed start (70k tokens) does not reset the coordinator after every turn', d.feed.map((e) => e.type));
+  await say(140000, 'fourth');
+  d = await until(async () => { const x = await detail(r.id); return x.feed.some((e) => e.type === 'coordinator.rotated') && x; }, 8000, 'rotation');
+  check(true, 'it resets once the conversation itself grew past the threshold');
+  await say(70000, 'fifth');
+  d = await detail(r.id);
+  check(d.feed.filter((e) => e.type === 'coordinator.rotated').length === 1 && d.feed.some((e) => e.body?.text === 'fifth'), 'after the reset the next message is answered and does not reset again', d.feed.map((e) => e.type));
 }
 
 // The label above a coordinator post names the thread it is about. A thread's news sharing a wake with a
