@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { api } from '../api.js';
 import { useModels } from '../models.js';
-import { Button, Checkbox, Input, Modal, ModalBody, ModalFoot, ModalHead, Segmented, Select, Textarea } from '../ui/index.jsx';
+import { Button, Checkbox, Input, Modal, ModalBody, ModalFoot, ModalHead, Segmented, Select, Textarea, Toggle } from '../ui/index.jsx';
+import { ProjectMemory } from './ProjectFiles.jsx';
 import { confirmDialog } from '../ui/dialogs.jsx';
 
 const EFFORTS = [
@@ -25,10 +26,12 @@ export function ModelPicker({ label, hint, value, onChange }) {
   if (value.model && !opts.some(([v]) => v === value.model)) opts.push([value.model, value.model]);
   return (
     <div className="pj-model">
-      <div className="pj-model-label">
-        {label}
-        {hint && <span className="muted small"> · {hint}</span>}
-      </div>
+      {label && (
+        <div className="pj-model-label">
+          {label}
+          {hint && <span className="muted small"> · {hint}</span>}
+        </div>
+      )}
       <div className="pj-model-row">
         <Select value={value.model || ''} onChange={(e) => onChange({ ...value, model: e.target.value })}>
           {opts.map(([v, l]) => (
@@ -101,10 +104,6 @@ function SettingsFields({ s, set, projects, full }) {
       </div>
       <div className="pj-grid">
         <label>
-          Threads running at once
-          <Input type="number" min={1} max={20} value={p.maxRunning} onChange={(e) => setP({ maxRunning: e.target.value })} />
-        </label>
-        <label>
           Thread permission mode
           <Select value={p.threadPermissionMode} onChange={(e) => setP({ threadPermissionMode: e.target.value })}>
             {MODES.map(([v, l]) => (
@@ -176,7 +175,7 @@ const DEFAULTS = {
   instructions: '',
   folders: [{ path: '' }],
   models: { coordinator: { model: 'sonnet', effort: 'low' }, thread: { model: 'opus', effort: 'high' } },
-  policy: { maxRunning: 3, proactivity: 'normal', threadPermissionMode: 'auto', worktrees: true, checkInMinutes: 30, rotateTokens: 60000, quietHours: null, askRules: [] },
+  policy: { proactivity: 'normal', threadPermissionMode: 'auto', worktrees: true, checkInMinutes: 30, rotateTokens: 60000, quietHours: null, askRules: [] },
 };
 
 const clean = (s) => ({ ...s, folders: s.folders.filter((f) => f.path.trim()), policy: { ...s.policy, askRules: (s.policy.askRules || []).map((r) => r.trim()).filter(Boolean) } });
@@ -218,14 +217,36 @@ export function NewProjectDialog({ onClose, onCreated, onError, projects, defaul
   );
 }
 
-export default function ProjectSettings({ project, onSelect, onError, reload, onDeleted, projects }) {
+const SECTIONS = [
+  ['general', '⚙', 'General'],
+  ['memory', '◇', 'Memory'],
+  ['environment', '☁', 'Environment'],
+  ['usage', '↗', 'Usage'],
+  ['advanced', '⚒', 'Advanced'],
+];
+
+function Row({ label, hint, children, stack }) {
+  return (
+    <div className={`pjs-row ${stack ? 'stack' : ''}`}>
+      <div className="pjs-label">
+        {label}
+        {hint && <div className="muted small">{hint}</div>}
+      </div>
+      <div className="pjs-control">{children}</div>
+    </div>
+  );
+}
+
+/** Project settings, in a window with sections (General, Memory, Environment, Usage, Advanced). */
+export function ProjectSettingsModal({ project, section, setSection, onClose, onSelect, onError, reload, onDeleted, projects }) {
   const [s, set] = useState(() => ({ ...project.settings, folders: project.settings.folders.length ? project.settings.folders : [{ path: '' }] }));
   const [saved, setSaved] = useState(false);
   useEffect(() => setSaved(false), [s]);
-  const save = async (e) => {
-    e.preventDefault();
+  const p = s.policy;
+  const setP = (patch) => set({ ...s, policy: { ...p, ...patch } });
+  const save = async (patch) => {
     try {
-      await api(`/api/cprojects/${project.id}`, { method: 'PATCH', body: clean(s) });
+      await api(`/api/cprojects/${project.id}`, { method: 'PATCH', body: patch || clean(s) });
       setSaved(true);
       reload();
     } catch (err) {
@@ -241,41 +262,173 @@ export default function ProjectSettings({ project, onSelect, onError, reload, on
       onError(err);
     }
   };
+  const archive = async () => {
+    await save({ archived: !project.archived });
+    if (!project.archived) onClose();
+  };
   const byCost = [...project.threads].sort((a, b) => b.cost - a.cost);
-  return (
-    <div className="pj-overview">
-      <form className="pj-overview-inner fields pj-form" onSubmit={save}>
-        <SettingsFields s={s} set={set} projects={projects} full />
-        <div className="pj-save">
-          <Button variant="primary">Save</Button>
-          {saved && <span className="muted small">Saved. Model changes apply to the coordinator now and to threads started from now on.</span>}
-        </div>
-        <div className="pj-field">
-          <div className="pj-model-label">Usage</div>
-          <div className="pj-usage">
-            <div>
-              Total <b>${project.usage.total.toFixed(2)}</b> · coordinator ${project.usage.coordinator.toFixed(2)}
-              {project.coordinator && <> · coordinator context {Math.round(project.coordinator.contextTokens / 1000)}k tokens</>}
-            </div>
-            {byCost.slice(0, 12).map((t) => (
-              <div key={t.id} className="pj-usage-row">
-                <button type="button" className="linklike" onClick={() => onSelect(t.id)}>
-                  {t.title}
-                </button>
-                <span className="muted">${t.cost.toFixed(2)}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-        <div className="pj-field pj-danger">
-          <Button type="button" variant="ghost" onClick={() => onSelect(project.coordinatorId)}>
-            Open the coordinator's work log
-          </Button>
-          <Button type="button" variant="danger" onClick={del}>
-            Delete project
-          </Button>
-        </div>
-      </form>
+  const done = project.threads.filter((t) => t.status === 'resolved').length;
+  const prs = project.threads.filter((t) => t.pr?.url);
+  const added = prs.reduce((n, t) => n + (t.pr.additions || 0), 0);
+  const removed = prs.reduce((n, t) => n + (t.pr.deletions || 0), 0);
+  const total = project.usage.total || 0;
+  const share = (c) => (total > 0 ? `${Math.round((c / total) * 100)}%` : '');
+  const post = (what) => api(`/api/cprojects/${project.id}/${what}`, { method: 'POST' }).then(reload).catch(onError);
+  const SaveBar = () => (
+    <div className="pjs-save">
+      {saved && <span className="muted small">Saved. Model changes apply to the coordinator now and to threads started from now on.</span>}
+      <Button variant="primary" onClick={() => save()}>
+        Save
+      </Button>
     </div>
+  );
+  return (
+    <Modal size="wide" className="pjs" onClose={onClose}>
+      <ModalHead title="Project settings" onClose={onClose} />
+      <div className="pjs-wrap">
+        <nav className="pjs-nav">
+          {SECTIONS.map(([k, icon, label]) => (
+            <button key={k} className={section === k ? 'on' : ''} onClick={() => setSection(k)}>
+              <span className="pjs-ico">{icon}</span> {label}
+            </button>
+          ))}
+        </nav>
+        <div className="pjs-main">
+          {section === 'general' && (
+            <>
+              <h3>General</h3>
+              <Row label="Name">
+                <Input value={s.name} onChange={(e) => set({ ...s, name: e.target.value })} />
+              </Row>
+              <Row label="What do you want to work on?" stack>
+                <Textarea rows={4} maxLength={8000} value={s.goal} onChange={(e) => set({ ...s, goal: e.target.value })} placeholder="Redesign onboarding so more new users finish setup" />
+                <div className="muted small pjs-count">{(s.goal || '').length} / 8,000</div>
+              </Row>
+              <h4>Models</h4>
+              <Row label="Coordinator" hint="Routes work; short turns">
+                <ModelPicker label="" value={s.models.coordinator} onChange={(v) => set({ ...s, models: { ...s.models, coordinator: v } })} />
+              </Row>
+              <Row label="Threads" hint="Do the work">
+                <ModelPicker label="" value={s.models.thread} onChange={(v) => set({ ...s, models: { ...s.models, thread: v } })} />
+              </Row>
+              <hr />
+              <Row label="Continue threads automatically when usage limits reset">
+                <Toggle value={p.continueOnReset !== false} onChange={(v) => setP({ continueOnReset: v })} label="Continue on reset" />
+              </Row>
+              <SaveBar />
+              <Row label="Archive project" hint="Hidden from the sidebar; nothing is deleted">
+                <Button onClick={archive}>{project.archived ? 'Unarchive' : 'Archive'}</Button>
+              </Row>
+              <h4>Danger zone</h4>
+              <Row label="Delete project" hint="Its threads stay as archived chats; the project chat, memory and files are deleted. This can't be undone.">
+                <Button variant="danger" onClick={del}>
+                  Delete
+                </Button>
+              </Row>
+            </>
+          )}
+          {section === 'memory' && (
+            <>
+              <h3>Memory</h3>
+              <ProjectMemory project={project} onError={onError} />
+            </>
+          )}
+          {section === 'environment' && (
+            <>
+              <h3>Environment</h3>
+              <Row label="Folders" stack>
+                <FolderPicker folders={s.folders} onChange={(folders) => set({ ...s, folders })} projects={projects} />
+              </Row>
+              <Row label="Give each thread its own git worktree">
+                <Toggle value={p.worktrees} onChange={(v) => setP({ worktrees: v })} label="Worktrees" />
+              </Row>
+              <Row label="Thread permission mode">
+                <Select value={p.threadPermissionMode} onChange={(e) => setP({ threadPermissionMode: e.target.value })}>
+                  {MODES.map(([v, l]) => (
+                    <option key={v} value={v}>
+                      {l}
+                    </option>
+                  ))}
+                </Select>
+              </Row>
+              <Row label="Always ask before" hint="Permission rules for threads, one per line; these prompt you even in Auto mode" stack>
+                <Textarea mono rows={5} value={(p.askRules || []).join('\n')} onChange={(e) => setP({ askRules: e.target.value.split('\n') })} />
+              </Row>
+              <SaveBar />
+            </>
+          )}
+          {section === 'usage' && (
+            <>
+              <h3>Usage</h3>
+              <div className="pj-activity-stats">
+                <div>
+                  <b>{done}</b>
+                  <span className="muted small">Threads done</span>
+                </div>
+                <div>
+                  <b>{prs.length}</b>
+                  <span className="muted small">Pull requests</span>
+                </div>
+                <div>
+                  <b>
+                    <span className="add">+{added}</span> <span className="del">−{removed}</span>
+                  </b>
+                  <span className="muted small">Code changes</span>
+                </div>
+              </div>
+              <Row label="Total">
+                <b>${project.usage.total.toFixed(2)}</b>
+                <span className="muted small"> · coordinator ${project.usage.coordinator.toFixed(2)}{project.coordinator ? ` · context ${Math.round(project.coordinator.contextTokens / 1000)}k tokens` : ''}</span>
+              </Row>
+              <SaveBar />
+              <h4>By thread</h4>
+              <div className="pj-usage">
+                {byCost.length === 0 && <div className="muted small">No threads yet.</div>}
+                {byCost.map((t) => (
+                  <div key={t.id} className="pj-usage-row">
+                    <button type="button" className="linklike" onClick={() => (onClose(), onSelect(t.id))}>
+                      {t.title}
+                    </button>
+                    <span className="muted">${t.cost.toFixed(2)}</span>
+                    <span className="muted share">{share(t.cost)}</span>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+          {section === 'advanced' && (
+            <>
+              <h3>Advanced</h3>
+              <Row label="Updates" hint={p.proactivity === 'quiet' ? 'The coordinator wakes only for your messages, blockers, questions and errors.' : p.proactivity === 'normal' ? 'Also when threads finish.' : `Also a check-in every ${p.checkInMinutes} minutes when threads changed.`}>
+                <Segmented value={p.proactivity} onChange={(v) => setP({ proactivity: v })} options={[['quiet', 'Quiet'], ['normal', 'Normal'], ['chatty', 'Chatty']]} />
+              </Row>
+              <Row label="Check-in every (minutes, Chatty)">
+                <Input type="number" min={5} value={p.checkInMinutes} onChange={(e) => setP({ checkInMinutes: e.target.value })} />
+              </Row>
+              <Row label="Reset coordinator context after (tokens)">
+                <Input type="number" min={20000} step={10000} value={p.rotateTokens} onChange={(e) => setP({ rotateTokens: e.target.value })} />
+              </Row>
+              <Row label="Quiet hours">
+                <div className="pjs-inline">
+                  <Input type="time" value={p.quietHours?.from || ''} onChange={(e) => setP({ quietHours: e.target.value ? { from: e.target.value, to: p.quietHours?.to || '07:00' } : null })} />
+                  <span className="muted">to</span>
+                  <Input type="time" value={p.quietHours?.to || ''} onChange={(e) => setP({ quietHours: p.quietHours ? { ...p.quietHours, to: e.target.value } : null })} />
+                </div>
+              </Row>
+              <SaveBar />
+              <Row label={project.paused ? 'Resume project' : 'Pause project'} hint={project.paused ? 'Threads and the coordinator pick up their queued messages.' : 'Take a break or save usage. Nothing new starts until you resume; running turns finish.'}>
+                <Button onClick={() => post(project.paused ? 'resume' : 'pause')}>{project.paused ? 'Resume' : 'Pause'}</Button>
+              </Row>
+              <Row label="Restart the coordinator" hint="Try this if Claude stops responding in the project chat. A reply in progress is interrupted; it starts over from a digest of the project.">
+                <Button onClick={() => post('restart-coordinator')}>Restart</Button>
+              </Row>
+              <Row label="Coordinator work log" hint="Everything the coordinator did, tool by tool">
+                <Button onClick={() => (onClose(), onSelect(project.coordinatorId))}>Open</Button>
+              </Row>
+            </>
+          )}
+        </div>
+      </div>
+    </Modal>
   );
 }
