@@ -608,6 +608,8 @@ export class ChatSession {
           }
         }
         m.totalCost = (m.totalCost || 0) + (msg.total_cost_usd || 0);
+        const tokens = turnTokens(msg);
+        m.totalTokens = (m.totalTokens || 0) + tokens;
         // The real context window of the model this turn ran on, as the CLI reports it (e.g.
         // 1,000,000 for 1M-context models). Re-read every turn so a mid-chat model switch shows.
         {
@@ -621,6 +623,7 @@ export class ChatSession {
           text: msg.is_error ? msg.result || (msg.errors || []).join('; ') : undefined,
           durationMs: msg.duration_ms,
           cost: msg.total_cost_usd,
+          tokens,
           turns: msg.num_turns,
         });
         if (this.clients.size === 0) m.attention = true;
@@ -648,6 +651,8 @@ export class ChatSession {
         break;
       case 'rate_limit_event':
         m.rateLimit = msg.rate_limit_info;
+        // Plan limits are account-wide: keep the latest from any chat for views like a project's.
+        if (msg.rate_limit_info) this.store.rateLimit = { ...msg.rate_limit_info, at: Date.now() };
         if (m.cproject) this.store.onSignal?.(this, 'rate_limit', msg.rate_limit_info);
         this.broadcastState();
         break;
@@ -1225,6 +1230,16 @@ export class ChatSession {
 }
 
 Object.assign(ChatSession.prototype, mcpAuthMethods, bgTaskMethods);
+
+// Tokens a turn used, all models and subagents included (input, output and cache reads/writes),
+// the way claude.ai counts a thread's usage.
+export function turnTokens(msg) {
+  const sum = (u) => (u.inputTokens || 0) + (u.outputTokens || 0) + (u.cacheReadInputTokens || 0) + (u.cacheCreationInputTokens || 0);
+  const per = Object.values(msg?.modelUsage || {}).filter(Boolean);
+  if (per.length) return per.reduce((n, u) => n + sum(u), 0);
+  const u = msg?.usage || {};
+  return (u.input_tokens || 0) + (u.output_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0);
+}
 
 // modelUsage on a result is keyed by canonical model id ({ 'claude-opus-5-5': { contextWindow, ... } }).
 // Pick the chat's own model; subagents on other models show up as extra keys. Falls back to the

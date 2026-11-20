@@ -4,6 +4,8 @@ import { useModels } from '../models.js';
 import { Button, Checkbox, Input, Modal, ModalBody, ModalFoot, ModalHead, Segmented, Select, Textarea, Toggle } from '../ui/index.jsx';
 import { ProjectMemory } from './ProjectFiles.jsx';
 import { confirmDialog } from '../ui/dialogs.jsx';
+import { fmtTok } from './ProjectUsage.jsx';
+import { fmtReset, windowName } from '../chat/Composer.jsx';
 import { ProjectIcon } from './ProjectView.jsx';
 
 const PROJECT_COLORS = ['orange', 'blue', 'green', 'purple', 'pink', 'teal', 'yellow', 'red'];
@@ -387,8 +389,29 @@ export function ProjectSettingsModal({ project, section, setSection, onClose, on
               </div>
               <Row label="Total">
                 <b>${project.usage.total.toFixed(2)}</b>
+                {project.usage.tokens > 0 && <span className="muted small"> · {fmtTok(project.usage.tokens)} tokens</span>}
                 <span className="muted small"> · coordinator ${project.usage.coordinator.toFixed(2)}{project.coordinator ? ` · context ${Math.round(project.coordinator.contextTokens / 1000)}k tokens` : ''}</span>
               </Row>
+              {Object.keys(project.rateLimit || {}).length > 0 && (
+                <>
+                  <h4>Plan usage limits</h4>
+                  <div className="pj-usage">
+                    {Object.entries(project.rateLimit).map(([k, w]) => (
+                      <div key={k}>
+                        <div className="pj-usage-row">
+                          <span>{windowName(k)}</span>
+                          <span className="muted">
+                            {fmtReset(w.resetsAt)} · {Math.round((w.utilization || 0) * 100)}%
+                          </span>
+                        </div>
+                        <div className="meter">
+                          <span style={{ width: `${Math.min(100, (w.utilization || 0) * 100)}%` }} />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
               <h4>By thread</h4>
               <div className="pj-usage">
                 {byCost.length === 0 && <div className="muted small">No threads yet.</div>}
@@ -397,6 +420,8 @@ export function ProjectSettingsModal({ project, section, setSection, onClose, on
                     <button type="button" className="linklike" onClick={() => (onClose(), onSelect(t.id))}>
                       {t.title}
                     </button>
+                    <span className="spacer" />
+                    {t.tokens > 0 && <span className="muted tokens">{fmtTok(t.tokens)}</span>}
                     <span className="muted">${t.cost.toFixed(2)}</span>
                     <span className="muted share">{share(t.cost)}</span>
                   </div>

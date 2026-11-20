@@ -7,6 +7,7 @@ import { confirmDialog, promptDialog } from '../ui/dialogs.jsx';
 import { DecisionCard, Md } from './ProjectCards.jsx';
 import { ProjectMemory } from './ProjectFiles.jsx';
 import { projectAction } from './useProject.js';
+import { ProjectUsageRing } from './ProjectUsage.jsx';
 
 const short = (ts) => {
   const s = (Date.now() - ts) / 1000;
@@ -99,10 +100,10 @@ export function threadLine(t, decisions) {
 }
 
 // ---------------------------------------------------------------- the panel
-export default function ProjectPanel({ project, tab, setTab, threadId, openThread, onSelect, onError, onNewThread, reload }) {
+export default function ProjectPanel({ project, tab, setTab, threadId, openThread, onSelect, onError, onNewThread, reload, onFullUsage }) {
   const waiting = project.threads.filter((t) => t.status === 'waiting').length;
   if (threadId && project.threads.some((t) => t.id === threadId))
-    return <ThreadPane project={project} threadId={threadId} onBack={() => openThread(null)} onSelect={onSelect} openThread={openThread} onError={onError} />;
+    return <ThreadPane project={project} threadId={threadId} onBack={() => openThread(null)} onSelect={onSelect} openThread={openThread} onError={onError} onFullUsage={onFullUsage} />;
   return (
     <div className="pjp">
       <div className="pjp-head">
@@ -282,7 +283,7 @@ function ThreadRow({ t, project, onOpen }) {
 }
 
 // ---------------------------------------------------------------- one thread, in the panel
-function ThreadPane({ project, threadId, onBack, onSelect, openThread, onError }) {
+function ThreadPane({ project, threadId, onBack, onSelect, openThread, onError, onFullUsage }) {
   const t = project.threads.find((x) => x.id === threadId);
   const [feed, setFeed] = useState(null);
   const [text, setText] = useState('');
@@ -550,6 +551,7 @@ function ThreadPane({ project, threadId, onBack, onSelect, openThread, onError }
           <span className="muted small">
             {modelName(t.model)} {t.effort ? t.effort[0].toUpperCase() + t.effort.slice(1) : ''}
           </span>
+          <ProjectUsageRing project={project} context={t.context} currentThread={t.id} onOpenThread={openThread} onFullUsage={onFullUsage} />
           <button className="pjp-send" disabled={!text.trim() || sending} onClick={send} aria-label="Send">
             ↵
           </button>

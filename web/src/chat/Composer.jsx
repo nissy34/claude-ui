@@ -124,11 +124,11 @@ function ContextRing({ used, window: winIn, compactWindow, model, onCompact }) {
   );
 }
 
-const WINDOW_NAMES = { five_hour: '5-hour limit', seven_day: 'Weekly · all models', seven_day_opus: 'Weekly · Opus', seven_day_sonnet: 'Weekly · Sonnet' };
-function windowName(k) {
+const WINDOW_NAMES = { five_hour: '5-hour limit', seven_day: 'Weekly · all models', seven_day_opus: 'Weekly · Opus', seven_day_sonnet: 'Weekly · Sonnet', seven_day_fable: 'Weekly · Fable' };
+export function windowName(k) {
   return WINDOW_NAMES[k] || k.replace(/_/g, ' ').replace(/^seven day/, 'Weekly').replace(/^five hour/, '5-hour');
 }
-function fmtReset(sec) {
+export function fmtReset(sec) {
   if (!sec) return '';
   const d = new Date(sec * 1000);
   const soon = d - Date.now() < 86400000;

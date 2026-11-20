@@ -357,6 +357,11 @@ async function rotation() {
   const d = await detail(r.id);
   check(!d.feed.some((e) => e.type === 'coordinator.rotated'), 'a growing coordinator context never triggers an engine reset', d.feed.map((e) => e.type));
   check(d.settings.policy.rotateTokens === undefined, 'there is no reset threshold setting', d.settings.policy);
+  // Usage for the composer's context ring and popover: tokens per turn add up, and plan limits show.
+  check(d.usage.coordinatorTokens >= 70010 + 140010 + 400010 && d.usage.tokens === d.usage.coordinatorTokens, 'the project chat counts the tokens each coordinator turn used', d.usage);
+  check(d.coordinator.context?.used === 400010, "the coordinator's context is in the project for the ring", d.coordinator.context);
+  await api(`/api/cprojects/${r.id}/messages`, { method: 'POST', body: { text: `@@ratelimit {"five_hour":{"utilization":0.12,"resetsAt":${Math.floor(Date.now() / 1000) + 3600}}}\n${call('post_message', { text: 'limits' })}` } });
+  await until(async () => (await detail(r.id)).rateLimit?.five_hour?.utilization === 0.12, 8000, 'plan limits in the project');
 }
 
 // The label under a coordinator post names the thread it is about. A thread's news sharing a wake with a

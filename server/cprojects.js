@@ -345,14 +345,17 @@ export function reduce(st, ev) {
     case 'turn.ended': {
       delete st.working[ev.body.session];
       st.cost += ev.body.cost || 0;
+      st.tokens = (st.tokens || 0) + (ev.body.tokens || 0);
       const th = st.threads[ev.body.session];
       if (th) {
         th.cost += ev.body.cost || 0;
+        th.tokens = (th.tokens || 0) + (ev.body.tokens || 0);
         th.lastActivity = ev.ts;
       }
       if (ev.body.session === st.coordinator) {
         st.lastCoordinatorTurn = ev.ts;
         st.coordinatorCost = (st.coordinatorCost || 0) + (ev.body.cost || 0);
+        st.coordinatorTokens = (st.coordinatorTokens || 0) + (ev.body.tokens || 0);
       }
       break;
     }
@@ -1352,7 +1355,7 @@ export class Project {
         // A turn that fails because the CLI is signed out: keep what it was handed and pause, so
         // nothing is lost and nothing retries in a loop until the user logs in and resumes.
         if (failed && AUTH_RE.test(ev.text)) this.authFailed(sid, ev.text);
-        this.append({ type: 'turn.ended', body: { session: sid, cost: ev.cost || 0, isError: !!ev.isError, interrupted: ev.text === 'Interrupted' } });
+        this.append({ type: 'turn.ended', body: { session: sid, cost: ev.cost || 0, tokens: ev.tokens || 0, isError: !!ev.isError, interrupted: ev.text === 'Interrupted' } });
         if (failed && !AUTH_RE.test(ev.text)) this.append({ type: 'turn.failed', body: { session: sid, text: clipText(ev.text, 500) } });
         this.afterTurn(s, ev);
         // The session is idle again: deliver what queued meanwhile (after its own inbox flush).
@@ -1457,6 +1460,8 @@ export class Project {
       cwd: t.cwd,
       pr: t.pr,
       cost: t.cost,
+      tokens: t.tokens || 0,
+      context: s ? { used: s.meta.contextTokens || 0, window: s.meta.contextWindow, compactWindow: s.meta.compactWindow, model: s.meta.activeModel || s.meta.model } : null,
       reminder: t.reminder,
       error: t.error,
       model: s?.meta.model || t.model,
@@ -1516,7 +1521,7 @@ export class Project {
       ...this.summary(),
       settings: this.settings,
       coordinatorId: this.state.coordinator,
-      coordinator: coord ? { id: coord.id, busy: coord.turns > 0, live: coord.running, contextTokens: coord.meta.contextTokens || 0, model: coord.meta.model, effort: coord.meta.effort, queued: (this.state.queue[coord.id] || []).length } : null,
+      coordinator: coord ? { id: coord.id, busy: coord.turns > 0, live: coord.running, contextTokens: coord.meta.contextTokens || 0, context: { used: coord.meta.contextTokens || 0, window: coord.meta.contextWindow, compactWindow: coord.meta.compactWindow, model: coord.meta.activeModel || coord.meta.model }, model: coord.meta.model, effort: coord.meta.effort, queued: (this.state.queue[coord.id] || []).length } : null,
       threads: Object.values(this.state.threads).map((t) => this.threadSummary(t)),
       decisions: Object.values(this.state.decisions).sort((a, b) => a.ts - b.ts),
       suggestions: Object.values(this.state.suggestions || {}).sort((a, b) => a.ts - b.ts),
@@ -1525,12 +1530,19 @@ export class Project {
       followUps: Object.values(this.state.followUps),
       reactions: this.state.reactions,
       feed,
-      usage: { total: this.state.cost, coordinator: this.state.coordinatorCost || 0 },
+      usage: { total: this.state.cost, coordinator: this.state.coordinatorCost || 0, tokens: this.state.tokens || 0, coordinatorTokens: this.state.coordinatorTokens || 0 },
+      rateLimit: this.rateLimitWindows(coord),
       limit: this.state.limit,
       libraryDir: this.libraryDir,
       running: this.runningThreadTurns(),
       view: this.viewInfo(),
     };
+  }
+
+  /** Plan usage windows (5-hour, weekly…): the newest the CLI reported in any chat, else this project's coordinator's. */
+  rateLimitWindows(coord) {
+    const w = this.engine.store.rateLimit?.unifiedWindows || coord?.meta.rateLimit?.unifiedWindows;
+    return w && Object.keys(w).length ? w : null;
   }
 
   /** The Custom view tab: the pinned page with a URL and its mtime (so the panel reloads when it changes). */
