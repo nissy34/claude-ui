@@ -72,6 +72,7 @@ export function ThreadCard({ projectId, thread, onOpen, onError, compact, action
             PR #{t.pr.number} {t.pr.state === 'MERGED' ? 'merged' : t.pr.summary?.fail ? `· ${t.pr.summary.fail} failing` : ''}
           </a>
         )}
+        {t.sideOf && <Pill>Side question</Pill>}
         {!compact && t.branch && <span className="pill mono">⎇ {t.branch}</span>}
         {t.reminder && <span className="muted small">⏰ {new Date(t.reminder.at).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' })}</span>}
         <span className="muted small">{timeAgo(t.lastActivity)}</span>
@@ -117,6 +118,60 @@ export function ThreadCard({ projectId, thread, onOpen, onError, compact, action
             Fork
           </Button>
         </div>
+      )}
+    </Card>
+  );
+}
+
+/** A thread the coordinator suggested: Start or Dismiss. */
+export function SuggestionCard({ projectId, suggestion, threadTitle, onError, onOpenThread }) {
+  const [busy, setBusy] = useState(false);
+  const [open, setOpen] = useState(false);
+  if (!suggestion) return null;
+  const sg = suggestion;
+  const act = async (action) => {
+    setBusy(true);
+    try {
+      const r = await api(`/api/cprojects/${projectId}/suggestions/${sg.id}`, { method: 'POST', body: { action } });
+      if (r.thread) onOpenThread?.(r.thread.id);
+    } catch (e) {
+      onError?.(e);
+    }
+    setBusy(false);
+  };
+  return (
+    <Card className={`pj-decision pj-suggestion ${sg.answer ? 'answered' : ''}`}>
+      <div className="pj-decision-from">Suggested thread</div>
+      <div className="pj-decision-q">{sg.title}</div>
+      {sg.reason && <div className="muted small">{sg.reason}</div>}
+      <button className="linklike small" onClick={() => setOpen((o) => !o)}>
+        {open ? 'Hide the brief' : 'Show the brief'}
+      </button>
+      {open && <Md text={sg.brief} />}
+      {!sg.answer ? (
+        <div className="pj-suggestion-actions">
+          <Button size="sm" variant="primary" disabled={busy} onClick={() => act('start')}>
+            Start thread
+          </Button>
+          <Button size="sm" variant="ghost" disabled={busy} onClick={() => act('dismiss')}>
+            Dismiss
+          </Button>
+          {busy && <Spinner />}
+        </div>
+      ) : sg.answer.action === 'start' ? (
+        <div className="muted small">
+          Started {timeAgo(sg.answer.ts)}
+          {sg.answer.thread && (
+            <>
+              {' · '}
+              <button className="linklike" onClick={() => onOpenThread?.(sg.answer.thread)}>
+                {threadTitle || 'open thread'}
+              </button>
+            </>
+          )}
+        </div>
+      ) : (
+        <div className="muted small">Dismissed {timeAgo(sg.answer.ts)}</div>
       )}
     </Card>
   );
