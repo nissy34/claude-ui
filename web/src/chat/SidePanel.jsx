@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { api } from '../api.js';
 import { highlight } from './markdown.js';
 import ArtifactView from './ArtifactView.jsx';
@@ -326,39 +326,126 @@ function FileView({ sessionId, path, refreshKey }) {
   );
 }
 
-export default function SidePanel({ sessionId, tab, files, titles = {}, onTab, onCloseFile, onClose, refreshKey, onOpenFile, onPrompt, busy, onError, wide, onWide, tasks = [], taskFocus }) {
-  const liveTasks = tasks.filter(isLive).length;
+function PaneTabs({ tab, files, titles, tasks, liveTasks, onTab, onCloseFile, terminal }) {
   return (
-    <aside className={`side-panel ${wide ? 'wide' : ''}`}>
-      <div className="panel-head">
-        <div className="panel-tabs">
-          <button className={`panel-tab ${tab === 'changes' ? 'on' : ''}`} onClick={() => onTab('changes')}>
-            Changes
-          </button>
-          <button className={`panel-tab ${tab === 'browser' ? 'on' : ''}`} onClick={() => onTab('browser')}>
-            Browser
-          </button>
-          {(tab === 'tasks' || tasks.length > 0) && (
-            <button className={`panel-tab ${tab === 'tasks' ? 'on' : ''}`} onClick={() => onTab('tasks')} title="Background tasks">
-              Background{liveTasks > 0 && <span className="count tab-count">{liveTasks}</span>}
-            </button>
+    <div className="panel-tabs">
+      <button className={`panel-tab ${tab === 'changes' ? 'on' : ''}`} onClick={() => onTab('changes')}>
+        Changes
+      </button>
+      <button className={`panel-tab ${tab === 'browser' ? 'on' : ''}`} onClick={() => onTab('browser')}>
+        Browser
+      </button>
+      {terminal && (
+        <button className={`panel-tab ${tab === 'terminal' ? 'on' : ''}`} onClick={() => onTab('terminal')}>
+          Terminal
+        </button>
+      )}
+      {(tab === 'tasks' || tasks.length > 0) && (
+        <button className={`panel-tab ${tab === 'tasks' ? 'on' : ''}`} onClick={() => onTab('tasks')} title="Background tasks">
+          Background{liveTasks > 0 && <span className="count tab-count">{liveTasks}</span>}
+        </button>
+      )}
+      {files.map((f) => (
+        <button key={f} className={`panel-tab ${tab === f ? 'on' : ''}`} onClick={() => onTab(f)} title={f.replace(/^art:/, '')}>
+          {f.startsWith('art:') ? '◇ ' : ''}
+          {titles[f] || f.split(/[\\/]/).pop()}
+          {onCloseFile && (
+            <span
+              style={{ marginLeft: 6, opacity: 0.6 }}
+              onClick={(e) => {
+                e.stopPropagation();
+                onCloseFile(f);
+              }}
+            >
+              ×
+            </span>
           )}
-          {files.map((f) => (
-            <button key={f} className={`panel-tab ${tab === f ? 'on' : ''}`} onClick={() => onTab(f)} title={f.replace(/^art:/, '')}>
-              {f.startsWith('art:') ? '◇ ' : ''}
-              {titles[f] || f.split(/[\\/]/).pop()}
-              <span
-                style={{ marginLeft: 6, opacity: 0.6 }}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onCloseFile(f);
-                }}
-              >
-                ×
-              </span>
-            </button>
-          ))}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// Stacked and side-by-side splits each remember their own divider position.
+function readRatio(dir) {
+  try {
+    const r = parseFloat(localStorage.getItem('cw.splitRatio.' + dir));
+    return r > 0.15 && r < 0.85 ? r : 0.5;
+  } catch {
+    return 0.5;
+  }
+}
+
+/**
+ * The side panel. With split on it shows two panes at once (Desktop's multi-pane workspace):
+ * stacked when the panel is narrow, side by side when it's wide; drag the divider to resize.
+ * `terminal` is the chat's terminal view (or null) so it can live in a pane instead of the drawer.
+ */
+export default function SidePanel({ sessionId, tab, files, titles = {}, onTab, onCloseFile, onClose, refreshKey, onOpenFile, onPrompt, busy, onError, wide, onWide, tasks = [], taskFocus, split, onSplit, terminal, onStartTerminal }) {
+  const liveTasks = tasks.filter(isLive).length;
+  const dir = wide ? 'across' : 'down';
+  const [ratios, setRatios] = useState(() => ({ down: readRatio('down'), across: readRatio('across') }));
+  const ratio = ratios[dir];
+  const setRatio = (r) => setRatios((x) => ({ ...x, [dir]: typeof r === 'function' ? r(x[dir]) : r }));
+  const bodyRef = useRef(null);
+  const tabProps = { files, titles, tasks, liveTasks, terminal: !!onStartTerminal };
+
+  const body = (t) =>
+    t === 'changes' ? (
+      <Changes sessionId={sessionId} refreshKey={refreshKey} onOpenFile={onOpenFile} onPrompt={onPrompt} busy={busy} />
+    ) : t === 'tasks' ? (
+      <BackgroundTasks sessionId={sessionId} tasks={tasks} onError={onError} focus={taskFocus} />
+    ) : t === 'browser' ? (
+      <BrowserView sessionId={sessionId} onError={onError} />
+    ) : t === 'terminal' ? (
+      terminal || (
+        <div className="pane-empty">
+          <button className="btn" onClick={onStartTerminal}>
+            Start a terminal in this folder
+          </button>
         </div>
+      )
+    ) : t.startsWith('art:') ? (
+      <ArtifactView sessionId={sessionId} path={t.slice(4)} refreshKey={refreshKey} />
+    ) : (
+      <FileView sessionId={sessionId} path={t} refreshKey={refreshKey} />
+    );
+
+  const drag = (e) => {
+    e.preventDefault();
+    const box = bodyRef.current?.getBoundingClientRect();
+    if (!box) return;
+    const across = dir === 'across';
+    const move = (ev) => {
+      const pt = ev.touches ? ev.touches[0] : ev;
+      const r = across ? (pt.clientX - box.left) / box.width : (pt.clientY - box.top) / box.height;
+      setRatio(Math.min(0.85, Math.max(0.15, r)));
+    };
+    const up = () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+      document.body.classList.remove('pane-dragging', 'across', 'down');
+      setRatio((r) => {
+        try {
+          localStorage.setItem('cw.splitRatio.' + dir, String(r));
+        } catch {}
+        return r;
+      });
+    };
+    document.body.classList.add('pane-dragging', across ? 'across' : 'down');
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+  };
+
+  return (
+    <aside className={`side-panel ${wide ? 'wide' : ''} ${split ? 'split' : ''}`}>
+      <div className="panel-head">
+        <PaneTabs tab={tab} onTab={onTab} onCloseFile={onCloseFile} {...tabProps} />
+        {onSplit && (
+          <IconButton className={`hide-mobile ${split ? 'on' : ''}`} title={split ? 'Show one pane' : 'Split: show two panes at once'} onClick={() => onSplit(split ? null : tab === 'changes' ? 'browser' : 'changes')}>
+            {wide ? '◫' : '⊟'}
+          </IconButton>
+        )}
         <IconButton className="hide-mobile" title={wide ? 'Narrower' : 'Wider'} onClick={onWide}>
           {wide ? '⇥' : '⇤'}
         </IconButton>
@@ -366,19 +453,25 @@ export default function SidePanel({ sessionId, tab, files, titles = {}, onTab, o
           ✕
         </IconButton>
       </div>
-      <div className="panel-body">
-        {tab === 'changes' ? (
-          <Changes sessionId={sessionId} refreshKey={refreshKey} onOpenFile={onOpenFile} onPrompt={onPrompt} busy={busy} />
-        ) : tab === 'tasks' ? (
-          <BackgroundTasks sessionId={sessionId} tasks={tasks} onError={onError} focus={taskFocus} />
-        ) : tab === 'browser' ? (
-          <BrowserView sessionId={sessionId} onError={onError} />
-        ) : tab.startsWith('art:') ? (
-          <ArtifactView sessionId={sessionId} path={tab.slice(4)} refreshKey={refreshKey} />
-        ) : (
-          <FileView sessionId={sessionId} path={tab} refreshKey={refreshKey} />
-        )}
-      </div>
+      {split ? (
+        <div className={`pane-split ${wide ? 'across' : 'down'}`} ref={bodyRef}>
+          <div className="panel-body pane-a" style={{ flexBasis: `${ratio * 100}%` }}>
+            {body(tab)}
+          </div>
+          <div className="pane-divider" onPointerDown={drag} role="separator" aria-orientation={wide ? 'vertical' : 'horizontal'} title="Drag to resize" />
+          <div className="pane-b">
+            <div className="pane-head-2">
+              <PaneTabs tab={split} onTab={onSplit} {...tabProps} />
+              <IconButton title="Close this pane" onClick={() => onSplit(null)}>
+                ✕
+              </IconButton>
+            </div>
+            <div className="panel-body">{body(split)}</div>
+          </div>
+        </div>
+      ) : (
+        <div className="panel-body">{body(tab)}</div>
+      )}
     </aside>
   );
 }
