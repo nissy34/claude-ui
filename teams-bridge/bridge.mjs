@@ -16,7 +16,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { CHANNEL_SCOPES, Graph } from './graph.mjs';
 import { answeredCard, askCard, flowAnswer, flowCard, postCard } from './cards.mjs';
-import { HELP, TAG, askHtml, esc, md, parseCommand, permissionReply, plain, postHtml, replyParts, resolvedHtml, withQuote } from './text.mjs';
+import { HELP, TAG, askHtml, esc, md, parseCommand, permissionReply, plain, postHtml, replyParts, resolvedHtml, turnWord, withQuote } from './text.mjs';
 
 const env = process.env;
 const home = (p) => p.replace(/^~(?=$|\/)/, os.homedir());
@@ -316,27 +316,72 @@ async function onEvent(ev) {
     const target = ev.type === 'post' ? { type: 'project', id: ev.project.id, name: ev.project.name } : { type: 'chat', id: ev.session.id, name: ev.session.name };
     // Asked through the Assistant: the answer comes back in the thread where you asked.
     const viaAssistant = chan && ev.via === 'assistant' && st.assistantRoot;
-    // A chat reports a turn each time it stops, also after a background agent or a task notice that
-    // added no new words. The same words again update the message already posted (a new title, say)
-    // instead of posting it all again.
-    if (ev.type === 'turn' && (await sameTurn(ev))) return;
-    const id = await post(postHtml(ev), { kind: 'target', target, thread: chan && !viaAssistant ? targetOf(ev) || target : undefined }, postCard(ev, cfg), viaAssistant ? st.assistantRoot : undefined);
-    if (ev.type === 'turn') {
-      st.turns ||= {};
-      st.turns[ev.session.id] = { msg: id, text: ev.text || '', name: ev.session.name, isError: !!ev.isError };
-      save();
-    }
+    const meta = { kind: 'target', target, thread: chan && !viaAssistant ? targetOf(ev) || target : undefined };
+    const root = viaAssistant ? st.assistantRoot : undefined;
+    if (ev.type === 'turn') return reportTurn(ev, meta, root);
+    const id = await post(postHtml(ev), meta, postCard(ev, cfg), root);
     if (ev.type !== 'turn') await ping(target.name, ev.text, st.sent[id]?.url);
   }
 }
 
-/** True when this turn says what the chat's last posted turn said; then that message is edited (if its title changed) instead. */
-async function sameTurn(ev) {
-  const last = st.turns?.[ev.session.id];
-  if (!last || last.text !== (ev.text || '') || last.isError !== !!ev.isError) return false;
+/**
+ * A chat's turn report. A chat stops a turn each time a background agent or monitor wakes it, so
+ * while background tasks run there is one live message per chat, edited in place (edits don't
+ * notify). A new message, which notifies, comes when the chat has finished (nothing left running)
+ * or failed. The same words again never post twice.
+ */
+async function reportTurn(ev, meta, root) {
+  st.turns ||= {};
+  const sid = ev.session.id;
+  const last = st.turns[sid];
+  const lastSent = last && st.sent[last.msg];
+  // A follow-up turn that wrote nothing: only the heading of what's posted may change.
+  const quiet = ev.followUp && !ev.isError && !(ev.text || '').trim();
+  const text = quiet ? last?.text || '' : ev.text || '';
+  const now = { ...ev, text };
+  const finished = ev.isError || !ev.running;
+  const remember = (msg, live) => {
+    st.turns[sid] = { msg, text, name: ev.session.name, isError: !!ev.isError, running: ev.running || 0, live };
+    save();
+  };
+  const newMsg = async (live) => remember(await post(postHtml(now), meta, postCard(now, cfg), root), live);
+
+  if (last?.live && lastSent) {
+    if (!finished) {
+      // Still working: the live message shows the latest words.
+      if (text !== last.text || ev.session.name !== last.name || (ev.running || 0) !== last.running) {
+        await editTurn(last, now);
+        remember(last.msg, true);
+      }
+      return;
+    }
+    if (text === last.text && !!ev.isError === last.isError) {
+      // Finished with nothing new: mark the live message finished, and say so in a short reply to it (that notifies).
+      await editTurn(last, now);
+      remember(last.msg, false);
+      const quote = { id: last.msg, preview: plain(postHtml(now)).replace(/\s+/g, ' ').trim(), user: me ? { id: me.id, displayName: me.displayName } : null };
+      const line = `${TAG} <b>${esc(ev.session.name)}</b> ${turnWord(now)}.`;
+      await post(line, { ...meta, quote }, null, root).catch(() => post(line, meta, null, root));
+      return;
+    }
+    // Finished with new words: the live message becomes an earlier update, and the result comes as a new message.
+    await editTurn(last, { ...ev, text: last.text, isError: last.isError, running: 0, earlier: true });
+    return newMsg(false);
+  }
+  if (quiet && !lastSent) return;
+  if (lastSent && text === last.text && !!ev.isError === last.isError) {
+    // The same words again: update the heading of what's posted (a new title, say), never post it again.
+    if (ev.session.name !== last.name || (ev.running || 0) !== last.running) await editTurn(last, now);
+    remember(last.msg, !finished);
+    return;
+  }
+  return newMsg(!finished);
+}
+
+/** Edit a posted turn report in place. Failures leave the old one (better than posting it again). */
+async function editTurn(last, ev) {
   const sent = st.sent[last.msg];
-  if (!sent) return false;
-  if (last.name === ev.session.name) return true;
+  if (!sent) return;
   const html = postHtml(ev);
   const card = sent.card ? postCard(ev, cfg) : null;
   try {
@@ -345,11 +390,8 @@ async function sameTurn(ev) {
     else await graph.edit(cfg.chatId, last.msg, html);
     Object.assign(sent, { html, ...(card ? { card } : {}) });
   } catch (e) {
-    log('[teams] could not update the finished message:', e.message); // keep the old title rather than post it again
+    log('[teams] could not update a turn message:', e.message);
   }
-  last.name = ev.session.name;
-  save();
-  return true;
 }
 
 async function uiLoop() {

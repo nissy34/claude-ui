@@ -1,6 +1,7 @@
 // Adaptive Cards for the Teams bridge. The bridge posts as you through Graph, so cards are
 // read-only (no bot receives button taps): you answer by replying, as with plain messages.
 // Links open the web UI when CW_PUBLIC_URL (or TEAMS_UI_LINK) says where it is.
+import { turnWord } from './text.mjs';
 
 const clip = (s, n) => {
   s = String(s ?? '');
@@ -105,7 +106,7 @@ export function answeredCard(c, answer, by) {
 
 /** Coordinator posts, finished chats, notify_user. */
 export function postCard(ev, { uiUrl } = {}) {
-  const title = ev.type === 'post' ? ev.project.name : ev.type === 'turn' ? `${ev.session.name} ${ev.isError ? 'stopped with an error' : 'finished'}` : whereOf(ev);
+  const title = ev.type === 'post' ? ev.project.name : ev.type === 'turn' ? `${ev.session.name} ${turnWord(ev)}` : whereOf(ev);
   return card([T(title, { weight: 'Bolder', color: ev.isError ? 'Attention' : 'Default' }), ...(ev.text ? [T(clip(ev.text, 3000), { spacing: 'Small' })] : [])], link(uiUrl, ev.type === 'post' ? { project: ev.project } : { session: ev.session }));
 }
 

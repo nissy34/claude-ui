@@ -11,6 +11,8 @@
 //   @@usage <tokens>                 report this many input tokens on this turn's replies (context size)
 //   @@ratelimit <json>               emit a rate_limit_event with these plan usage windows
 //   @@ask <tool> <json>              ask permission to use a tool (can_use_tool) and wait; then say the answer
+//   @@bgtask <ms> [text]             start a background agent that ends <ms> later and wakes a follow-up turn
+//                                    with no user message (saying [text], or nothing)
 // PostToolUse HTTP hooks from --settings run after each tool call, like the real CLI's
 // ($VAR headers from allowedEnvVars); additionalContext they return is logged as hookContext.
 // Directives inside a JSON argument are passed along verbatim, so a test can make one session
@@ -97,7 +99,7 @@ async function runTurn(text) {
   let inputTokens = 100;
   // Only top-level directives of the prompt (not ones nested inside JSON strings).
   for (const line of lines) {
-    const m = /^@@(call|say|sleep|fail|write|writetool|bashfail|usage|ratelimit|ask)\b\s*(.*)$/.exec(line.trim());
+    const m = /^@@(call|say|sleep|fail|write|writetool|bashfail|usage|ratelimit|ask|bgtask)\b\s*(.*)$/.exec(line.trim());
     if (!m) continue;
     const [, cmd, rest] = m;
     if (cmd === 'usage') {
@@ -107,6 +109,15 @@ async function runTurn(text) {
     } else if (cmd === 'say') {
       out({ type: 'assistant', message: { id: `msg_${++msgN}`, role: 'assistant', content: [{ type: 'text', text: rest }], usage: { input_tokens: inputTokens, output_tokens: 10 } }, parent_tool_use_id: null, session_id: sessionId });
       said = true;
+    } else if (cmd === 'bgtask') {
+      const [, ms, words] = /^(\d+)\s*([\s\S]*)$/.exec(rest) || [, '500', ''];
+      const taskId = `task_${crypto.randomBytes(4).toString('hex')}`;
+      out({ type: 'system', subtype: 'task_started', task_id: taskId, task_type: 'local_agent', description: 'fake agent', is_backgrounded: true, session_id: sessionId });
+      setTimeout(() => {
+        out({ type: 'system', subtype: 'task_updated', task_id: taskId, patch: { status: 'completed' }, session_id: sessionId });
+        queue.push(words ? `@@say ${words}` : '@@quiet');
+        drain();
+      }, Number(ms));
     } else if (cmd === 'sleep') {
       await new Promise((r) => setTimeout(r, Number(rest) || 100));
     } else if (cmd === 'fail') {
@@ -174,7 +185,7 @@ async function runTurn(text) {
       await postToolUse(`mcp__${server}__${tool}`, input, result);
     }
   }
-  if (!said && !failed && !lines.some((l) => /^@@(call|write|writetool|bashfail)/.test(l.trim()))) {
+  if (!said && !failed && !lines.some((l) => /^@@(call|write|writetool|bashfail|bgtask|quiet)/.test(l.trim()))) {
     out({ type: 'assistant', message: { id: `msg_${++msgN}`, role: 'assistant', content: [{ type: 'text', text: `ok: ${lines.find((l) => l.trim()) || ''}`.slice(0, 200) }] }, parent_tool_use_id: null, session_id: sessionId });
   }
   out({ type: 'result', subtype: failed ? 'error_during_execution' : 'success', is_error: failed, result: failed ? (typeof failed === 'string' ? failed : 'fake failure') : 'done', duration_ms: Date.now() - t0, num_turns: 1, total_cost_usd: Math.max(0.001, inputTokens * 3e-6), modelUsage: { 'claude-fake': { inputTokens, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 } }, session_id: sessionId });

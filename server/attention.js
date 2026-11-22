@@ -23,6 +23,28 @@ const clip = (s, n) => {
   s = String(s ?? '');
   return s.length > n ? `${s.slice(0, n - 1)}…` : s;
 };
+/**
+ * The text the chat wrote in the turn that just ended: back to your last message or the turn before.
+ * followUp: this turn followed an earlier one with no message from you in between (a background
+ * agent or task finishing woke the chat).
+ */
+function turnReply(s) {
+  const out = [];
+  const ev = s.events || [];
+  let i = ev.length - 1;
+  if (ev[i]?.k === 'result') i--;
+  let followUp = false;
+  for (; i >= 0; i--) {
+    const e = ev[i];
+    if (e.k === 'user') break;
+    if (e.k === 'result') {
+      followUp = true;
+      break;
+    }
+    if (e.k === 'block' && e.block?.type === 'text' && !e.parent) out.unshift(e.block.text);
+  }
+  return { text: out.join('\n\n'), followUp };
+}
 /** Split a leading Markdown blockquote ("> …" lines, as a quote reply sends) from the rest: [quote lines or '', rest]. */
 const splitQuote = (text) => {
   const m = /^((?:>[^\n]*(?:\n|$))+)\n*/.exec(text || '');
@@ -171,7 +193,14 @@ export function createAttention({ store, engine, resolveDir, listProjects, deskt
         return push({ type: 'resolved', id: `elicit:${s.id}:${ev.reqId}`, answer: ev.action, by: s.lastAnswerBy || 'ui' });
       case 'result':
         // Turn updates only for chats the bridge started or wrote to; projects report through their coordinator.
-        if (s.meta.bridge && !s.meta.cproject) push({ type: 'turn', session: sessionInfo(s), via: s.meta.bridgeVia || null, isError: !!ev.isError, text: clip(ev.isError ? ev.text || 'The turn failed.' : s.lastReply(), 3000) });
+        if (s.meta.bridge && !s.meta.cproject) {
+          // Only this turn's words: a turn started by a background task's notice has no user message
+          // before it, so the whole reply since your message would repeat the earlier report.
+          const { text, followUp } = turnReply(s);
+          const running = (s.tasksSummary?.() || []).filter((t) => t.status === 'running').length;
+          // followUp with no text: nothing new to say, but the bridge can still mark the last report finished.
+          push({ type: 'turn', session: sessionInfo(s), via: s.meta.bridgeVia || null, isError: !!ev.isError, running, followUp, text: clip(ev.isError ? ev.text || 'The turn failed.' : text.trim(), 3000) });
+        }
         // The Assistant answers in Teams when the message came from Teams.
         if (s.meta.assistant && s.meta.teamsReply) {
           s.meta.teamsReply = false;

@@ -84,12 +84,20 @@ export function resolvedHtml(original, answer, by) {
   return `${original}<br><b>✓ ${by === 'bridge' ? 'Answered' : 'Answered in the web UI'}: ${esc(answer)}</b>`;
 }
 
+/** How a chat's turn report is headed: "finished" only when nothing is still running in the background. */
+export function turnWord(ev) {
+  if (ev.isError) return 'stopped with an error';
+  if (ev.earlier) return 'update';
+  if (ev.running) return `update (${ev.running === 1 ? 'a background task is' : `${ev.running} background tasks are`} still running)`;
+  return 'finished';
+}
+
 export function postHtml(ev) {
   switch (ev.type) {
     case 'post':
       return `${TAG} <b>${esc(ev.project.name)}</b>:<br>${md(clip(ev.text, 3000))}`;
     case 'turn':
-      return `${TAG} <b>${esc(ev.session.name)}</b> ${ev.isError ? 'stopped with an error' : 'finished'}${ev.text ? `:<br>${md(clip(ev.text, 3000))}` : '.'}`;
+      return `${TAG} <b>${esc(ev.session.name)}</b> ${turnWord(ev)}${ev.text ? `:<br>${md(clip(ev.text, 3000))}` : '.'}`;
     case 'notify':
       return `${TAG} <b>${where(ev)}</b>: ${md(clip(ev.text, 2000))}`;
     default:
