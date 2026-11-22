@@ -162,3 +162,50 @@ export function permissionReply(text) {
   if (['no', 'n', 'deny', 'denied', 'stop', 'cancel', '3'].includes(w)) return { behavior: 'deny', text: m[2].trim() };
   return null;
 }
+
+/** A quoted passage as a Markdown blockquote above the reply: the same shape the web UI's quote reply sends. */
+export function withQuote(quote, reply) {
+  const q = String(quote ?? '').trim();
+  if (!q) return reply;
+  return `${q
+    .split('\n')
+    .map((l) => (l.trim() ? `> ${l}` : '>'))
+    .join('\n')}\n\n${reply}`;
+}
+
+const parseJson = (s) => {
+  if (s && typeof s === 'object') return s;
+  try {
+    return JSON.parse(s);
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * What a Teams quote reply quotes. Graph marks a reply with a "messageReference" attachment (and an
+ * <attachment> tag in the body); some clients put a <blockquote itemtype=".../Reply"> in the body instead.
+ * `sent` holds our own messages by id, so a reply to one of them quotes it in full, not just the preview.
+ * Returns { quote, text }: the quoted words (or null) and your own words without the quote.
+ */
+export function replyParts(msg, sent = {}) {
+  let html = String(msg?.body?.content ?? '');
+  let fromBody = '';
+  const bq = /<blockquote\b[^>]*>([\s\S]*?)<\/blockquote>/i.exec(html);
+  if (bq) {
+    const inner = bq[1];
+    const preview = /<p\b[^>]*itemprop=["']?preview["']?[^>]*>([\s\S]*?)<\/p>/i.exec(inner);
+    fromBody = plain(preview ? preview[1] : inner.replace(/<(strong|span)\b[^>]*itemprop=["']?(mri|time)["']?[^>]*>[\s\S]*?<\/\1>/gi, ''));
+    html = html.slice(0, bq.index) + html.slice(bq.index + bq[0].length);
+  }
+  const ref = (msg?.attachments || []).find((a) => a.contentType === 'messageReference');
+  let quote = '';
+  if (ref) {
+    const c = parseJson(ref.content) || {};
+    const id = c.messageId || ref.id;
+    const mine = id && sent[id];
+    quote = (mine?.html && plain(mine.html)) || plain(c.messagePreview || '') || fromBody;
+  } else quote = fromBody;
+  quote = quote.replace(/^Claude ›\s*/, '').trim();
+  return { quote: quote ? clip(quote, 2000) : null, text: plain(html) };
+}

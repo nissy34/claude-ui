@@ -264,6 +264,16 @@ async function main() {
   const sid = sessions.find((s) => s.cwd === fs.realpathSync(repo))?.id;
   check(sid, 'the chat runs in the demo folder', sessions.map((s) => s.cwd));
 
+  console.log('A turn that says the same thing again updates the posted message');
+  const sameWords = () => botMsgs().filter((m) => /Same words here/.test(textOf(m)) && /finished/.test(textOf(m)));
+  say('@@say Same words here');
+  await until(() => sameWords().length === 1, 15_000, 'first finished message');
+  await api(`/api/sessions/${sid}`, { method: 'PATCH', body: { name: 'Renamed demo chat' } });
+  say('@@say Same words here');
+  await until(() => sameWords().some((m) => /Renamed demo chat(<\/b>)? finished/.test(textOf(m))), 15_000, 'finished message renamed');
+  await sleep(2500);
+  check(sameWords().length === 1, 'the same words again edit the one message (new title) instead of posting it again', sameWords().map(textOf));
+
   console.log('Plain text goes to the same chat; #code answers a question');
   say('@@ask AskUserQuestion {"questions":[{"question":"Colour?","header":"Colour","multiSelect":false,"options":[{"label":"Red","description":"warm"},{"label":"Blue","description":"cool"}]}]}');
   const q = await until(() => findBot(/Colour\?[\s\S]*2\. Blue[\s\S]*Reply to this message/), 15_000, 'question message');
@@ -373,6 +383,18 @@ async function main() {
   check(true, 'the Assistant answers a request when the user clearly said so');
   await until(() => findBot(/Done, npm test is running\./), 10_000, 'assistant confirmation');
   check(true, 'and confirms in Teams');
+  const said = findBot(/Done, npm test is running\./);
+  say('I meant the other tests<br>@@say Got it, the other tests.', said.id);
+  await until(() => findBot(/Got it, the other tests\./), 20_000, 'reply to the quote reply');
+  const prompts = fs.readFileSync(env.FAKE_CLAUDE_LOG, 'utf8').trim().split('\n').map((l) => JSON.parse(l)).filter((x) => x.prompt);
+  const quoted = prompts.find((x) => /I meant the other tests/.test(x.prompt))?.prompt || '';
+  check(/^> Done, npm test is running\.\n\nI meant the other tests/.test(quoted), 'a Teams quote reply reaches the Assistant with the quoted message on top', quoted);
+  // Some clients send the quote as a <blockquote> in the body instead of an attachment.
+  const bqId = `m${++n}`;
+  chat.push({ id: bqId, messageType: 'message', createdDateTime: new Date(Date.now() + n).toISOString(), from: { user: { id: ME.id } }, body: { contentType: 'html', content: '<blockquote itemtype="http://schema.skype.com/Reply" itemid="1"><strong itemprop="mri">Me</strong><span itemprop="time">1</span><p itemprop="preview">the old soak crash</p></blockquote><p>that one please<br>@@say On the soak crash.</p>' }, attachments: [] });
+  await until(() => findBot(/On the soak crash\./), 20_000, 'reply to the blockquote reply');
+  const bq = fs.readFileSync(env.FAKE_CLAUDE_LOG, 'utf8').trim().split('\n').map((l) => JSON.parse(l)).find((x) => x.prompt && /that one please/.test(x.prompt))?.prompt || '';
+  check(/^> the old soak crash\n\nthat one please/.test(bq), 'a <blockquote> reply is passed on the same way', bq);
 
   console.log('Buttons through a Teams workflow');
   const flowSay = (d) => flowMsgs.push({ id: `f${++n}`, messageType: 'message', createdDateTime: new Date(Date.now() + n).toISOString(), from: { application: { displayName: 'Workflows' } }, body: { contentType: 'html', content: `<p>cw:${JSON.stringify(d).replace(/"/g, '&quot;')}</p>` } });

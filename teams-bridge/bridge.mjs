@@ -16,7 +16,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { CHANNEL_SCOPES, Graph } from './graph.mjs';
 import { answeredCard, askCard, flowAnswer, flowCard, postCard } from './cards.mjs';
-import { HELP, TAG, askHtml, esc, md, parseCommand, permissionReply, plain, postHtml, resolvedHtml } from './text.mjs';
+import { HELP, TAG, askHtml, esc, md, parseCommand, permissionReply, plain, postHtml, replyParts, resolvedHtml, withQuote } from './text.mjs';
 
 const env = process.env;
 const home = (p) => p.replace(/^~(?=$|\/)/, os.homedir());
@@ -58,7 +58,7 @@ const log = (...a) => console.log(new Date().toISOString(), ...a);
 
 // ---------- state (survives restarts) ----------
 const STATE_FILE = path.join(cfg.dir, 'state.json');
-let st = { sent: {}, items: {}, codes: {}, nextCode: 1, target: null, seen: [], started: false, nonces: {}, waiting: {}, flowSeen: null, flowChat: '', topics: {}, names: {}, threads: {}, assistantRoot: null };
+let st = { sent: {}, items: {}, codes: {}, nextCode: 1, target: null, seen: [], started: false, nonces: {}, waiting: {}, flowSeen: null, flowChat: '', topics: {}, names: {}, threads: {}, assistantRoot: null, turns: {} };
 try {
   st = { ...st, ...JSON.parse(fs.readFileSync(STATE_FILE, 'utf8')) };
 } catch {}
@@ -316,9 +316,40 @@ async function onEvent(ev) {
     const target = ev.type === 'post' ? { type: 'project', id: ev.project.id, name: ev.project.name } : { type: 'chat', id: ev.session.id, name: ev.session.name };
     // Asked through the Assistant: the answer comes back in the thread where you asked.
     const viaAssistant = chan && ev.via === 'assistant' && st.assistantRoot;
+    // A chat reports a turn each time it stops, also after a background agent or a task notice that
+    // added no new words. The same words again update the message already posted (a new title, say)
+    // instead of posting it all again.
+    if (ev.type === 'turn' && (await sameTurn(ev))) return;
     const id = await post(postHtml(ev), { kind: 'target', target, thread: chan && !viaAssistant ? targetOf(ev) || target : undefined }, postCard(ev, cfg), viaAssistant ? st.assistantRoot : undefined);
+    if (ev.type === 'turn') {
+      st.turns ||= {};
+      st.turns[ev.session.id] = { msg: id, text: ev.text || '', name: ev.session.name, isError: !!ev.isError };
+      save();
+    }
     if (ev.type !== 'turn') await ping(target.name, ev.text, st.sent[id]?.url);
   }
+}
+
+/** True when this turn says what the chat's last posted turn said; then that message is edited (if its title changed) instead. */
+async function sameTurn(ev) {
+  const last = st.turns?.[ev.session.id];
+  if (!last || last.text !== (ev.text || '') || last.isError !== !!ev.isError) return false;
+  const sent = st.sent[last.msg];
+  if (!sent) return false;
+  if (last.name === ev.session.name) return true;
+  const html = postHtml(ev);
+  const card = sent.card ? postCard(ev, cfg) : null;
+  try {
+    if (chan) await graph.channelEdit(chan, last.msg, sent.root, card ? null : html, card);
+    else if (card) await graph.editCard(cfg.chatId, last.msg, card);
+    else await graph.edit(cfg.chatId, last.msg, html);
+    Object.assign(sent, { html, ...(card ? { card } : {}) });
+  } catch (e) {
+    log('[teams] could not update the finished message:', e.message); // keep the old title rather than post it again
+  }
+  last.name = ev.session.name;
+  save();
+  return true;
 }
 
 async function uiLoop() {
@@ -434,14 +465,17 @@ async function defaultTarget() {
 
 async function handle(msg) {
   const ref = (msg.attachments || []).find((a) => a.contentType === 'messageReference');
-  const text = plain(msg.body?.content || '');
+  // A quote reply: the quoted message travels with your words (as a blockquote on top), so whoever
+  // reads it knows what you replied to. Commands and answers to requests use your words alone.
+  const { quote, text } = replyParts(msg, st.sent);
   if (!text) return;
+  const full = withQuote(quote, text);
   // A reply to one of our messages answers it, or continues that conversation.
   if (ref && st.sent[ref.id]) {
     const s = st.sent[ref.id];
     if (s.kind === 'ask') return answer(s.item, text, msg.id);
-    if (s.kind === 'target') return sendTo(s.target, text, msg.id);
-    if (s.kind === 'assistant') return toAssistant(text, msg.id);
+    if (s.kind === 'target') return sendTo(s.target, full, msg.id);
+    if (s.kind === 'assistant') return toAssistant(full, msg.id);
   }
   if (chan && msg.root && !text.startsWith('/')) {
     // A reply in a thread: it belongs to that thread's project or chat (or the Assistant).
@@ -451,9 +485,9 @@ async function handle(msg) {
       const short = /^\S+$/.test(text.trim());
       if (open.length === 1 && short && (permissionReply(text) || /^\d+$/.test(text.trim()))) return answer(open[0][0], text, msg.id);
       if (open.length === 1 && open[0][1].kind === 'question') return answer(open[0][0], text, msg.id);
-      return sendTo(th.target, text, msg.id);
+      return sendTo(th.target, full, msg.id);
     }
-    if (cfg.assistant) return toAssistant(text, msg.id);
+    if (cfg.assistant) return toAssistant(full, msg.id);
   }
   const c = parseCommand(text);
   switch (c.cmd) {
@@ -529,10 +563,10 @@ async function handle(msg) {
       // With the Assistant on, only a one-word reply takes this shortcut; anything longer goes to the Assistant.
       const short = !cfg.assistant || /^\S+$/.test(c.text.trim());
       if (open.length === 1 && short && (permissionReply(c.text) || /^\d+$/.test(c.text.trim()))) return answer(open[0][0], c.text, msg.id);
-      if (cfg.assistant) return toAssistant(c.text, msg.id);
+      if (cfg.assistant) return toAssistant(withQuote(quote, c.text), msg.id);
       const t = await defaultTarget().catch(() => null);
       if (!t) return post(`${TAG} Who should get this? Use <b>/project name: …</b>, <b>/new folder: …</b> or <b>/to name</b>.`, { kind: 'note' });
-      return sendTo(t, c.text, msg.id);
+      return sendTo(t, withQuote(quote, c.text), msg.id);
     }
   }
 }
