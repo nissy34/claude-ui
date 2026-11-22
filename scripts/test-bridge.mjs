@@ -286,7 +286,16 @@ async function main() {
   check(/still running/.test(textOf(q1)), 'the quiet one starts as an update');
   await until(() => /finished/.test(textOf(chat.find((m) => m.id === q1.id))), 15_000, 'quiet update marked finished');
   await sleep(2500);
-  check(repoMsgs(/Quiet agent running\./).length === 1, 'an agent ending with nothing to say turns that update into "finished" in place, with no new message', repoMsgs(/Quiet agent running\./).map(textOf));
+  check(repoMsgs(/Quiet agent running\./).length === 1, 'an agent ending with nothing to say turns that update into "finished" in place', repoMsgs(/Quiet agent running\./).map(textOf));
+  check(botMsgs().some((m) => /Renamed demo chat<\/b> finished\.$/.test(m.body.content) && (m.attachments || []).some((a) => a.contentType === 'messageReference' && a.id === q1.id)), 'and a short "finished." reply to it notifies you');
+  const before2 = botMsgs().length;
+  say('@@say Two agents running.<br>@@bgtask 1500 First agent done.<br>@@bgtask 4000 Both agents done.');
+  const live = await until(() => repoMsgs(/Two agents running\./)[0], 15_000, 'live message');
+  await until(() => /First agent done\./.test(textOf(chat.find((m) => m.id === live.id))), 15_000, 'live message edited');
+  check(/still running/.test(textOf(chat.find((m) => m.id === live.id))), 'while an agent still runs, the next report edits the same live message');
+  const fin = await until(() => repoMsgs(/Both agents done\./)[0], 15_000, 'final message');
+  check(fin.id !== live.id && /finished/.test(textOf(fin)) && !/still running/.test(textOf(chat.find((m) => m.id === live.id))), 'the result comes as a new message, and the live one stops saying "still running"');
+  check(botMsgs().length - before2 === 2, 'two messages for the whole run: the live one and the result', botMsgs().slice(before2).map(textOf));
 
   console.log('Plain text goes to the same chat; #code answers a question');
   say('@@ask AskUserQuestion {"questions":[{"question":"Colour?","header":"Colour","multiSelect":false,"options":[{"label":"Red","description":"warm"},{"label":"Blue","description":"cool"}]}]}');

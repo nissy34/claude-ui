@@ -87,6 +87,7 @@ export function resolvedHtml(original, answer, by) {
 /** How a chat's turn report is headed: "finished" only when nothing is still running in the background. */
 export function turnWord(ev) {
   if (ev.isError) return 'stopped with an error';
+  if (ev.earlier) return 'update';
   if (ev.running) return `update (${ev.running === 1 ? 'a background task is' : `${ev.running} background tasks are`} still running)`;
   return 'finished';
 }
