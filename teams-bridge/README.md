@@ -141,7 +141,7 @@ Make the workflow once, at make.powerautomate.com > Create > Instant cloud flow 
    - Update message: `✓ Sent`. Should update card: **Yes**.
 3. Action **Post message in a chat or channel**:
    - Post as **Flow bot**, Post in **Chat with Flow bot**, Recipient: you.
-   - Message: an expression, `concat('cw:', string(body('Post_card_in_a_chat_or_channel_and_wait_for_a_response')?['data']))`. Use your step 2 action's name, with spaces as underscores.
+   - Message: an expression, `concat('cw:', string(body('Post_card_in_a_chat_or_channel_and_wait_for_a_response')?['data']))`. Use your step 2 action's name, with spaces as underscores (often `Post_adaptive_card_and_wait_for_a_response`).
 4. Save, then copy the trigger's URL into `TEAMS_FLOW_URL`.
 
 The bridge finds the chat with the Workflows bot by itself after the first card. If it doesn't, list your chats (`bridge.mjs chats`) and set `TEAMS_FLOW_CHAT_ID`. Each card carries a random secret, and only answers that echo it back count. Requests still appear in your own chat too, where replying keeps working. With `TEAMS_FLOW_URL` set, `TEAMS_PING_URL` isn't needed for requests.
