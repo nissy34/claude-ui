@@ -435,7 +435,7 @@ app.post('/api/bridge-signin', (req, res) => {
   if (!isAuthed(req)) return res.status(401).json({ error: 'Not logged in' });
   if (!originOk(req)) return res.status(403).json({ error: 'Bad origin' });
   const url = String(req.body?.url || '').trim();
-  if (!/^https?:\/\/[^/]*\/?\?.*(code|error)=/.test(url)) return res.status(400).json({ error: 'Paste the whole address the browser ended on, starting with http://localhost/?code=' });
+  if (!/^https?:\/\/\S*[?&](code|error)=/.test(url)) return res.status(400).json({ error: 'Paste the whole address the browser ended on, with ?code= in it (http://localhost/?code=…)' });
   attention.signinReply(url);
   res.json({ ok: true });
 });

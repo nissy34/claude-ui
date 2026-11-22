@@ -55,6 +55,8 @@ You need an Entra app registration that may read and send your chat messages:
 4. API permissions > Microsoft Graph > Delegated: **Chat.ReadWrite**, **User.Read** (`offline_access` is added automatically). Grant consent if your tenant needs it.
 5. Copy the **Application (client) ID** and **Directory (tenant) ID**.
 
+In the newer Entra screen this is Authentication > **Add Redirect URI** > Mobile and desktop applications > custom URI `http://localhost`. If you can't add `http://localhost`, Microsoft's own `https://login.microsoftonline.com/common/oauth2/nativeclient` works the same way: add that and set `TEAMS_REDIRECT_URI` to it.
+
 No client secret, no public endpoint. Nothing listens on `http://localhost`: after you sign in, the browser lands on an error page there, and you copy that page's address back to the bridge.
 
 ### 2. Settings
