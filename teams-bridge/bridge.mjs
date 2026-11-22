@@ -323,20 +323,25 @@ async function onEvent(ev) {
     const id = await post(postHtml(ev), { kind: 'target', target, thread: chan && !viaAssistant ? targetOf(ev) || target : undefined }, postCard(ev, cfg), viaAssistant ? st.assistantRoot : undefined);
     if (ev.type === 'turn') {
       st.turns ||= {};
-      st.turns[ev.session.id] = { msg: id, text: ev.text || '', name: ev.session.name, isError: !!ev.isError };
+      st.turns[ev.session.id] = { msg: id, text: ev.text || '', name: ev.session.name, isError: !!ev.isError, running: ev.running || 0 };
       save();
     }
     if (ev.type !== 'turn') await ping(target.name, ev.text, st.sent[id]?.url);
   }
 }
 
-/** True when this turn says what the chat's last posted turn said; then that message is edited (if its title changed) instead. */
+/** True when this turn says what the chat's last posted turn said; then that message is edited (if its heading changed) instead. */
 async function sameTurn(ev) {
   const last = st.turns?.[ev.session.id];
+  // A follow-up turn (a background task woke the chat) that wrote nothing: never a new message,
+  // but the last report's heading may change ("update" to "finished" once nothing runs).
+  const quiet = ev.followUp && !ev.isError && !(ev.text || '').trim();
+  if (quiet && !last) return true;
+  if (quiet) ev = { ...ev, text: last.text, isError: last.isError };
   if (!last || last.text !== (ev.text || '') || last.isError !== !!ev.isError) return false;
   const sent = st.sent[last.msg];
   if (!sent) return false;
-  if (last.name === ev.session.name) return true;
+  if (last.name === ev.session.name && (last.running || 0) === (ev.running || 0)) return true;
   const html = postHtml(ev);
   const card = sent.card ? postCard(ev, cfg) : null;
   try {
@@ -348,6 +353,7 @@ async function sameTurn(ev) {
     log('[teams] could not update the finished message:', e.message); // keep the old title rather than post it again
   }
   last.name = ev.session.name;
+  last.running = ev.running || 0;
   save();
   return true;
 }
