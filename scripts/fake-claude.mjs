@@ -10,6 +10,7 @@
 //   @@bashfail <command>             a Bash call that fails (tool_result with is_error)
 //   @@usage <tokens>                 report this many input tokens on this turn's replies (context size)
 //   @@ratelimit <json>               emit a rate_limit_event with these plan usage windows
+//   @@ask <tool> <json>              ask permission to use a tool (can_use_tool) and wait; then say the answer
 // PostToolUse HTTP hooks from --settings run after each tool call, like the real CLI's
 // ($VAR headers from allowedEnvVars); additionalContext they return is logged as hookContext.
 // Directives inside a JSON argument are passed along verbatim, so a test can make one session
@@ -82,6 +83,7 @@ async function postToolUse(toolName, input, response) {
 out({ type: 'system', subtype: 'init', session_id: sessionId, model: arg('--model') || 'fake-model', permissionMode: arg('--permission-mode') || 'default', tools: [], mcp_servers: Object.keys(servers).map((n) => ({ name: n, status: 'connected' })), slash_commands: [], claude_code_version: 'fake' });
 
 let msgN = 0;
+const asks = new Map(); // can_use_tool request id -> resolve
 const queue = [];
 let running = false;
 
@@ -93,7 +95,7 @@ async function runTurn(text) {
   let inputTokens = 100;
   // Only top-level directives of the prompt (not ones nested inside JSON strings).
   for (const line of lines) {
-    const m = /^@@(call|say|sleep|fail|write|writetool|bashfail|usage|ratelimit)\b\s*(.*)$/.exec(line.trim());
+    const m = /^@@(call|say|sleep|fail|write|writetool|bashfail|usage|ratelimit|ask)\b\s*(.*)$/.exec(line.trim());
     if (!m) continue;
     const [, cmd, rest] = m;
     if (cmd === 'usage') {
@@ -127,6 +129,25 @@ async function runTurn(text) {
       out({ type: 'assistant', message: { id: `msg_${++msgN}`, role: 'assistant', content: [{ type: 'tool_use', id: useId, name: 'Bash', input: { command: rest } }] }, parent_tool_use_id: null, session_id: sessionId });
       out({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: useId, content: 'Exit code 1\nboom', is_error: true }] }, parent_tool_use_id: null, session_id: sessionId, uuid: crypto.randomUUID() });
       await postToolUse('Bash', { command: rest }, 'Exit code 1');
+    } else if (cmd === 'ask') {
+      const sp = rest.indexOf(' ');
+      const tool = sp < 0 ? rest : rest.slice(0, sp);
+      let input = {};
+      try {
+        input = sp < 0 ? {} : JSON.parse(rest.slice(sp + 1));
+      } catch {}
+      const reqId = `req_${crypto.randomBytes(4).toString('hex')}`;
+      const useId = `toolu_${crypto.randomBytes(6).toString('hex')}`;
+      out({ type: 'assistant', message: { id: `msg_${++msgN}`, role: 'assistant', content: [{ type: 'tool_use', id: useId, name: tool, input }] }, parent_tool_use_id: null, session_id: sessionId });
+      const r = await new Promise((resolve) => {
+        asks.set(reqId, resolve);
+        out({ type: 'control_request', request_id: reqId, request: { subtype: 'can_use_tool', tool_name: tool, input, tool_use_id: useId, permission_suggestions: [{ type: 'addRules', rules: [{ toolName: tool }], behavior: 'allow', destination: 'session' }] } });
+      });
+      note({ asked: tool, answer: r });
+      const ans = r?.behavior === 'allow' ? `allowed${r.updatedInput?.answers ? ` ${JSON.stringify(r.updatedInput.answers)}` : ''}${r.updatedPermissions ? ' always' : ''}` : `denied${r?.message ? `: ${r.message}` : ''}`;
+      out({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: useId, content: ans }] }, parent_tool_use_id: null, session_id: sessionId, uuid: crypto.randomUUID() });
+      out({ type: 'assistant', message: { id: `msg_${++msgN}`, role: 'assistant', content: [{ type: 'text', text: `answer: ${ans}` }] }, parent_tool_use_id: null, session_id: sessionId });
+      said = true;
     } else if (cmd === 'call') {
       const sp = rest.indexOf(' ');
       const full = sp < 0 ? rest : rest.slice(0, sp);
@@ -169,6 +190,12 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
   try {
     m = JSON.parse(line);
   } catch {
+    return;
+  }
+  if (m.type === 'control_response' && asks.has(m.response?.request_id)) {
+    const fn = asks.get(m.response.request_id);
+    asks.delete(m.response.request_id);
+    fn(m.response.response);
     return;
   }
   if (m.type === 'control_request') {

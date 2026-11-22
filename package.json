@@ -12,7 +12,8 @@
     "hash-password": "node server/hash-password.js",
     "check": "node scripts/check-syntax.mjs",
     "test": "node scripts/test-projects.mjs",
-    "test:ui": "node scripts/test-ui.mjs"
+    "test:ui": "node scripts/test-ui.mjs",
+    "test:bridge": "node scripts/test-bridge.mjs"
   },
   "engines": {
     "node": ">=20.6"

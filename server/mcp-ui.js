@@ -50,10 +50,23 @@ const TOOLS = [
       },
     },
   },
+  {
+    name: 'notify_user',
+    description:
+      'Send the user a short update that reaches them away from the screen (their phone, through the Teams bridge when it is set up). It does not wait for an answer. ' +
+      'Use it sparingly, for things worth an interruption: a long run finished or failed, or something you are about to wait on. ' +
+      'To ask the user something and wait for the answer, use AskUserQuestion instead; that also reaches their phone.',
+    inputSchema: {
+      type: 'object',
+      properties: { text: { type: 'string', description: 'One or two plain sentences, e.g. "Nightly build finished: 3 tests fail in auth, details in the chat."' } },
+      required: ['text'],
+    },
+  },
 ];
 
 serve('ui', TOOLS, (name, a = {}) => {
   if (name === 'publish_artifact') return call('POST', '/internal/artifacts/publish', a);
+  if (name === 'notify_user') return call('POST', '/internal/notify', a);
   if (name !== 'update_plan') throw new Error(`Unknown tool ${name}`);
   const steps = Array.isArray(a.steps) ? a.steps : [];
   if (!steps.length) throw new Error('steps is required: a list of {step, status}.');

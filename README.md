@@ -261,6 +261,10 @@ or, with the Node bridge:
 
 Desktop on another computer needs the server to listen on your network (`CW_HOST=0.0.0.0`, or your LAN/Tailscale address). The endpoint is MCP Streamable HTTP at `POST /mcp`, authenticated with a bearer token (stored in `~/.claude-web/mcp-token`; make a new one in Settings, or pin it with `CW_MCP_TOKEN`). It refuses browser requests (any `Origin` header) and rate-limits wrong tokens like the login. Chats started from Desktop use "Ask before edits" unless Desktop asks for another mode, so an unattended chat stops at its first permission prompt and waits for you in the UI.
 
+## Teams bridge
+
+Talk to your agents from Microsoft Teams: permission prompts, questions and project decision cards show up in your Teams chat with yourself, and you answer by replying. You can also message a project's coordinator or start a chat in a folder from Teams. It is a separate small service (`teams-bridge/`) that only makes outbound calls (Microsoft Graph polling), so it works on a server with no inbound access. Setup and commands: [teams-bridge/README.md](teams-bridge/README.md).
+
 ## Configuration
 
 All settings are environment variables; see [`.env.example`](.env.example).

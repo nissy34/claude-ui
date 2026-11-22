@@ -268,6 +268,14 @@ export class ChatSession {
       fs.appendFile(this.logFile, JSON.stringify(ev) + '\n', () => {});
     }
     this.broadcast({ t: 'ev', ev });
+    // The attention feed (server/attention.js) sees prompts, answers and finished turns of every chat.
+    for (const fn of this.store.recordHooks || []) {
+      try {
+        fn(this, ev);
+      } catch (e) {
+        console.error('record hook failed', e);
+      }
+    }
     // Projects: the engine sees every event of its sessions (turns, prompts, permissions).
     if (this.meta.cproject) {
       try {

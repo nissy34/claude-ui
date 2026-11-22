@@ -1,12 +1,12 @@
 #!/usr/bin/env node
-// Syntax check for the server and scripts (there is no build step for them): `node --check` on each file.
+// Syntax check for the server, scripts and the Teams bridge (there is no build step for them): `node --check` on each file.
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
-const files = ['server', 'scripts'].flatMap((dir) =>
+const files = ['server', 'scripts', 'teams-bridge'].flatMap((dir) =>
   fs
     .readdirSync(path.join(root, dir))
     .filter((f) => /\.(m?js)$/.test(f))
