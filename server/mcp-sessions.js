@@ -84,7 +84,7 @@ const TOOLS = [
   },
   {
     name: 'list_sessions',
-    description: 'List sessions on this server (chats on other machines are not included). By default the children of this session, or every session when it has none; set all=true for every session. send_to_session and read_session take a full id, a unique id prefix, or a chat name.',
+    description: 'List sessions on this server (chats on other machines are not included). By default only the children of this session; set all=true for every chat (do this to find a chat you did not start). send_to_session and read_session take a full id, a unique id prefix, or a chat name.',
     inputSchema: { type: 'object', properties: { all: { type: 'boolean' } } },
   },
 ];

@@ -20,7 +20,7 @@ try {
   cookie = lr.headers.get('set-cookie').split(';')[0];
   const b = (await api('/api/sessions', { kind: 'chat', cwd: 'demo', name: 'Soak' })).session;
   const short = b.id.slice(0, 8);
-  const lines = [`@@call sessions__list_sessions {}`, `@@call sessions__send_to_session ${JSON.stringify({ id: short, message: 'hello by prefix' })}`, `@@call sessions__send_to_session ${JSON.stringify({ id: 'Soak', message: 'hello by name' })}`];
+  const lines = [`@@call sessions__list_sessions {}`, `@@call sessions__list_sessions {"all":true}`, `@@call sessions__send_to_session ${JSON.stringify({ id: short, message: 'hello by prefix' })}`, `@@call sessions__send_to_session ${JSON.stringify({ id: 'Soak', message: 'hello by name' })}`];
   await api('/api/sessions', { kind: 'chat', cwd: 'demo', name: 'Caller', prompt: lines.join('\n') });
   for (let i = 0; i < 60; i++) { await sleep(250); const l = fs.existsSync(env.FAKE_CLAUDE_LOG) ? fs.readFileSync(env.FAKE_CLAUDE_LOG, 'utf8') : ''; if ((l.match(/"call":"sessions__send_to_session"/g) || []).length >= 2) break; }
   await sleep(1500);
@@ -28,8 +28,9 @@ try {
   const calls = log.filter((x) => x.call);
   let fails = 0;
   const check = (c, m, x) => (c ? console.log(`  ok   ${m}`) : (fails++, console.log(`  FAIL ${m}`, JSON.stringify(x ?? '').slice(0, 400))));
-  const list = calls.find((x) => x.call === 'sessions__list_sessions');
-  check(list && list.result.includes(b.id), 'list_sessions with no children lists the other chats', list);
+  const lists = calls.filter((x) => x.call === 'sessions__list_sessions');
+  check(lists[0] && !lists[0].result.includes(b.id) && /all=true/.test(lists[0].result), 'list_sessions defaults to children and says how to see every chat', lists[0]);
+  check(lists[1] && lists[1].result.includes(b.id), 'list_sessions all=true lists the other chats', lists[1]);
   const sends = calls.filter((x) => x.call === 'sessions__send_to_session');
   check(sends[0] && /Delivered|Queued/.test(sends[0].result) && !/Error/.test(sends[0].result), 'send_to_session accepts an 8-character id prefix', sends[0]);
   check(sends[1] && /Delivered|Queued/.test(sends[1].result) && !/Error/.test(sends[1].result), 'send_to_session accepts a chat name', sends[1]);

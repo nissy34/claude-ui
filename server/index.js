@@ -407,11 +407,9 @@ app.get('/internal/sessions', (req, res) => {
   const all = [...store.sessions.values()];
   if (req.query.parentId) {
     const kids = all.filter((s) => s.meta.parentId === req.query.parentId);
-    // No children: an empty list reads as "there are no other chats", so show every chat instead.
-    if (!kids.length) {
-      return res.json({ note: 'This session has no child sessions, so here is every session on this server.', sessions: all.filter((s) => s.id !== req.query.parentId).map(sessionSummary) });
-    }
-    return res.json({ sessions: kids.map(sessionSummary), note: 'Only this session\'s children. Call with all=true for every chat.' });
+    // The caller chooses the scope with all=true. An empty list alone reads as "there are no other
+    // chats", so say how to see them.
+    return res.json({ sessions: kids.map(sessionSummary), note: kids.length ? 'Only this session\'s children. Call with all=true for every chat.' : `This session has no child sessions. ${all.length - 1} other chat(s) exist on this server: call list_sessions with all=true to see them.` });
   }
   res.json({ sessions: all.map(sessionSummary) });
 });
