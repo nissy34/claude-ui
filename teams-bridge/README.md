@@ -49,12 +49,13 @@ Agents get one new tool, `notify_user` (built-in `ui` MCP), to tell you somethin
 
 You need an Entra app registration that may read and send your chat messages:
 
-1. Entra admin center > App registrations > New registration. Single tenant. No redirect URI.
-2. Authentication > Advanced settings > **Allow public client flows: Yes** (the bridge signs in with a device code).
-3. API permissions > Microsoft Graph > Delegated: **Chat.ReadWrite**, **User.Read** (`offline_access` is added automatically). Grant consent if your tenant needs it.
-4. Copy the **Application (client) ID** and **Directory (tenant) ID**.
+1. Entra admin center > App registrations > New registration. Single tenant.
+2. Authentication > Add a platform > **Mobile and desktop applications** > custom redirect URI **`http://localhost`**.
+3. Authentication > Advanced settings > **Allow public client flows: Yes**.
+4. API permissions > Microsoft Graph > Delegated: **Chat.ReadWrite**, **User.Read** (`offline_access` is added automatically). Grant consent if your tenant needs it.
+5. Copy the **Application (client) ID** and **Directory (tenant) ID**.
 
-No client secret, no redirect URI, no public endpoint.
+No client secret, no public endpoint. Nothing listens on `http://localhost`: after you sign in, the browser lands on an error page there, and you copy that page's address back to the bridge.
 
 ### 2. Settings
 
@@ -78,7 +79,19 @@ docker compose --profile teams up -d --build
 
 Without Docker: `node teams-bridge/bridge.mjs` (Node 20+, no dependencies).
 
-The first time, the bridge asks you to sign in: the web UI shows "Teams bridge: sign in to Microsoft. Open https://microsoft.com/devicelogin and enter the code …" (also in `docker compose logs teams-bridge`). Sign in with your work account. It posts "Connected" in your chat with yourself, and you are done.
+The first time, the bridge asks you to sign in, and the web UI says so. Open **`/bridge-signin`** on your Claude UI address (for example `http://bamba:8787/bridge-signin`):
+
+1. Press **Sign in to Microsoft** and sign in with your work account, in any browser where you can (your work computer is fine).
+2. The browser ends on `http://localhost/?code=…` with a "can't be reached" error. That's expected.
+3. Copy that whole address into the box on the page and press **Finish sign-in**.
+
+The bridge posts "Connected" in your chat with yourself, and you are done. The link and the steps are also in `docker compose logs teams-bridge`, and from a terminal you can run the same steps with:
+
+```sh
+docker compose --profile teams run --rm teams-bridge node teams-bridge/bridge.mjs login
+```
+
+Device code sign-in (microsoft.com/devicelogin) is often blocked by company policy, so it is off by default. `TEAMS_AUTH=device` uses only it, and `TEAMS_AUTH=auto` tries it first and falls back to the browser.
 
 ### Which chat
 
@@ -98,7 +111,7 @@ Messages the bridge posts appear as written by you, so Teams doesn't notify you 
 
 The bridge keeps its Microsoft sign-in itself: it refreshes the access token before it runs out, and every refresh rolls the refresh token forward, so it stays signed in as long as it runs. Tokens are kept in `~/.claude-web/teams-bridge/token.json` (mode 600).
 
-If your company has a **sign-in frequency** policy (for example "sign in again every 7 days"), no refresh can get past it. When that happens the bridge asks for a new device code and the web UI shows it; enter it and it carries on.
+If your company has a **sign-in frequency** policy (for example "sign in again every 7 days"), no refresh can get past it. When that happens the web UI tells you, and you sign in again on `/bridge-signin`.
 
 ## Settings
 
@@ -107,6 +120,8 @@ If your company has a **sign-in frequency** policy (for example "sign in again e
 | `TEAMS_TENANT_ID` | `organizations` | Entra tenant id or domain |
 | `TEAMS_CLIENT_ID` | (required) | app registration |
 | `TEAMS_CHAT_ID` | `48:notes` | the chat to use |
+| `TEAMS_AUTH` | `browser` | `browser`, `device` (device code) or `auto` (device code, then browser) |
+| `TEAMS_REDIRECT_URI` | `http://localhost` | must match the app registration |
 | `TEAMS_DEFAULT_PROJECT` | the only project | who gets plain text before you pick with `/to` |
 | `TEAMS_AWAY_MINUTES` | `5` | hold questions while you use the web UI; `0` sends at once |
 | `TEAMS_ALLOW_PERMISSIONS` | `1` | `0` = answer questions and decisions only, approve tools in the web UI |
@@ -132,6 +147,7 @@ All under `/api/bridge`, `Authorization: Bearer <bridge token>`, requests with a
 - `GET /events?after=<seq>&wait=<seconds>` → `{ seq, lastSeen, events }`, long-poll. Events: `ask`, `resolved`, `post` (coordinator), `turn` (finished chat started from the bridge), `notify`.
 - `POST /answer` `{ id, text?, choice?, behavior?: allow|always|deny|accept|decline, answers? }`.
 - `POST /act` `{ action: project_send|new_chat|send|stop|status|folders, ... }`.
-- `POST /status` `{ state, message, code?, url? }`: the bridge's own state; `signin` shows the code in the web UI.
+- `POST /status` `{ state, message, code?, url? }`: the bridge's own state, shown on `/bridge-signin` and as a notice in the web UI.
+- `GET /signin-reply?wait=<seconds>` → `{ url }`: the address pasted on `/bridge-signin`, handed over once.
 
 Test: `npm run test:bridge` (fake CLI and a fake Graph server).

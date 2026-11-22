@@ -5,6 +5,7 @@
 import { spawn, execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import http from 'node:http';
+import crypto from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -67,6 +68,7 @@ const chat = []; // messages, oldest first
 const reactions = [];
 const edits = [];
 let tokenCalls = 0;
+let challenge = ''; // PKCE challenge from the sign-in link the bridge made
 let refreshes = 0;
 let n = 0;
 const json = (res, code, body) => {
@@ -79,15 +81,21 @@ const graph = http.createServer((req, res) => {
   req.on('end', () => {
     const url = new URL(req.url, 'http://x');
     const p = decodeURIComponent(url.pathname);
-    if (p.endsWith('/oauth2/v2.0/devicecode')) return json(res, 200, { device_code: 'dc1', user_code: 'TEST-CODE', verification_uri: 'https://microsoft.com/devicelogin', expires_in: 900, interval: 1, message: 'Enter TEST-CODE' });
+    // Device code sign-in is blocked, as in many company tenants: the bridge falls back to the browser.
+    if (p.endsWith('/oauth2/v2.0/devicecode')) return json(res, 400, { error: 'invalid_request', error_description: 'AADSTS50199: device code flow is blocked by policy' });
     if (p.endsWith('/oauth2/v2.0/token')) {
       const f = new URLSearchParams(data);
       if (f.get('grant_type') === 'refresh_token') {
         refreshes++;
         return json(res, 200, { access_token: `at-r${refreshes}`, refresh_token: `rt-${refreshes}`, expires_in: 3600 });
       }
-      if (++tokenCalls < 2) return json(res, 400, { error: 'authorization_pending' });
-      return json(res, 200, { access_token: 'at-1', refresh_token: 'rt-0', expires_in: 3600 });
+      if (f.get('grant_type') === 'authorization_code') {
+        tokenCalls++;
+        const ok = f.get('code') === 'good-code' && f.get('redirect_uri') === 'http://localhost' && crypto.createHash('sha256').update(f.get('code_verifier') || '').digest('base64url') === challenge;
+        if (!ok) return json(res, 400, { error: 'invalid_grant', error_description: 'bad code or verifier' });
+        return json(res, 200, { access_token: 'at-1', refresh_token: 'rt-0', expires_in: 3600 });
+      }
+      return json(res, 400, { error: 'unsupported_grant_type' });
     }
     if (!/^Bearer at-/.test(req.headers.authorization || '')) return json(res, 401, { error: { message: 'no token' } });
     if (p === '/v1.0/me') return json(res, 200, ME);
@@ -154,15 +162,29 @@ async function main() {
   const empty = await api('/api/bridge/attention', { headers: { authorization: `Bearer ${token}` } });
   check(Array.isArray(empty.items) && empty.items.length === 0, 'nothing is waiting at start');
 
-  console.log('Start the bridge: device code sign-in, then connected');
+  console.log('Start the bridge: device code is blocked, so browser sign-in with a pasted address');
   bridge = spawn(process.execPath, [path.join(root, 'teams-bridge', 'bridge.mjs')], {
-    env: { ...env, CLAUDE_UI_URL: base, CW_BRIDGE_TOKEN_FILE: tokenFile, TEAMS_DATA_DIR: path.join(tmp, 'teams'), TEAMS_CLIENT_ID: 'client', TEAMS_TENANT_ID: 'tenant', TEAMS_GRAPH_URL: `http://127.0.0.1:${gport}/v1.0`, TEAMS_LOGIN_URL: `http://127.0.0.1:${gport}`, TEAMS_POLL_SECONDS: '2', TEAMS_AWAY_MINUTES: '0' },
+    env: { ...env, CLAUDE_UI_URL: base, CW_BRIDGE_TOKEN_FILE: tokenFile, TEAMS_DATA_DIR: path.join(tmp, 'teams'), TEAMS_CLIENT_ID: 'client', TEAMS_TENANT_ID: 'tenant', TEAMS_GRAPH_URL: `http://127.0.0.1:${gport}/v1.0`, TEAMS_LOGIN_URL: `http://127.0.0.1:${gport}`, TEAMS_POLL_SECONDS: '2', TEAMS_AWAY_MINUTES: '0', TEAMS_AUTH: 'auto' },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   bridge.stdout.on('data', (d) => (bridgeLog.push(String(d)), process.env.VERBOSE && process.stdout.write(`[bridge] ${d}`)));
   bridge.stderr.on('data', (d) => (bridgeLog.push(String(d)), process.stderr.write(`[bridge] ${d}`)));
+  const signin = await until(async () => {
+    const r = await api('/api/bridge-status');
+    return r.status?.state === 'signin-browser' && r.status;
+  }, 20_000, 'browser sign-in link');
+  const link = new URL(signin.url);
+  challenge = link.searchParams.get('code_challenge');
+  check(link.pathname.endsWith('/tenant/oauth2/v2.0/authorize') && link.searchParams.get('redirect_uri') === 'http://localhost' && link.searchParams.get('code_challenge_method') === 'S256' && /Chat\.ReadWrite/.test(link.searchParams.get('scope')), 'a PKCE sign-in link with the localhost redirect', signin.url);
+  const page = await fetch(`${base}/bridge-signin`, { headers: { cookie } });
+  check(page.ok && /Finish sign-in/.test(await page.text()), 'the web UI has a sign-in page');
+  check((await api('/api/bridge-signin', { method: 'POST', body: { url: 'hello' }, allowError: true })).status === 400, 'a pasted non-address is refused');
+  await api('/api/bridge-signin', { method: 'POST', body: { url: `http://localhost/?code=good-code&state=wrong` } });
+  await until(async () => (await api('/api/bridge-status')).status?.state === 'signin-error', 10_000, 'state mismatch error');
+  check(true, 'an address from another sign-in is rejected with a message');
+  await api('/api/bridge-signin', { method: 'POST', body: { url: `http://localhost/?code=good-code&state=${link.searchParams.get('state')}&session_state=x` } });
   await until(() => findBot(/Connected/), 20_000, 'connected message');
-  check(true, 'bridge posts "Connected" in the chat');
+  check(true, 'pasting the address signs in; the bridge posts "Connected" in the chat');
   const st = await api('/api/bridge-status');
   check(st.status?.state === 'ok', 'Claude UI knows the bridge state', st);
   check(fs.existsSync(path.join(tmp, 'teams', 'token.json')) && (fs.statSync(path.join(tmp, 'teams', 'token.json')).mode & 0o077) === 0, 'Microsoft tokens are stored private (600)');
@@ -262,7 +284,7 @@ async function main() {
   bridge.stderr.on('data', (d) => process.stderr.write(`[bridge] ${d}`));
   await sleep(6000);
   check(botMsgs().length === count, 'nothing is re-posted after a restart', botMsgs().slice(count).map((m) => m.body.content));
-  check(tokenCalls === 2, 'no new sign-in after a restart (the saved token is reused)', tokenCalls);
+  check(tokenCalls === 1, 'no new sign-in after a restart (the saved token is reused)', tokenCalls);
 }
 
 main()

@@ -73,6 +73,8 @@ export function describeTool(tool, input = {}) {
 
 export function createAttention({ store, engine, resolveDir, listProjects, desktopRun, onStatus }) {
   let bridgeStatus = null;
+  let signinReply = null; // the pasted http://localhost/?code=… address, until the bridge takes it
+  const signinWaiters = new Set();
   const ring = []; // { seq, ts, ...event }
   let seq = 0;
   const waiters = new Set();
@@ -385,9 +387,35 @@ export function createAttention({ store, engine, resolveDir, listProjects, deskt
     // The bridge reports its own state (e.g. "sign in with this code"), shown in the web UI.
     app.post('/api/bridge/status', (req, res) => {
       const b = req.body || {};
-      bridgeStatus = { state: clip(b.state, 20), message: clip(b.message, 500), code: b.code ? clip(b.code, 20) : null, url: b.url ? clip(b.url, 200) : null, at: Date.now() };
+      bridgeStatus = { state: clip(b.state, 20), message: clip(b.message, 500), code: b.code ? clip(b.code, 20) : null, url: b.url ? clip(b.url, 2000) : null, at: Date.now() };
       onStatus?.(bridgeStatus);
       res.json({ ok: true });
+    });
+    // Browser sign-in for the bridge: the address you paste on /bridge-signin waits here for the bridge.
+    app.get('/api/bridge/signin-reply', (req, res) => {
+      const take = () => {
+        const url = signinReply;
+        signinReply = null;
+        res.json({ url });
+      };
+      if (signinReply) return take();
+      const wait = Math.min(Math.max(Number(req.query.wait) || 0, 0), 50) * 1000;
+      if (!wait) return res.json({ url: null });
+      let done = false;
+      const finish = () => {
+        if (done) return;
+        done = true;
+        signinWaiters.delete(finish);
+        clearTimeout(timer);
+        take();
+      };
+      const timer = setTimeout(finish, wait);
+      signinWaiters.add(finish);
+      req.on('close', () => {
+        done = true;
+        signinWaiters.delete(finish);
+        clearTimeout(timer);
+      });
     });
     app.post('/api/bridge/answer', (req, res) => {
       try {
@@ -416,6 +444,11 @@ export function createAttention({ store, engine, resolveDir, listProjects, deskt
       lastSeen = Date.now();
     },
     status: () => bridgeStatus,
+    /** From the web UI's /bridge-signin page (cookie-authenticated). */
+    signinReply(url) {
+      signinReply = String(url || '').trim().slice(0, 4000);
+      for (const w of [...signinWaiters]) w();
+    },
     notify(s, text) {
       return push({ type: 'notify', session: sessionInfo(s), text: clip(text, 2000) });
     },

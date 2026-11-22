@@ -79,7 +79,7 @@ services:
   # Optional: the Teams bridge (teams-bridge/README.md). Talk to your agents from a Microsoft Teams
   # chat. Outbound only: it polls Teams through Microsoft Graph and needs no open ports.
   # Set TEAMS_CLIENT_ID and TEAMS_TENANT_ID in .env, then: docker compose --profile teams up -d
-  # First run: the sign-in code shows in the web UI (and in: docker compose logs teams-bridge).
+  # First run: sign in on http://<server>:8787/bridge-signin (steps also in: docker compose logs teams-bridge).
   teams-bridge:
     image: claude-ui
     profiles: ["teams"]

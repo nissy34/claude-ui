@@ -33,6 +33,8 @@ const cfg = {
   pingUrl: env.TEAMS_PING_URL || '',
   graphUrl: env.TEAMS_GRAPH_URL,
   loginUrl: env.TEAMS_LOGIN_URL,
+  auth: ['auto', 'device', 'browser'].includes(env.TEAMS_AUTH) ? env.TEAMS_AUTH : 'browser',
+  redirectUri: env.TEAMS_REDIRECT_URI || 'http://localhost',
 };
 fs.mkdirSync(cfg.dir, { recursive: true, mode: 0o700 });
 if (!cfg.token) {
@@ -71,16 +73,27 @@ async function ui(method, p, body) {
 
 let authNoticeKey = '';
 async function reportAuth(info) {
-  log(`[auth] ${info.message}`);
-  // Show sign-in codes in the web UI too, so nobody has to read container logs.
-  const key = `${info.state}:${info.code || ''}`;
+  log(`[auth] ${info.message}${info.url && info.state === 'signin-browser' ? `\n  ${info.url}\n  Paste the address the browser ends on in the web UI (/bridge-signin), or run: node teams-bridge/bridge.mjs login` : ''}`);
+  // Show sign-in steps in the web UI too, so nobody has to read container logs.
+  const key = `${info.state}:${info.code || ''}:${info.url || ''}:${info.state === 'signin-error' ? info.message : ''}`;
   if (key === authNoticeKey) return;
   authNoticeKey = key;
   await ui('POST', '/api/bridge/status', { state: info.state, message: info.message, code: info.code || null, url: info.url || null }).catch(() => {});
 }
 
 // ---------- Teams ----------
-const graph = new Graph({ tenant: cfg.tenant, clientId: cfg.clientId, tokenFile: path.join(cfg.dir, 'token.json'), graphUrl: cfg.graphUrl, loginUrl: cfg.loginUrl, onAuth: reportAuth });
+// Browser sign-in: you paste the address the browser ends on in the web UI (Teams bridge sign-in page),
+// or in the terminal with `bridge.mjs login`. The bridge picks it up from Claude UI.
+async function waitForReply() {
+  try {
+    const r = await ui('GET', '/api/bridge/signin-reply?wait=20');
+    return r.url || null;
+  } catch {
+    await new Promise((res) => setTimeout(res, 3000));
+    return null;
+  }
+}
+const graph = new Graph({ tenant: cfg.tenant, clientId: cfg.clientId, tokenFile: path.join(cfg.dir, 'token.json'), graphUrl: cfg.graphUrl, loginUrl: cfg.loginUrl, auth: cfg.auth, redirectUri: cfg.redirectUri, waitForReply, onAuth: reportAuth });
 let me = null;
 
 async function post(html, meta) {
@@ -389,6 +402,26 @@ async function main() {
   if (!cfg.clientId) {
     console.error('Set TEAMS_CLIENT_ID (and TEAMS_TENANT_ID) to your Entra app registration. See teams-bridge/README.md.');
     process.exit(1);
+  }
+  if (process.argv[2] === 'login') {
+    // Sign in from a terminal: open the link anywhere, paste back the address the browser ends on.
+    const rl = (await import('node:readline')).createInterface({ input: process.stdin, output: process.stdout });
+    const ask = (q) => new Promise((r) => rl.question(q, r));
+    for (;;) {
+      console.log(`\nOpen this link in a browser where you can sign in with your work account:\n\n${graph.browserStart()}\n`);
+      console.log(`After signing in, the browser tries to open ${cfg.redirectUri}/?code=… and shows an error page. That's expected.`);
+      const reply = await ask('Paste that whole address here: ');
+      try {
+        await graph.browserFinish(reply);
+        const who = await graph.me();
+        console.log(`Signed in as ${who.displayName}. A running bridge picks this up within a few seconds.`);
+        break;
+      } catch (e) {
+        console.log(`\n${e.message}`);
+      }
+    }
+    rl.close();
+    return;
   }
   if (process.argv[2] === 'chats') {
     const r = await graph.chats();

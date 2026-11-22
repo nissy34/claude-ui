@@ -424,10 +424,21 @@ const attention = createAttention({
   // Sign-in codes and expiry from the Teams bridge pop up in every open UI.
   onStatus: (b) => {
     if (b.state === 'signin') emitUi({ t: 'error', error: `Teams bridge: sign in to Microsoft. Open ${b.url || 'https://microsoft.com/devicelogin'} and enter the code ${b.code}.` });
+    else if (b.state === 'signin-browser') emitUi({ t: 'error', error: 'Teams bridge: sign in to Microsoft. Open /bridge-signin on this server to finish.' });
     else if (b.state === 'expired') emitUi({ t: 'error', error: `Teams bridge: ${b.message} It will ask for a new sign-in code.` });
   },
 });
 app.get('/api/bridge-status', (req, res) => (isAuthed(req) ? res.json({ status: attention.status() }) : res.status(401).json({ error: 'Not logged in' })));
+// Browser sign-in for the Teams bridge: a page with the Microsoft link and a box for the address the browser ends on.
+app.get('/bridge-signin', (req, res) => (isAuthed(req) ? res.set('Cache-Control', 'no-store').sendFile(path.join(path.dirname(fileURLToPath(import.meta.url)), 'bridge-signin.html')) : res.redirect('/')));
+app.post('/api/bridge-signin', (req, res) => {
+  if (!isAuthed(req)) return res.status(401).json({ error: 'Not logged in' });
+  if (!originOk(req)) return res.status(403).json({ error: 'Bad origin' });
+  const url = String(req.body?.url || '').trim();
+  if (!/^https?:\/\/[^/]*\/?\?.*(code|error)=/.test(url)) return res.status(400).json({ error: 'Paste the whole address the browser ended on, starting with http://localhost/?code=' });
+  attention.signinReply(url);
+  res.json({ ok: true });
+});
 if (config.bridgeApi) attention.mount(app);
 
 // Artifact files, authorised by a per-session signature in the path (no cookie: sandboxed
