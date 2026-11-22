@@ -991,3 +991,4 @@ body.pane-dragging iframe { pointer-events: none; }
   .pal-foot, .pal-esc { display: none; }
   .side-search-btn .side-kbd { display: none; }
 }
+.item-sub.full { white-space: normal; overflow: visible; }
