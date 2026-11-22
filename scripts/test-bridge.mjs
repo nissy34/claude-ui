@@ -256,7 +256,8 @@ async function main() {
   const answerMsg = say('yes', perm.id);
   await until(() => /Answered: allowed/.test(chat.find((m) => m.id === perm.id).body.content), 15_000, 'prompt marked answered');
   check(true, 'the prompt is edited to show the answer');
-  check(reactions.includes(`${answerMsg}:✅`), 'your answer gets a ✅');
+  await until(() => reactions.includes(`${answerMsg}:✅`), 5000, 'answer reaction');
+  check(true, 'your answer gets a ✅');
   const done = await until(() => findBot(/finished:[\s\S]*answer: allowed/), 15_000, 'turn finished message');
   check(done, 'a finished turn of a chat started from Teams is reported');
   const sessions = (await api('/api/sessions')).sessions;
