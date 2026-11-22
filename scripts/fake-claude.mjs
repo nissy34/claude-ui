@@ -31,6 +31,8 @@ const out = (o) => process.stdout.write(JSON.stringify(o) + '\n');
 const log = process.env.FAKE_CLAUDE_LOG;
 const note = (o) => log && fs.appendFileSync(log, JSON.stringify({ pid: process.pid, sessionId, ...o }) + '\n');
 note({ argv });
+// FAKE_CLAUDE_LOG_ENV=K1,K2: also log those variables as this process got them (gateway tests).
+if (process.env.FAKE_CLAUDE_LOG_ENV) note({ argv, env: Object.fromEntries(process.env.FAKE_CLAUDE_LOG_ENV.split(',').map((k) => [k, process.env[k] ?? null])) });
 
 // ---- MCP clients ----
 const servers = {};

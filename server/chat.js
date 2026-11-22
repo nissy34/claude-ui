@@ -10,7 +10,8 @@ import { spawn } from 'node:child_process';
 import { sessionExtras } from './environments.js';
 import { fileURLToPath } from 'node:url';
 import { browserAvailable } from './browser.js';
-import { config, PRIVATE_ENV } from './config.js';
+import { config } from './config.js';
+import { claudeEnv } from './gateway.js';
 import { resolveCommand } from './launch.js';
 import { withOpener } from './opener.js';
 import { toolResultParts } from './tool-images.js';
@@ -83,8 +84,7 @@ function fromLabel(f) {
 }
 
 export function childEnv(sessionId, extra = {}) {
-  const env = { ...process.env, ...extra };
-  for (const k of PRIVATE_ENV) delete env[k];
+  const env = claudeEnv(extra);
   // Lets "edit an earlier message" restore files to that point.
   env.CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING = '1';
   // Used by the built-in sessions MCP server (child sessions).

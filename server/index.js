@@ -29,6 +29,7 @@ import { listArtifacts, publishArtifact, rawHandler, rawUrl, writtenPaths } from
 import * as admin from './claude-admin.js';
 import { McpAdmin, onSignedIn, stopAllAdmins } from './mcp-admin.js';
 import { tokenKeeper } from './token-keeper.js';
+import { gatewayStatus, setGateway, gatewayModels, fixSettingsConflicts } from './gateway.js';
 import { getModels } from './models.js';
 import { sideChat } from './side-chat.js';
 import { prStatus, mergeWhenReady } from './pr-status.js';
@@ -1132,7 +1133,30 @@ app.get(
 );
 
 // ---------- settings ----------
-app.get('/api/claude/status', wrap(async (req, res) => res.json({ auth: await authStatus(), version: await cliVersion(), dataDir: config.dataDir, projectsRoot: config.projectsRoot, node: process.version, platform: process.platform })));
+// Company AI gateway (server/gateway.js). The key is write-only: no route ever returns it.
+app.get('/api/gateway', wrap(async (req, res) => res.json(gatewayStatus())));
+app.put(
+  '/api/gateway',
+  wrap(async (req, res) => {
+    const b = req.body || {};
+    const pick = (k) => (b[k] === undefined ? undefined : b[k]);
+    res.json(setGateway({ enabled: pick('enabled'), baseUrl: pick('baseUrl'), token: pick('token'), discovery: pick('discovery') }));
+  })
+);
+app.post(
+  '/api/gateway/test',
+  wrap(async (req, res) => {
+    const b = req.body || {};
+    try {
+      const models = await gatewayModels({ baseUrl: b.baseUrl || undefined, token: b.token || undefined });
+      res.json({ ok: true, models: models.map((m) => m.id) });
+    } catch (e) {
+      res.json({ ok: false, error: e.message });
+    }
+  })
+);
+app.post('/api/gateway/fix-settings', wrap(async (req, res) => res.json({ ...fixSettingsConflicts(), status: gatewayStatus() })));
+app.get('/api/claude/status', wrap(async (req, res) => res.json({ auth: await authStatus(), gateway: gatewayStatus(), version: await cliVersion(), dataDir: config.dataDir, projectsRoot: config.projectsRoot, node: process.version, platform: process.platform })));
 app.get('/api/claude/mcp', wrap(async (req, res) => res.json(await mcpList(req.query.cwd ? resolveDir(req.query.cwd) : config.projectsRoot))));
 app.get('/api/claude/plugins', wrap(async (req, res) => res.json(await pluginList())));
 app.get('/api/claude/permissions', wrap(async (req, res) => res.json({ rules: permissionRules(req.query.cwd ? resolveDir(req.query.cwd) : null) })));

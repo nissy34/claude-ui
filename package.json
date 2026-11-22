@@ -13,7 +13,8 @@
     "check": "node scripts/check-syntax.mjs",
     "test": "node scripts/test-projects.mjs",
     "test:ui": "node scripts/test-ui.mjs",
-    "test:bridge": "node scripts/test-bridge.mjs"
+    "test:bridge": "node scripts/test-bridge.mjs",
+    "test:gateway": "node scripts/test-gateway.mjs"
   },
   "engines": {
     "node": ">=20.6"

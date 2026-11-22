@@ -10,7 +10,8 @@
 import fs from 'node:fs';
 import readline from 'node:readline';
 import { spawn } from 'node:child_process';
-import { config, PRIVATE_ENV } from './config.js';
+import { config } from './config.js';
+import { claudeEnv } from './gateway.js';
 import { resolveCommand } from './launch.js';
 
 const SYSTEM = [
@@ -98,8 +99,7 @@ export function generateTitle({ user, assistant, env = {}, cwd = config.scratchD
     '--settings', JSON.stringify({ disableAllHooks: true }),
     '--system-prompt', SYSTEM,
   ];
-  const e = { ...process.env, ...env };
-  for (const k of PRIVATE_ENV) delete e[k];
+  const e = claudeEnv(env);
   return new Promise((resolve) => {
     let out = '';
     let done = false;

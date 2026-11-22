@@ -7,6 +7,7 @@ import { ProjectSettingsModal } from './ProjectSettings.jsx';
 import { ProjectUsageRing } from './ProjectUsage.jsx';
 import ProjectPanel, { PrChip, StatusIcon } from './ProjectPanel.jsx';
 import { STATUS_LABEL, STATUS_ORDER, useProject } from './useProject.js';
+import { useGatewayMode } from '../Gateway.jsx';
 import './project.css';
 
 export default function ProjectView({ projectId, tab: initialTab, thread: initialThread, onSelect, onCreate, onMenu, onError, onDeleted, projects }) {
@@ -111,6 +112,7 @@ function useNarrow() {
 }
 
 function Banners({ project, reload, onError, onCreate }) {
+  const gateway = useGatewayMode();
   // Same as the chat view's "Log in again": a terminal session that runs the CLI's /login.
   const relogin = () => onCreate?.({ cwd: project.settings.folders?.[0]?.path, kind: 'claude', name: 'Log in to Claude', login: true });
   return (
@@ -118,7 +120,12 @@ function Banners({ project, reload, onError, onCreate }) {
       {project.paused && (
         <div className="pj-banner warn">
           {project.paused.reason}
-          {project.paused.auth && onCreate && (
+          {project.paused.auth && gateway && (
+            <Button size="sm" variant="primary" onClick={() => window.dispatchEvent(new CustomEvent('cw-open-settings', { detail: 'account' }))}>
+              Open Settings
+            </Button>
+          )}
+          {project.paused.auth && !gateway && onCreate && (
             <Button size="sm" variant="primary" onClick={relogin}>
               Log in again
             </Button>
