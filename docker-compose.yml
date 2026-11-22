@@ -76,6 +76,30 @@ services:
       # Another folder you work in (also set CW_ALLOW_ANY_DIR=1 in .env):
       # - /srv/work:/srv/work
 
+  # Optional: the Teams bridge (teams-bridge/README.md). Talk to your agents from a Microsoft Teams
+  # chat. Outbound only: it polls Teams through Microsoft Graph and needs no open ports.
+  # Set TEAMS_CLIENT_ID and TEAMS_TENANT_ID in .env, then: docker compose --profile teams up -d
+  # First run: sign in in the web UI, Settings > Teams (steps also in: docker compose logs teams-bridge).
+  teams-bridge:
+    image: claude-ui
+    profiles: ["teams"]
+    restart: unless-stopped
+    depends_on: [claude-ui]
+    command: ["node", "teams-bridge/bridge.mjs"]
+    env_file: .env
+    environment:
+      HOME: ${HOME}
+      USER: ${USER:-claude}
+      CLAUDE_UI_URL: http://claude-ui:8787
+    volumes:
+      # Reads Claude UI's bridge token and keeps its own state in ~/.claude-web/teams-bridge.
+      - type: bind
+        source: ${HOME}/.claude
+        target: ${HOME}/.claude
+        read_only: true
+        bind: { create_host_path: false }
+      - ${HOME}/.claude-web:${HOME}/.claude-web
+
 volumes:
   uv-cache:
   uv-data:

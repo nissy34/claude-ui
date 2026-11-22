@@ -39,6 +39,18 @@ import { firstExchange, generateTitle, queueTitle, transcriptTitle } from './cha
 import { bgTaskMethods, isTaskMessage } from './bg-tasks.js';
 const MCP_BROWSER = path.join(path.dirname(fileURLToPath(import.meta.url)), 'mcp-browser.js');
 const MCP_UI = path.join(path.dirname(fileURLToPath(import.meta.url)), 'mcp-ui.js');
+const MCP_ASSISTANT = path.join(path.dirname(fileURLToPath(import.meta.url)), 'mcp-assistant.js');
+// The Assistant chat: the user's chief of staff, reached from Teams (through the bridge) or the web UI.
+const ASSISTANT_PROMPT = [
+  "You are the user's chief of staff for their Claude Code agents. They talk to you from Microsoft Teams (messages arrive here through the Teams bridge) or from this chat in the web UI.",
+  'Your tools (mcp__assistant__*) see and act on everything: requests waiting on the user (permission prompts, questions, plans, MCP sign-ins, project decisions), projects and their coordinators, and individual chats.',
+  'How to work:',
+  '- Turn what the user writes into the right action: answer a waiting request, message a project coordinator, start a chat in a folder, send to or stop a chat, or summarize. Call overview first when you need to know what exists or what they mean.',
+  '- Answer a waiting request only when their latest message clearly says what to answer for that one request. If it could mean several requests, or the answer is unclear, ask a short question that names the options (e.g. "The npm test one or the rm -rf one?"). Never approve something they did not clearly approve.',
+  '- Work belongs to projects when it is about a project; pass it to the coordinator in their words rather than doing it yourself. You have no file or shell tools.',
+  '- Reply in one to four short plain sentences, like a text message: what you did or found, and anything they need to decide. No headings, no tables, no preamble. Name things the way the user does.',
+  '- Messages starting with [Context] describe what the user was replying to in Teams.',
+].join('\n');
 // Chats run inside this web UI, which shows artifacts; skills and habits from other apps
 // expect an "Artifact" tool, so say which tool that is here. (Some CLI logins also have a
 // claude.ai Artifact tool, which publishes to claude.ai instead of this UI.)
@@ -268,6 +280,14 @@ export class ChatSession {
       fs.appendFile(this.logFile, JSON.stringify(ev) + '\n', () => {});
     }
     this.broadcast({ t: 'ev', ev });
+    // The attention feed (server/attention.js) sees prompts, answers and finished turns of every chat.
+    for (const fn of this.store.recordHooks || []) {
+      try {
+        fn(this, ev);
+      } catch (e) {
+        console.error('record hook failed', e);
+      }
+    }
     // Projects: the engine sees every event of its sessions (turns, prompts, permissions).
     if (this.meta.cproject) {
       try {
@@ -362,32 +382,38 @@ export class ChatSession {
       ...config.claudeArgs,
     ];
     if (config.promptSuggestions) args.push('--prompt-suggestions');
-    const builtin = {};
-    // A session in a Project gets the project tools, its role prompt and the project's folders.
-    const proj = m.cproject ? this.store.projectLaunch?.(this) : null;
-    if (proj) builtin.project = { type: 'stdio', command: process.execPath, args: [MCP_PROJECT, proj.role] };
-    if (config.childSessions && !proj) builtin.sessions = { type: 'stdio', command: process.execPath, args: [MCP_SCRIPT] };
-    if (config.schedules) builtin.schedule = { type: 'stdio', command: process.execPath, args: [MCP_SCHEDULE] };
-    builtin.ui = { type: 'stdio', command: process.execPath, args: [MCP_UI] };
-    if (config.desktopMcp) builtin.notes = { type: 'stdio', command: process.execPath, args: [MCP_NOTES] };
-    if (browserAvailable()) builtin.browser = { type: 'stdio', command: process.execPath, args: [MCP_BROWSER] };
-    if (Object.keys(builtin).length) args.push('--mcp-config', JSON.stringify({ mcpServers: builtin }));
-    const extra = [proj?.prompt, ARTIFACTS_PROMPT, builtin.sessions ? this.sessionsPrompt() : '', builtin.notes ? globalNotesPrompt() : ''].filter(Boolean).join('\n\n');
-    if (extra) args.push('--append-system-prompt', extra);
-    // Talking to other chats and looking at the browser page never need a prompt; starting
-    // sessions, changing their options, and navigating, clicking and typing still ask.
-    const allowed = [];
-    if (builtin.sessions) allowed.push(...['send_to_session', 'read_session', 'list_sessions', 'rename_session'].map((t) => `mcp__sessions__${t}`));
-    if (builtin.browser) allowed.push(...['snapshot', 'screenshot', 'console', 'scroll', 'wait_for', 'back', 'reload', 'resize'].map((t) => `mcp__browser__${t}`));
-    if (builtin.schedule) allowed.push('mcp__schedule__list_scheduled_tasks');
-    allowed.push('mcp__ui__update_plan', 'mcp__ui__publish_artifact');
-    if (builtin.notes) allowed.push(...['list_notes', 'read_note', 'write_note'].map((t) => `mcp__notes__${t}`));
-    if (proj?.allowed) allowed.push(...proj.allowed);
-    if (allowed.length) args.push('--allowedTools', allowed.join(','));
-    if (proj?.disallowed?.length) args.push('--disallowedTools', proj.disallowed.join(','));
-    if (proj?.settings) args.push('--settings', JSON.stringify(proj.settings));
-    if (proj && typeof proj.tools === 'string') args.push('--tools', proj.tools);
-    for (const d of proj?.addDirs || []) args.push('--add-dir', d);
+    if (m.assistant) {
+      // The Assistant: only its own tools, no file or shell access, nothing that asks for permission.
+      args.push('--mcp-config', JSON.stringify({ mcpServers: { assistant: { type: 'stdio', command: process.execPath, args: [MCP_ASSISTANT] } } }));
+      args.push('--append-system-prompt', ASSISTANT_PROMPT, '--tools', '', '--allowedTools', 'mcp__assistant__*');
+    } else {
+      const builtin = {};
+      // A session in a Project gets the project tools, its role prompt and the project's folders.
+      const proj = m.cproject ? this.store.projectLaunch?.(this) : null;
+      if (proj) builtin.project = { type: 'stdio', command: process.execPath, args: [MCP_PROJECT, proj.role] };
+      if (config.childSessions && !proj) builtin.sessions = { type: 'stdio', command: process.execPath, args: [MCP_SCRIPT] };
+      if (config.schedules) builtin.schedule = { type: 'stdio', command: process.execPath, args: [MCP_SCHEDULE] };
+      builtin.ui = { type: 'stdio', command: process.execPath, args: [MCP_UI] };
+      if (config.desktopMcp) builtin.notes = { type: 'stdio', command: process.execPath, args: [MCP_NOTES] };
+      if (browserAvailable()) builtin.browser = { type: 'stdio', command: process.execPath, args: [MCP_BROWSER] };
+      if (Object.keys(builtin).length) args.push('--mcp-config', JSON.stringify({ mcpServers: builtin }));
+      const extra = [proj?.prompt, ARTIFACTS_PROMPT, builtin.sessions ? this.sessionsPrompt() : '', builtin.notes ? globalNotesPrompt() : ''].filter(Boolean).join('\n\n');
+      if (extra) args.push('--append-system-prompt', extra);
+      // Talking to other chats and looking at the browser page never need a prompt; starting
+      // sessions, changing their options, and navigating, clicking and typing still ask.
+      const allowed = [];
+      if (builtin.sessions) allowed.push(...['send_to_session', 'read_session', 'list_sessions', 'rename_session'].map((t) => `mcp__sessions__${t}`));
+      if (builtin.browser) allowed.push(...['snapshot', 'screenshot', 'console', 'scroll', 'wait_for', 'back', 'reload', 'resize'].map((t) => `mcp__browser__${t}`));
+      if (builtin.schedule) allowed.push('mcp__schedule__list_scheduled_tasks');
+      allowed.push('mcp__ui__update_plan', 'mcp__ui__publish_artifact');
+      if (builtin.notes) allowed.push(...['list_notes', 'read_note', 'write_note'].map((t) => `mcp__notes__${t}`));
+      if (proj?.allowed) allowed.push(...proj.allowed);
+      if (allowed.length) args.push('--allowedTools', allowed.join(','));
+      if (proj?.disallowed?.length) args.push('--disallowedTools', proj.disallowed.join(','));
+      if (proj?.settings) args.push('--settings', JSON.stringify(proj.settings));
+      if (proj && typeof proj.tools === 'string') args.push('--tools', proj.tools);
+      for (const d of proj?.addDirs || []) args.push('--add-dir', d);
+    }
     // 'default' is the CLI's normal ask-first mode; newer CLIs call it 'manual', so just omit the flag.
     if (m.permissionMode && m.permissionMode !== 'default') args.push('--permission-mode', m.permissionMode);
     if (m.model) args.push('--model', m.model);

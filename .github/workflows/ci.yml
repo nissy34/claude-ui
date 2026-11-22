@@ -29,12 +29,14 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: npm
       - run: npm ci
-      - name: Syntax check (server and scripts)
+      - name: Syntax check (server, scripts, Teams bridge)
         run: npm run check
       - name: Build the web UI
         run: npm run build
       - name: Projects engine end to end (fake CLI)
         run: npm test
+      - name: Teams bridge end to end (fake CLI, fake Graph)
+        run: npm run test:bridge
 
   ui:
     name: UI smoke test (headless Chrome)

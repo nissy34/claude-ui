@@ -1,11 +1,17 @@
 // Per-browser preferences (appearance, notifications, defaults for new chats).
 const KEY = 'cw.prefs';
-const DEFAULTS = { fontSize: 'medium', notifications: true, sendOnEnter: true, suggestions: true, newModel: '', newMode: 'default', newEffort: '' };
+const DEFAULTS = { fontSize: 'medium', notifications: true, sendOnEnter: true, suggestions: true, newModel: '', newMode: 'auto', newEffort: '' };
 const listeners = new Set();
 
 export function getPrefs() {
   try {
-    return { ...DEFAULTS, ...JSON.parse(localStorage.getItem(KEY) || '{}') };
+    const saved = JSON.parse(localStorage.getItem(KEY) || '{}');
+    // New chats start in Auto mode now. Older saves stored every default, so drop their old 'default' mode once.
+    if (!saved.v) {
+      if (saved.newMode === 'default') delete saved.newMode;
+      saved.v = 2;
+    }
+    return { ...DEFAULTS, ...saved };
   } catch {
     return { ...DEFAULTS };
   }
@@ -38,7 +44,7 @@ export function newChatDefaults(opts) {
   return {
     ...opts,
     model: opts.model ?? (p.newModel || undefined),
-    permissionMode: opts.permissionMode ?? (p.newMode !== 'default' ? p.newMode : undefined),
+    permissionMode: opts.permissionMode ?? p.newMode,
     effort: opts.effort ?? (p.newEffort || undefined),
   };
 }

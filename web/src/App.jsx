@@ -109,7 +109,20 @@ export default function App() {
       };
     };
     connect();
+    // Presence: while this tab is visible and used, tell the server, so the Teams bridge holds
+    // pings while you are at the screen.
+    let lastInput = Date.now();
+    const onInput = () => (lastInput = Date.now());
+    const presence = () => {
+      if (document.visibilityState === 'visible' && Date.now() - lastInput < 120_000 && eventsRef.current?.readyState === WebSocket.OPEN) eventsRef.current.send(JSON.stringify({ t: 'presence' }));
+    };
+    const presenceTimer = setInterval(presence, 30_000);
+    for (const e of ['pointerdown', 'keydown', 'wheel', 'touchstart']) window.addEventListener(e, onInput, { passive: true });
     const onVis = () => {
+      if (document.visibilityState === 'visible') {
+        lastInput = Date.now();
+        presence();
+      }
       if (document.visibilityState === 'visible' && eventsRef.current?.readyState === WebSocket.CLOSED) {
         clearTimeout(timer);
         connect();
@@ -122,6 +135,8 @@ export default function App() {
     return () => {
       closed = true;
       clearTimeout(timer);
+      clearInterval(presenceTimer);
+      for (const e of ['pointerdown', 'keydown', 'wheel', 'touchstart']) window.removeEventListener(e, onInput);
       eventsRef.current?.close();
       document.removeEventListener('visibilitychange', onVis);
     };

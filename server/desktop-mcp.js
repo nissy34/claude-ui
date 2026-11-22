@@ -186,7 +186,7 @@ const TOOLS = [
         worktree: { type: 'boolean', description: 'Run in a fresh git worktree on its own branch.' },
         model: { type: 'string', description: 'Model alias or id, e.g. opus, sonnet, haiku. Default: the account default.' },
         effort: { type: 'string', enum: EFFORTS },
-        permission_mode: { type: 'string', enum: MODES, description: 'Default "default" (asks the user before edits and commands, so an unattended chat stops at the first prompt). Use acceptEdits or auto only if the user asked for it.' },
+        permission_mode: { type: 'string', enum: MODES, description: 'Default auto (a safety classifier approves actions). "default" asks the user before edits and commands.' },
       },
       required: ['task', 'folder'],
     },
@@ -477,7 +477,7 @@ export function createDesktopMcp({ store, resolveDir, createWorktree, getChanges
           cwd: wt ? wt.path : dir,
           kind: 'chat',
           name: title,
-          permissionMode: a.permission_mode && a.permission_mode !== 'default' ? a.permission_mode : undefined,
+          permissionMode: a.permission_mode || undefined,
           model: a.model && a.model !== 'default' ? a.model : undefined,
           effort: a.effort && a.effort !== 'default' ? a.effort : undefined,
         });

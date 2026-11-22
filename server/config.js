@@ -82,6 +82,12 @@ export const config = {
   titleModel: env.CW_TITLE_MODEL || 'haiku',
   schedules: env.CW_SCHEDULES !== '0',
   desktopMcp: env.CW_DESKTOP_MCP !== '0',
+  bridgeApi: env.CW_BRIDGE_API !== '0',
+  assistant: env.CW_ASSISTANT !== '0',
+  // Permission mode for new chats that don't pick one (the Assistant, chats from Teams or other chats).
+  defaultMode: env.CW_DEFAULT_MODE || 'auto',
+  assistantModel: env.CW_ASSISTANT_MODEL || 'haiku',
+  assistantMayApprove: env.CW_ASSISTANT_APPROVE !== '0',
   internalToken: crypto.randomBytes(24).toString('hex'),
   internalUrl: '',
   trustProxy: env.CW_TRUST_PROXY === '1',

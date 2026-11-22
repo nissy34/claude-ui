@@ -530,6 +530,13 @@ export class Project {
     this.saveState();
     this.afterEvent(ev);
     this.engine.changed(this, ev);
+    for (const fn of this.engine.eventHooks || []) {
+      try {
+        fn(this, ev);
+      } catch (e) {
+        console.error('project event hook failed', e);
+      }
+    }
     if (ev.to) this.schedulePump();
     return ev;
   }

@@ -37,6 +37,7 @@ import * as schedules from './schedules.js';
 import * as notes from './notes.js';
 import { controlSession } from './session-control.js';
 import { transcriptTitle } from './chat-title.js';
+import { createAttention, getBridgeToken } from './attention.js';
 import { createDesktopMcp, getToken as getMcpToken, rotateToken as rotateMcpToken } from './desktop-mcp.js';
 import { ProjectEngine } from './cprojects.js';
 import { mountProjectRoutes } from './cproject-routes.js';
@@ -118,7 +119,7 @@ app.post(
       cwd: wt ? wt.path : dir,
       kind: 'chat',
       name: name ? String(name).slice(0, 80) : undefined,
-      permissionMode: permissionMode || parent?.meta.permissionMode,
+      permissionMode: permissionMode || (parent ? parent.meta.permissionMode || 'default' : undefined),
       model: model && model !== 'default' ? model : model === 'default' ? undefined : parent?.meta.model,
       effort: effort || parent?.meta.effort,
     });
@@ -355,6 +356,23 @@ app.post(
 
 // publish_artifact from the built-in ui MCP: show a report in the chat's side panel and the
 // Artifacts gallery.
+// The Assistant chat's tools (server/mcp-assistant.js).
+app.post(
+  '/internal/assistant/:tool',
+  wrap(async (req, res) => res.json(await attention.assistantTool(store.get(req.headers['x-cw-session']), req.params.tool, req.body || {})))
+);
+
+// notify_user from the built-in ui MCP: a short non-blocking update for the user's phone (Teams bridge).
+app.post('/internal/notify', (req, res) => {
+  const s = store.get(req.headers['x-cw-session']);
+  if (!s) return res.status(404).json({ error: 'No such session' });
+  const text = String(req.body?.text || '').trim();
+  if (!text) return res.status(400).json({ error: 'text is required' });
+  attention.notify(s, text);
+  s.record({ k: 'notice', text: `Notified you: ${text.slice(0, 300)}` });
+  res.json({ ok: true, note: config.bridgeApi ? 'Sent to the user. It reaches their phone if the Teams bridge is running.' : 'Recorded in this chat; no bridge is enabled on this server.' });
+});
+
 app.post(
   '/internal/artifacts/publish',
   wrap(async (req, res) => {
@@ -400,9 +418,36 @@ app.post(
 app.get('/api/me', (req, res) => res.json({ authed: isAuthed(req) }));
 
 // Handoff MCP for Claude Desktop (bearer token, not the login cookie).
-if (config.desktopMcp) {
-  createDesktopMcp({ store, resolveDir, createWorktree, getChanges, listProjects, engine }).mount(app);
-}
+const desktopMcp = createDesktopMcp({ store, resolveDir, createWorktree, getChanges, listProjects, engine });
+if (config.desktopMcp) desktopMcp.mount(app);
+
+// Attention feed for companion services such as the Teams bridge (bearer token, not the login cookie).
+const attention = createAttention({
+  store,
+  engine,
+  resolveDir,
+  listProjects,
+  desktopRun: desktopMcp.run,
+  // Sign-in codes and expiry from the Teams bridge pop up in every open UI.
+  onStatus: (b) => {
+    if (b.state === 'signin') emitUi({ t: 'error', error: `Teams bridge: sign in to Microsoft. Open ${b.url || 'https://microsoft.com/devicelogin'} and enter the code ${b.code}.` });
+    else if (b.state === 'signin-browser') emitUi({ t: 'error', error: 'Teams bridge: sign in to Microsoft in Settings > Teams.' });
+    else if (b.state === 'expired') emitUi({ t: 'error', error: `Teams bridge: ${b.message} It will ask for a new sign-in code.` });
+  },
+});
+app.get('/api/bridge-status', (req, res) => (isAuthed(req) ? res.json({ status: attention.status(), enabled: !!config.bridgeApi, token: config.bridgeApi ? getBridgeToken() : null }) : res.status(401).json({ error: 'Not logged in' })));
+// Browser sign-in for the Teams bridge (Settings > Teams): the address the browser ended on, for the bridge.
+app.post('/api/bridge-signin', (req, res) => {
+  if (!isAuthed(req)) return res.status(401).json({ error: 'Not logged in' });
+  if (!originOk(req)) return res.status(403).json({ error: 'Bad origin' });
+  const url = String(req.body?.url || '').trim();
+  if (!/^https?:\/\/\S*[?&](code|error)=/.test(url)) return res.status(400).json({ error: 'Paste the whole address the browser ended on, with ?code= in it (http://localhost/?code=…)' });
+  attention.signinReply(url);
+  res.json({ ok: true });
+});
+if (config.bridgeApi) attention.mount(app);
+// The Assistant chat is always there (pinned in the sidebar), not only after the first Teams message.
+if (config.assistant) attention.assistant();
 
 // Artifact files, authorised by a per-session signature in the path (no cookie: sandboxed
 // HTML artifacts load their own CSS/JS from here with an opaque origin).
@@ -803,7 +848,7 @@ app.post(
     const src = getSession(req);
     if (src.meta.kind !== 'chat') throw new Error('Only chats can be forked');
     const m = src.meta;
-    const t = store.create({ cwd: m.cwd, kind: 'chat', name: `${m.name} (fork)`.slice(0, 80), model: m.model, permissionMode: m.permissionMode, effort: m.effort });
+    const t = store.create({ cwd: m.cwd, kind: 'chat', name: `${m.name} (fork)`.slice(0, 80), model: m.model, permissionMode: m.permissionMode || 'default', effort: m.effort });
     t.meta.project = m.project || m.cwd;
     if (m.worktree) t.meta.worktree = m.worktree;
     if (m.worktrees) t.meta.worktrees = m.worktrees;
@@ -1276,6 +1321,11 @@ function handleEvents(ws) {
   const onProject = (msg) => ws.readyState === 1 && ws.send(JSON.stringify(msg));
   engine.listeners.add(onProject);
   ws.send(JSON.stringify({ t: 'cprojects', projects: engine.list(), changed: [] }));
+  ws.on('message', (raw) => {
+    try {
+      if (JSON.parse(raw)?.t === 'presence') attention.seen();
+    } catch {}
+  });
   const ping = setInterval(() => ws.readyState === 1 && ws.ping(), 25_000);
   ws.on('close', () => {
     store.listeners.delete(push);

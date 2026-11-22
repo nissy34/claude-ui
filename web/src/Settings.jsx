@@ -6,6 +6,7 @@ import { MODES } from './chat/Composer.jsx';
 import { useModels } from './models.js';
 import { McpTab, PluginsTab, SkillsTab } from './Customize.jsx';
 import DesktopTab from './DesktopTab.jsx';
+import TeamsTab from './TeamsTab.jsx';
 import SignInsTab from './SignIns.jsx';
 import { Button, IconButton, Modal, ModalHead, Segmented, Toggle } from './ui/index.jsx';
 
@@ -18,6 +19,7 @@ const TABS = [
   ['plugins', 'Plugins'],
   ['skills', 'Skills'],
   ['desktop', 'Claude Desktop'],
+  ['teams', 'Teams'],
   ['account', 'Account'],
   ['about', 'About'],
 ];
@@ -276,6 +278,7 @@ export default function Settings({ projects, activeCwd, onClose, onError, onKeys
           {tab === 'plugins' && <PluginsTab onError={onError} />}
           {tab === 'skills' && <SkillsTab projects={projects} activeCwd={activeCwd} onError={onError} />}
           {tab === 'desktop' && <DesktopTab onError={onError} projects={projects} activeCwd={activeCwd} />}
+          {tab === 'teams' && <TeamsTab onError={onError} />}
           {tab === 'account' && <Account />}
           {tab === 'about' && <About />}
         </div>
