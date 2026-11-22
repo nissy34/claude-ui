@@ -22,7 +22,8 @@ export class Graph {
    * @param {(info: {state: string, message: string, code?: string, url?: string}) => void} [o.onAuth]
    */
   constructor(o) {
-    this.o = { graphUrl: 'https://graph.microsoft.com/v1.0', loginUrl: 'https://login.microsoftonline.com', auth: 'browser', redirectUri: 'http://localhost', ...o };
+    // Unset options (undefined) keep the defaults.
+    this.o = { graphUrl: 'https://graph.microsoft.com/v1.0', loginUrl: 'https://login.microsoftonline.com', auth: 'browser', redirectUri: 'http://localhost', ...Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined && v !== '')) };
     this.tokens = null;
     try {
       this.tokens = JSON.parse(fs.readFileSync(o.tokenFile, 'utf8'));

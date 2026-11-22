@@ -719,16 +719,27 @@ async function main() {
     console.log('\nYour own "chat with yourself" is 48:notes (the default).');
     return;
   }
-  if (!cfg.token) {
-    console.error(`No bridge token: set CW_BRIDGE_TOKEN, or point CW_BRIDGE_TOKEN_FILE at Claude UI's ${path.join(dataDir, 'bridge-token')}.`);
-    process.exit(1);
+  // Claude UI writes the token on its first start, which may be just after ours: wait for it.
+  for (let i = 0; !cfg.token; i++) {
+    try {
+      cfg.token = fs.readFileSync(cfg.tokenFile, 'utf8').trim();
+    } catch {}
+    if (cfg.token) break;
+    if (i % 30 === 0) log(`Waiting for Claude UI's bridge token at ${cfg.tokenFile} (or set CW_BRIDGE_TOKEN)…`);
+    await new Promise((res) => setTimeout(res, 2000));
   }
   me = await graph.me();
-  if (useChannel) {
-    chan = await findChannel();
-    if (st.chan && st.chan !== `${chan.team}/${chan.channel}`) Object.assign(st, { started: false, topics: {}, threads: {}, assistantRoot: null, seen: [] });
-    st.chan = `${chan.team}/${chan.channel}`;
+  if (useChannel) chan = await findChannel();
+  // Saved state belongs to one chat or channel: moving to another starts fresh there (history,
+  // "Connected", threads). Requests still open are posted again in the new place.
+  const where = chan ? `channel:${chan.team}/${chan.channel}` : `chat:${cfg.chatId}`;
+  if ((st.where || (st.started ? `chat:${st.chat || '48:notes'}` : where)) !== where) {
+    Object.assign(st, { started: false, topics: {}, names: {}, threads: {}, assistantRoot: null, seen: [], sent: {}, waiting: {} });
+    for (const it of Object.values(st.items)) it.open = false;
+    st.items = {};
   }
+  st.where = where;
+  save();
   log(`signed in as ${me.displayName}; ${chan ? `channel ${chan.name || chan.channel}` : `chat ${cfg.chatId}`}; Claude UI ${cfg.ui}`);
   await reportAuth({ state: 'ok', message: `Teams bridge connected as ${me.displayName}.` });
   graph.keepAlive();

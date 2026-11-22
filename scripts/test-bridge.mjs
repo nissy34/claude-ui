@@ -9,6 +9,7 @@ import crypto from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { Graph } from '../teams-bridge/graph.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(here, '..');
@@ -196,6 +197,11 @@ async function main() {
   const login = await fetch(base + '/api/login', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ password: 'pw' }) });
   cookie = login.headers.get('set-cookie').split(';')[0];
 
+  console.log('Graph defaults');
+  {
+    const g = new Graph({ tenant: 't', clientId: 'c', tokenFile: path.join(tmp, 'none.json'), graphUrl: undefined, loginUrl: undefined });
+    check(g.o.loginUrl === 'https://login.microsoftonline.com' && g.o.graphUrl === 'https://graph.microsoft.com/v1.0' && g.browserStart().startsWith('https://login.microsoftonline.com/t/'), 'unset URLs keep the Microsoft defaults (no undefined/ links)');
+  }
   console.log('Bridge API is locked');
   const tokenFile = path.join(env.CW_DATA_DIR, 'bridge-token');
   check(fs.existsSync(tokenFile), 'a bridge token is generated');
@@ -393,9 +399,7 @@ async function main() {
     const gone = new Promise((r) => bridge.once('exit', r));
     bridge.kill();
     await gone;
-    const dir2 = path.join(tmp, 'teams2');
-    fs.mkdirSync(dir2, { recursive: true });
-    fs.copyFileSync(path.join(tmp, 'teams', 'token.json'), path.join(dir2, 'token.json'));
+    const dir2 = path.join(tmp, 'teams'); // the same state as in chat mode: switching must start fresh
     bridge = spawn(process.execPath, [path.join(root, 'teams-bridge', 'bridge.mjs')], {
       env: { ...env, CLAUDE_UI_URL: base, CW_BRIDGE_TOKEN_FILE: tokenFile, TEAMS_DATA_DIR: dir2, TEAMS_CLIENT_ID: 'client', TEAMS_TENANT_ID: 'tenant', TEAMS_GRAPH_URL: `http://127.0.0.1:${gport}/v1.0`, TEAMS_LOGIN_URL: `http://127.0.0.1:${gport}`, TEAMS_POLL_SECONDS: '2', TEAMS_AWAY_MINUTES: '0', TEAMS_CHANNEL: 'Eng / Claude' },
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -404,7 +408,7 @@ async function main() {
     bridge.stderr.on('data', (d) => process.stderr.write(`[bridge] ${d}`));
     const txt = (m) => m.body.content + (m.attachments || []).map((a) => a.content || '').join('');
     await until(() => chan.find((m) => /Connected\. Each project and chat gets its own thread/.test(m.body.content)), 15_000, 'channel connected');
-    check(true, 'the bridge finds the channel by name and says hello there');
+    check(true, 'switching from a chat to a channel: the bridge finds it by name and says hello there');
     const chanSay = (text, rootId) => {
       const m = { id: `u${++n}`, messageType: 'message', createdDateTime: new Date(Date.now() + n).toISOString(), from: { user: { id: ME.id } }, body: { contentType: 'html', content: `<p>${text}</p>` }, attachments: [], replies: [] };
       if (rootId) chan.find((x) => x.id === rootId).replies.push(m);
