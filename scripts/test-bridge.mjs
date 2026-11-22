@@ -295,10 +295,18 @@ main()
     console.error('chat:', JSON.stringify(chat.map((m) => [m.id, m.body.content.slice(0, 160)]), null, 1));
   })
   .finally(async () => {
+    // Wait for both to exit before removing their folders (the server writes logs on the way out).
+    const gone = (p) => (p && p.exitCode === null && p.signalCode === null ? new Promise((r) => p.once('exit', r)) : null);
+    const waits = [gone(bridge), gone(server)];
     bridge?.kill();
     server?.kill('SIGTERM');
+    await Promise.race([Promise.all(waits), sleep(5000)]);
     graph.close();
     console.log(`\n${passes} passed, ${failures} failed`);
-    if (!failures) fs.rmSync(tmp, { recursive: true, force: true });
+    if (!failures) {
+      try {
+        fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+      } catch {}
+    }
     process.exit(failures ? 1 : 0);
   });
