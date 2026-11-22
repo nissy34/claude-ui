@@ -164,7 +164,7 @@ async function main() {
 
   console.log('Start the bridge: device code is blocked, so browser sign-in with a pasted address');
   bridge = spawn(process.execPath, [path.join(root, 'teams-bridge', 'bridge.mjs')], {
-    env: { ...env, CLAUDE_UI_URL: base, CW_BRIDGE_TOKEN_FILE: tokenFile, TEAMS_DATA_DIR: path.join(tmp, 'teams'), TEAMS_CLIENT_ID: 'client', TEAMS_TENANT_ID: 'tenant', TEAMS_GRAPH_URL: `http://127.0.0.1:${gport}/v1.0`, TEAMS_LOGIN_URL: `http://127.0.0.1:${gport}`, TEAMS_POLL_SECONDS: '2', TEAMS_AWAY_MINUTES: '0', TEAMS_AUTH: 'auto' },
+    env: { ...env, CLAUDE_UI_URL: base, CW_BRIDGE_TOKEN_FILE: tokenFile, TEAMS_DATA_DIR: path.join(tmp, 'teams'), TEAMS_CLIENT_ID: 'client', TEAMS_TENANT_ID: 'tenant', TEAMS_GRAPH_URL: `http://127.0.0.1:${gport}/v1.0`, TEAMS_LOGIN_URL: `http://127.0.0.1:${gport}`, TEAMS_POLL_SECONDS: '2', TEAMS_AWAY_MINUTES: '0', TEAMS_AUTH: 'auto', TEAMS_ASSISTANT: '0' },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   bridge.stdout.on('data', (d) => (bridgeLog.push(String(d)), process.env.VERBOSE && process.stdout.write(`[bridge] ${d}`)));
@@ -285,6 +285,28 @@ async function main() {
   await sleep(6000);
   check(botMsgs().length === count, 'nothing is re-posted after a restart', botMsgs().slice(count).map((m) => m.body.content));
   check(tokenCalls === 1, 'no new sign-in after a restart (the saved token is reused)', tokenCalls);
+
+  console.log('The Assistant (bridge restarted with it on, the default)');
+  say('/new demo: @@ask Bash {"command":"npm test"}');
+  const p6 = await until(() => findBot(/wants to use <b>Bash<\/b>:<br><code>npm test<\/code>/), 15_000, 'npm test prompt');
+  const open6 = (await api('/api/bridge/attention', { headers: { authorization: `Bearer ${token}` } })).items.find((i) => i.detail === 'npm test');
+  check(open6, 'the prompt is in the attention list');
+  say(`what is waiting?<br>@@call assistant__overview {}<br>@@say One thing waits: npm test.`);
+  await until(() => findBot(/Claude<\/b> › One thing waits: npm test\./), 20_000, 'assistant reply');
+  check(true, 'plain text goes to the Assistant and its reply comes back to Teams');
+  const sessions2 = (await api('/api/sessions')).sessions;
+  const asst = sessions2.find((x) => x.name === 'Assistant');
+  check(asst && asst.model === 'haiku', 'the Assistant is a chat in the web UI, on Haiku', asst);
+  const log = fs.readFileSync(env.FAKE_CLAUDE_LOG, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+  const overview = log.find((x) => x.call === 'assistant__overview');
+  check(overview && /npm test/.test(overview.result), 'its overview tool sees the waiting prompt', overview?.result);
+  const argv = log.find((x) => x.argv?.includes('--allowedTools') && x.argv.includes('mcp__assistant__*'))?.argv || [];
+  check(argv[argv.indexOf('--tools') + 1] === '', 'the Assistant has no file or shell tools');
+  say(`yes run the tests<br>@@call assistant__answer_request {"id":"${open6.id}","quote":"yes run the tests","behavior":"allow"}<br>@@say Done, npm test is running.`);
+  await until(() => /Answered: allowed/.test(chat.find((m) => m.id === p6.id).body.content), 20_000, 'prompt answered by the Assistant');
+  check(true, 'the Assistant answers a request when the user clearly said so');
+  await until(() => findBot(/Done, npm test is running\./), 10_000, 'assistant confirmation');
+  check(true, 'and confirms in Teams');
 }
 
 main()
@@ -292,7 +314,7 @@ main()
     failures++;
     console.error('ERROR', e);
     console.error(bridgeLog.join('').slice(-3000));
-    console.error('chat:', JSON.stringify(chat.map((m) => [m.id, m.body.content.slice(0, 160)]), null, 1));
+    console.error("chat:", JSON.stringify(chat.slice(-8).map((m) => [m.id, m.body.content.slice(0, 200)]), null, 1));
   })
   .finally(async () => {
     // Wait for both to exit before removing their folders (the server writes logs on the way out).

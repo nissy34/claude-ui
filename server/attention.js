@@ -167,6 +167,12 @@ export function createAttention({ store, engine, resolveDir, listProjects, deskt
       case 'result':
         // Turn updates only for chats the bridge started or wrote to; projects report through their coordinator.
         if (s.meta.bridge && !s.meta.cproject) push({ type: 'turn', session: sessionInfo(s), isError: !!ev.isError, text: clip(ev.isError ? ev.text || 'The turn failed.' : s.lastReply(), 3000) });
+        // The Assistant answers in Teams when the message came from Teams.
+        if (s.meta.assistant && s.meta.teamsReply) {
+          s.meta.teamsReply = false;
+          const text = ev.isError ? `Sorry, that failed: ${ev.text || 'unknown error'}` : s.lastReply();
+          if (text.trim()) push({ type: 'assistant', session: sessionInfo(s), text: clip(text, 4000) });
+        }
         return;
     }
   });
@@ -340,10 +346,90 @@ export function createAttention({ store, engine, resolveDir, listProjects, deskt
         const projects = engine ? (await desktopRun('projects_list', {})).projects : [];
         return { busyChats: busy, projects, waiting: list().length };
       }
+      case 'assistant': {
+        const text = String(a.text || '').trim();
+        if (!text) throw new Error('Message is empty');
+        const s = assistant();
+        s.meta.teamsReply = true;
+        s.meta.lastUserText = text;
+        const r = s.deliver({ text: a.context ? `${String(a.context).slice(0, 2000)}\n\n${text}` : text });
+        return { ok: true, target: { type: 'chat', id: s.id, name: s.meta.name }, queued: !!r?.queued };
+      }
       case 'folders':
         return listProjects();
       default:
         throw new Error(`Unknown action ${a.action}`);
+    }
+  }
+
+  // ---------- the Assistant (chief of staff) ----------
+  /** The one Assistant chat: a Haiku chat with only the assistant tools. Made on first use. */
+  function assistant() {
+    let s = [...store.sessions.values()].find((x) => x.meta.assistant && !x.meta.archived);
+    if (!s) {
+      s = store.create({ cwd: config.scratchDir, kind: 'chat', name: 'Assistant', model: config.assistantModel });
+      s.meta.assistant = true;
+      s.meta.customName = true;
+      s.meta.pinned = true;
+      store.save();
+      store.changed?.();
+    }
+    return s;
+  }
+
+  const shortItem = (i) => ({
+    id: i.id,
+    kind: i.kind,
+    where: i.session ? (i.session.project ? `${i.session.project.name}${i.session.thread && i.session.thread !== 'coordinator' ? ` / ${i.session.thread}` : ''}` : `chat "${i.session.name}"`) : `${i.project?.name}${i.thread && i.thread !== 'coordinator' ? ` / ${i.thread}` : ''}`,
+    ...(i.kind === 'permission' || i.kind === 'plan' ? { tool: i.tool, detail: clip(i.detail, 300) } : {}),
+    ...(i.kind === 'question' ? { questions: i.questions.map((q) => ({ question: q.question, options: q.options.map((o) => o.label) })) } : {}),
+    ...(i.kind === 'decision' ? { question: i.question, options: i.options.map((o, n) => `${n + 1}. ${o.label}${n === i.recommended ? ' (recommended)' : ''}`), irreversible: i.irreversible } : {}),
+    ...(i.kind === 'signin' ? { server: i.server, url: i.url, form: i.form } : {}),
+    waiting: Math.round((Date.now() - (i.ts || Date.now())) / 60000) + ' min',
+  });
+
+  /** A tool call from the Assistant's built-in MCP server. */
+  async function assistantTool(s, name, a = {}) {
+    if (!s?.meta.assistant) throw new Error('Only the Assistant chat can use these tools.');
+    switch (name) {
+      case 'overview': {
+        const st = await act({ action: 'status' });
+        return { waitingOnUser: list().map(shortItem), projects: st.projects, workingChats: st.busyChats };
+      }
+      case 'answer_request': {
+        // Guard: the quoted words must be in the user's latest message, so a misread can't approve anything.
+        const quote = String(a.quote || '').trim().toLowerCase();
+        const last = String(s.meta.lastUserText || s.lastUserText?.() || '').toLowerCase();
+        if (!quote || !last.includes(quote)) throw new Error("quote must be words from the user's latest message. If they didn't clearly say what to answer, ask them.");
+        if (!config.assistantMayApprove && String(a.id).startsWith('perm:') && a.behavior !== 'deny') {
+          const item = list().find((i) => i.id === a.id);
+          if (item && item.kind !== 'question') throw new Error('Approving tools from the Assistant is turned off. Tell the user to answer it in the web UI or with #code in Teams.');
+        }
+        const body = { id: a.id, text: a.text };
+        if (a.behavior) body.behavior = a.behavior;
+        if (typeof a.choice === 'number') body.choice = a.choice - 1;
+        return answer(body);
+      }
+      case 'project_status':
+        return desktopRun('project_status', { project_id: project(a.project).id, chat_messages: 8 });
+      case 'message_project':
+        return act({ action: 'project_send', project: a.project, text: a.text });
+      case 'list_folders': {
+        const f = await listProjects();
+        return { folders: (f.projects || []).map((x) => x.name) };
+      }
+      case 'start_chat':
+        return act({ action: 'new_chat', folder: a.folder, text: a.task });
+      case 'find_chats':
+        return desktopRun('list_sessions', { query: a.query || '', limit: 15 });
+      case 'read_chat':
+        return desktopRun('get_session', { id: chatOf(a.chat).id, max_chars: 6000 });
+      case 'message_chat':
+        return act({ action: 'send', chat: a.chat, text: a.text });
+      case 'stop_chat':
+        return act({ action: 'stop', chat: a.chat });
+      default:
+        throw new Error(`Unknown tool ${name}`);
     }
   }
 
@@ -449,6 +535,8 @@ export function createAttention({ store, engine, resolveDir, listProjects, deskt
       signinReply = String(url || '').trim().slice(0, 4000);
       for (const w of [...signinWaiters]) w();
     },
+    assistant,
+    assistantTool,
     notify(s, text) {
       return push({ type: 'notify', session: sessionInfo(s), text: clip(text, 2000) });
     },

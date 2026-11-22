@@ -99,7 +99,7 @@ export function postHtml(ev) {
 
 export const HELP = [
   `${TAG} Here's what I understand:`,
-  '• Plain text goes to whoever you last talked to (shown on my replies).',
+  '• Just write what you want: the Assistant works out what you mean ("tell the Claude UI project to add dark mode", "yes to the npm one", "what\'s going on?").',
   '• Reply to one of my messages to answer it or to continue that conversation.',
   '• <b>#3 yes</b> answers request #3. <b>/waiting</b> lists what is waiting on you.',
   '• <b>/project &lt;name&gt;: &lt;message&gt;</b> sends to a project coordinator.',

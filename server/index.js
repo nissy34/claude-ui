@@ -355,6 +355,12 @@ app.post(
 
 // publish_artifact from the built-in ui MCP: show a report in the chat's side panel and the
 // Artifacts gallery.
+// The Assistant chat's tools (server/mcp-assistant.js).
+app.post(
+  '/internal/assistant/:tool',
+  wrap(async (req, res) => res.json(await attention.assistantTool(store.get(req.headers['x-cw-session']), req.params.tool, req.body || {})))
+);
+
 // notify_user from the built-in ui MCP: a short non-blocking update for the user's phone (Teams bridge).
 app.post('/internal/notify', (req, res) => {
   const s = store.get(req.headers['x-cw-session']);

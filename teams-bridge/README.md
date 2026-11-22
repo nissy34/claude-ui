@@ -26,11 +26,15 @@ Answer by **replying to the message** (swipe it on the phone, or hover and Reply
 
 MCP sign-in **forms** (usernames, passwords) never go to Teams; fill those in the web UI.
 
-**You can start work:**
+**Just write what you want.** Plain messages go to the **Assistant**, a chat in Claude UI on Haiku that acts as your chief of staff. It sees what's waiting on you, your projects and your chats, and turns "tell the Claude UI project to add dark mode", "yes to the npm one" or "what's everyone doing?" into the right action, then answers in a sentence or two. It only answers a request when your words clearly say what to answer; otherwise it asks back. The Assistant is pinned in the web UI's sidebar, so you can read the whole conversation there and talk to it from the UI too. Replying to one of its messages continues with it; replying to a request with more than yes/no also goes to it, with that request as context.
+
+`TEAMS_ASSISTANT=0` turns it off (plain text then goes to whoever you last talked to). On the server, `CW_ASSISTANT_MODEL` picks the model (default `haiku`) and `CW_ASSISTANT_APPROVE=0` stops it from approving tools (it can still answer questions and decisions).
+
+**Commands work without the Assistant:**
 
 | You write | It does |
 | --- | --- |
-| any text | goes to whoever you last talked to (or `TEAMS_DEFAULT_PROJECT`, or your only project) |
+| any text | goes to the Assistant (with `TEAMS_ASSISTANT=0`: to whoever you last talked to, `TEAMS_DEFAULT_PROJECT`, or your only project) |
 | `/project Claude UI: add a dark mode` | sends it to that project's coordinator |
 | `/new my-repo: fix the flaky login test` | starts a new chat in that folder; you get its result when it finishes |
 | `/to Claude UI` | plain text now goes to that project (or chat) |
@@ -41,7 +45,7 @@ MCP sign-in **forms** (usernames, passwords) never go to Teams; fill those in th
 
 While you used the web UI in the last 5 minutes (`TEAMS_AWAY_MINUTES`), questions wait there instead of pinging you; they go to Teams once you step away. Coordinator posts and finished chats are only sent while you are away. `notify_user` always goes out.
 
-Agents get one new tool, `notify_user` (built-in `ui` MCP), to tell you something without waiting. To ask and wait they keep using AskUserQuestion, which already reaches Teams.
+Agents (other chats) get one new tool, `notify_user` (built-in `ui` MCP), to tell you something without waiting. To ask and wait they keep using AskUserQuestion, which already reaches Teams.
 
 ## Setup
 
@@ -124,7 +128,8 @@ If your company has a **sign-in frequency** policy (for example "sign in again e
 | `TEAMS_CHAT_ID` | `48:notes` | the chat to use |
 | `TEAMS_AUTH` | `browser` | `browser`, `device` (device code) or `auto` (device code, then browser) |
 | `TEAMS_REDIRECT_URI` | `http://localhost` | must match the app registration |
-| `TEAMS_DEFAULT_PROJECT` | the only project | who gets plain text before you pick with `/to` |
+| `TEAMS_ASSISTANT` | `1` | plain text goes to the Assistant; `0` = to the last target |
+| `TEAMS_DEFAULT_PROJECT` | the only project | with the Assistant off: who gets plain text before you pick with `/to` |
 | `TEAMS_AWAY_MINUTES` | `5` | hold questions while you use the web UI; `0` sends at once |
 | `TEAMS_ALLOW_PERMISSIONS` | `1` | `0` = answer questions and decisions only, approve tools in the web UI |
 | `TEAMS_POLL_SECONDS` | `5` | how often to read the chat (minimum 2) |

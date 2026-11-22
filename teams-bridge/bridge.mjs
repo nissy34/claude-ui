@@ -13,7 +13,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { Graph } from './graph.mjs';
-import { HELP, TAG, askHtml, esc, parseCommand, permissionReply, plain, postHtml, resolvedHtml } from './text.mjs';
+import { HELP, TAG, askHtml, esc, md, parseCommand, permissionReply, plain, postHtml, resolvedHtml } from './text.mjs';
 
 const env = process.env;
 const home = (p) => p.replace(/^~(?=$|\/)/, os.homedir());
@@ -30,6 +30,7 @@ const cfg = {
   awayMs: (env.TEAMS_AWAY_MINUTES === undefined ? 5 : Number(env.TEAMS_AWAY_MINUTES) || 0) * 60_000,
   allowPermissions: env.TEAMS_ALLOW_PERMISSIONS !== '0',
   defaultProject: env.TEAMS_DEFAULT_PROJECT || '',
+  assistant: env.TEAMS_ASSISTANT !== '0',
   pingUrl: env.TEAMS_PING_URL || '',
   graphUrl: env.TEAMS_GRAPH_URL,
   loginUrl: env.TEAMS_LOGIN_URL,
@@ -169,6 +170,7 @@ async function onEvent(ev) {
   if (env.TEAMS_DEBUG) log('[event]', JSON.stringify(ev).slice(0, 300));
   if (ev.type === 'ask') return onAsk(ev.item);
   if (ev.type === 'resolved') return onResolved(ev);
+  if (ev.type === 'assistant') return post(`${TAG} ${md(ev.text)}`, { kind: 'assistant' });
   if (ev.type === 'notify' || ((ev.type === 'post' || ev.type === 'turn') && away())) {
     const target = ev.type === 'post' ? { type: 'project', id: ev.project.id, name: ev.project.name } : { type: 'chat', id: ev.session.id, name: ev.session.name };
     await post(postHtml(ev), { kind: 'target', target });
@@ -229,6 +231,7 @@ async function answer(itemId, text, msgId) {
   if (it.kind === 'permission' || it.kind === 'plan' || it.kind === 'signin') {
     if (!cfg.allowPermissions && it.kind !== 'signin') return post(`${TAG} Approving from Teams is turned off. Answer #${it.code} in the web UI.`, { kind: 'note' });
     const r = permissionReply(text);
+    if (!r && cfg.assistant) return toAssistant(text, msgId, `[Context] Replying in Teams to request #${it.code} (id ${itemId}).`);
     if (!r) return post(`${TAG} For #${it.code}, reply <b>yes</b>${it.kind === 'permission' ? ', <b>always</b>' : ''} or <b>no</b>.`, { kind: 'note' });
     if (it.kind === 'signin') body.behavior = r.behavior === 'deny' ? 'decline' : 'accept';
     else Object.assign(body, r);
@@ -259,6 +262,16 @@ async function sendTo(target, text, msgId) {
   }
 }
 
+/** Plain words go to the Assistant (a Haiku chat in Claude UI), which works out what you mean. */
+async function toAssistant(text, msgId, context) {
+  try {
+    await ui('POST', '/api/bridge/act', { action: 'assistant', text, ...(context ? { context } : {}) });
+    if (msgId) await react(msgId);
+  } catch (e) {
+    await post(`${TAG} Couldn't reach the Assistant: ${esc(e.message)}`, { kind: 'note' });
+  }
+}
+
 const openAsks = () => Object.entries(st.items).filter(([, it]) => it.open);
 
 async function defaultTarget() {
@@ -278,6 +291,7 @@ async function handle(msg) {
     const s = st.sent[ref.id];
     if (s.kind === 'ask') return answer(s.item, text, msg.id);
     if (s.kind === 'target') return sendTo(s.target, text, msg.id);
+    if (s.kind === 'assistant') return toAssistant(text, msg.id);
   }
   const c = parseCommand(text);
   switch (c.cmd) {
@@ -342,7 +356,10 @@ async function handle(msg) {
     default: {
       // A bare "yes" / "2" with exactly one open request answers it.
       const open = openAsks();
-      if (open.length === 1 && (permissionReply(c.text) || /^\d+$/.test(c.text.trim()))) return answer(open[0][0], c.text, msg.id);
+      // With the Assistant on, only a one-word reply takes this shortcut; anything longer goes to the Assistant.
+      const short = !cfg.assistant || /^\S+$/.test(c.text.trim());
+      if (open.length === 1 && short && (permissionReply(c.text) || /^\d+$/.test(c.text.trim()))) return answer(open[0][0], c.text, msg.id);
+      if (cfg.assistant) return toAssistant(c.text, msg.id);
       const t = await defaultTarget().catch(() => null);
       if (!t) return post(`${TAG} Who should get this? Use <b>/project name: …</b>, <b>/new folder: …</b> or <b>/to name</b>.`, { kind: 'note' });
       return sendTo(t, c.text, msg.id);
