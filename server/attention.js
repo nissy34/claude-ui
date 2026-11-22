@@ -166,7 +166,7 @@ export function createAttention({ store, engine, resolveDir, listProjects, deskt
         return push({ type: 'resolved', id: `elicit:${s.id}:${ev.reqId}`, answer: ev.action, by: s.lastAnswerBy || 'ui' });
       case 'result':
         // Turn updates only for chats the bridge started or wrote to; projects report through their coordinator.
-        if (s.meta.bridge && !s.meta.cproject) push({ type: 'turn', session: sessionInfo(s), isError: !!ev.isError, text: clip(ev.isError ? ev.text || 'The turn failed.' : s.lastReply(), 3000) });
+        if (s.meta.bridge && !s.meta.cproject) push({ type: 'turn', session: sessionInfo(s), via: s.meta.bridgeVia || null, isError: !!ev.isError, text: clip(ev.isError ? ev.text || 'The turn failed.' : s.lastReply(), 3000) });
         // The Assistant answers in Teams when the message came from Teams.
         if (s.meta.assistant && s.meta.teamsReply) {
           s.meta.teamsReply = false;
@@ -187,7 +187,7 @@ export function createAttention({ store, engine, resolveDir, listProjects, deskt
       } else if (ev.type === 'decision.answered' || ev.type === 'decision.withdrawn') {
         push({ type: 'resolved', id: `decision:${p.id}:${ev.body.id}`, answer: ev.body.label || (ev.type === 'decision.withdrawn' ? 'withdrawn' : ''), by: ev.from?.via === 'bridge' || p.lastAnswerBy === 'bridge' ? 'bridge' : 'ui' });
       } else if (ev.type === 'chat.post') {
-        push({ type: 'post', project: { id: p.id, name: p.settings.name }, text: clip(ev.body.text, 3000) });
+        push({ type: 'post', project: { id: p.id, name: p.settings.name }, via: projectVia.get(p.id) || null, text: clip(ev.body.text, 3000) });
       }
     });
   }
@@ -301,10 +301,15 @@ export function createAttention({ store, engine, resolveDir, listProjects, deskt
     return resolveDir(hit.path || hit.name);
   }
 
+  // Who asked last: 'assistant' when the Assistant passed your words on, so the answer can come back
+  // where you asked (the Assistant's thread in Teams) instead of in a thread of its own.
+  const projectVia = new Map();
+
   async function act(a = {}) {
     switch (a.action) {
       case 'project_send': {
         const p = project(a.project);
+        projectVia.set(p.id, a.via || null);
         engine.userMessage(p, String(a.text || ''), { from: 'user' });
         return { ok: true, target: { type: 'project', id: p.id, name: p.settings.name } };
       }
@@ -315,6 +320,7 @@ export function createAttention({ store, engine, resolveDir, listProjects, deskt
         const s = store.create({ cwd: dir, kind: 'chat', name: clip(text.split('\n')[0], 80) });
         s.meta.project = dir;
         s.meta.bridge = true;
+        s.meta.bridgeVia = a.via || null;
         s.send({ text });
         store.save();
         store.changed?.();
@@ -327,6 +333,7 @@ export function createAttention({ store, engine, resolveDir, listProjects, deskt
           // A project thread: steer it through its project so the coordinator sees it.
           const p = engine.projectOf(s);
           if (p.coordinatorId === s.id) {
+            projectVia.set(p.id, a.via || null);
             engine.userMessage(p, String(a.text || ''), { from: 'user' });
             return { ok: true, target: { type: 'project', id: p.id, name: p.settings.name } };
           }
@@ -334,6 +341,7 @@ export function createAttention({ store, engine, resolveDir, listProjects, deskt
           return { ok: true, target: { type: 'chat', id: s.id, name: s.meta.name } };
         }
         s.meta.bridge = true;
+        s.meta.bridgeVia = a.via || null;
         const r = s.deliver({ text: String(a.text || '') });
         return { ok: true, target: { type: 'chat', id: s.id, name: s.meta.name }, queued: !!r?.queued };
       }
@@ -420,19 +428,19 @@ export function createAttention({ store, engine, resolveDir, listProjects, deskt
       case 'project_status':
         return desktopRun('project_status', { project_id: project(a.project).id, chat_messages: 8 });
       case 'message_project':
-        return act({ action: 'project_send', project: a.project, text: a.text });
+        return act({ action: 'project_send', project: a.project, text: a.text, via: 'assistant' });
       case 'list_folders': {
         const f = await listProjects();
         return { folders: (f.projects || []).map((x) => x.name) };
       }
       case 'start_chat':
-        return act({ action: 'new_chat', folder: a.folder, text: a.task });
+        return act({ action: 'new_chat', folder: a.folder, text: a.task, via: 'assistant' });
       case 'find_chats':
         return desktopRun('list_sessions', { query: a.query || '', limit: 15 });
       case 'read_chat':
         return desktopRun('get_session', { id: chatOf(a.chat).id, max_chars: 6000 });
       case 'message_chat':
-        return act({ action: 'send', chat: a.chat, text: a.text });
+        return act({ action: 'send', chat: a.chat, text: a.text, via: 'assistant' });
       case 'stop_chat':
         return act({ action: 'stop', chat: a.chat });
       default:

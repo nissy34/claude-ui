@@ -304,7 +304,9 @@ async function onEvent(ev) {
   if (ev.type === 'assistant') return post(`${TAG} ${md(ev.text)}`, { kind: 'assistant' });
   if (ev.type === 'notify' || ((ev.type === 'post' || ev.type === 'turn') && away())) {
     const target = ev.type === 'post' ? { type: 'project', id: ev.project.id, name: ev.project.name } : { type: 'chat', id: ev.session.id, name: ev.session.name };
-    await post(postHtml(ev), { kind: 'target', target, thread: chan ? targetOf(ev) || target : undefined }, postCard(ev, cfg));
+    // Asked through the Assistant: the answer comes back in the thread where you asked.
+    const viaAssistant = chan && ev.via === 'assistant' && st.assistantRoot;
+    await post(postHtml(ev), { kind: 'target', target, thread: chan && !viaAssistant ? targetOf(ev) || target : undefined }, postCard(ev, cfg), viaAssistant ? st.assistantRoot : undefined);
     if (ev.type !== 'turn') await ping(target.name, ev.text);
   }
 }

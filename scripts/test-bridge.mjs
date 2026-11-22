@@ -425,6 +425,10 @@ async function main() {
     const t2 = chanSay('what is going on?<br>@@say Nothing waits on you.');
     await until(() => chan.find((x) => x.id === t2).replies.some((m) => /Nothing waits on you\./.test(txt(m))), 20_000, 'assistant reply in thread');
     check(true, "a new post goes to the Assistant, and its answer is a reply under that post");
+    const docsChat = (await api('/api/sessions')).sessions.find((x) => /make docs/.test(x.name));
+    const t3 = chanSay(`ask the docs chat<br>@@call assistant__message_chat {"chat":"${docsChat.id}","text":"@@say relayed answer here"}<br>@@say I asked it.`);
+    await until(() => chan.find((x) => x.id === t3).replies.some((m) => /relayed answer here/.test(txt(m))), 20_000, 'relayed answer in the asking thread');
+    check(true, 'a chat the Assistant asked answers in the thread where you asked');
     check(thread().subject && /make docs|ask Bash/.test(thread().subject), "the chat's thread is named after the chat", thread().subject);
     chanSay('/project demo: hello from the channel');
     const pt = await until(() => chan.find((m) => m.bot && m.subject === 'Demo'), 20_000, 'project thread');
