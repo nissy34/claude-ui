@@ -16,7 +16,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { CHANNEL_SCOPES, Graph } from './graph.mjs';
 import { answeredCard, askCard, flowAnswer, flowCard, postCard } from './cards.mjs';
-import { HELP, TAG, askHtml, esc, md, parseCommand, permissionReply, plain, postHtml, replyParts, resolvedHtml, turnWord, withQuote } from './text.mjs';
+import { HELP, TAG, askHtml, esc, md, parseCommand, permissionReply, plain, postHtml, replyParts, resolvedHtml, rootHtml, turnWord, withQuote } from './text.mjs';
 
 const env = process.env;
 const home = (p) => p.replace(/^~(?=$|\/)/, os.homedir());
@@ -58,7 +58,7 @@ const log = (...a) => console.log(new Date().toISOString(), ...a);
 
 // ---------- state (survives restarts) ----------
 const STATE_FILE = path.join(cfg.dir, 'state.json');
-let st = { sent: {}, items: {}, codes: {}, nextCode: 1, target: null, seen: [], started: false, nonces: {}, waiting: {}, flowSeen: null, flowChat: '', topics: {}, names: {}, threads: {}, assistantRoot: null, turns: {} };
+let st = { sent: {}, items: {}, codes: {}, nextCode: 1, target: null, seen: [], started: false, nonces: {}, waiting: {}, flowSeen: null, flowChat: '', topics: {}, names: {}, threads: {}, assistantRoot: null, turns: {}, roots: {}, links: [] };
 try {
   st = { ...st, ...JSON.parse(fs.readFileSync(STATE_FILE, 'utf8')) };
 } catch {}
@@ -150,6 +150,9 @@ async function nameThread(t) {
 
 async function post(html, meta, card, root) {
   root = rootFor(meta, root);
+  // Channel mode: a chat's or project's first message opens its thread with a status card on top,
+  // and the message goes in as a reply.
+  if (chan && !root && meta.thread && meta.kind !== 'root') root = await ensureRoot(meta.thread);
   const subject = chan && !root && meta.thread ? threadName(meta.thread) : undefined;
   const send = (c) => (chan ? graph.channelSend(chan, root, html, c, subject, c ? null : meta.quote) : c ? graph.sendCard(cfg.chatId, c) : graph.send(cfg.chatId, html, meta.quote));
   let m;
@@ -184,6 +187,91 @@ async function post(html, meta, card, root) {
   st.seen.push(m.id);
   save();
   return m.id;
+}
+
+/** A link that opens a channel thread in Teams. */
+const threadUrl = (root) => st.sent[root]?.url || `https://teams.microsoft.com/l/message/${encodeURIComponent(chan.channel)}/${encodeURIComponent(root)}?groupId=${encodeURIComponent(chan.team)}&parentMessageId=${encodeURIComponent(root)}`;
+
+const opening = new Map(); // topic -> promise of its root, so two messages at once open one thread
+
+/**
+ * Channel mode: the thread of a chat or project, opened if it doesn't exist yet. Its first post is a
+ * status card ("Working: Bash: npm test", "Needs you", "Done") that is edited in place as the chat
+ * works. Opening a chat's thread tells Claude UI to report that chat's turns.
+ */
+async function ensureRoot(target, status) {
+  const key = topicKey(target);
+  if (st.topics[key]) return st.topics[key];
+  if (opening.has(key)) return opening.get(key);
+  const p = (async () => {
+    if (target.type === 'chat') {
+      try {
+        const r = await ui('POST', '/api/bridge/act', { action: 'link', chat: target.id });
+        status = status || r.status;
+        target = { ...target, name: r.target?.name || target.name };
+      } catch (e) {
+        log('[teams] could not link the chat:', e.message);
+      }
+    }
+    const html = rootHtml(target, status);
+    const m = await graph.channelSend(chan, null, html, null, threadName(target));
+    st.sent[m.id] = { kind: 'root', target, html, root: null, url: m.webUrl };
+    st.topics[key] = m.id;
+    st.names[key] = threadName(target);
+    st.threads[m.id] = { target };
+    st.roots[key] = { msg: m.id, state: status?.state || null, line: status?.line || '', running: status?.running || 0, name: target.name };
+    st.seen.push(m.id);
+    save();
+    return m.id;
+  })();
+  opening.set(key, p);
+  try {
+    return await p;
+  } finally {
+    opening.delete(key);
+  }
+}
+
+let rootEditRefused = 0; // editing posts needs ChannelMessage.ReadWrite; retried hourly once refused
+
+/** Update the status card at the top of a chat's thread. Same words again change nothing. */
+async function setRootStatus(target, status) {
+  if (!chan || !status || target.type !== 'chat') return;
+  const key = topicKey(target);
+  const r = st.roots[key];
+  if (!r) return;
+  const name = target.name || r.name;
+  if (r.state === status.state && r.line === (status.line || '') && r.running === (status.running || 0) && r.name === name) return;
+  Object.assign(r, { state: status.state, line: status.line || '', running: status.running || 0, name });
+  save();
+  if (Date.now() - rootEditRefused < 3600_000) return;
+  const html = rootHtml({ ...target, name }, status);
+  try {
+    await graph.channelEdit(chan, r.msg, null, html, null);
+    if (st.sent[r.msg]) st.sent[r.msg].html = html;
+  } catch (e) {
+    if (e.status === 403 || e.status === 401) {
+      if (!rootEditRefused) log('[teams] updating the status card at the top of a thread needs ChannelMessage.ReadWrite; trying again hourly.');
+      rootEditRefused = Date.now();
+    } else log('[teams] could not update a status card:', e.message);
+  }
+}
+
+/** A chat was archived or deleted in Claude UI: its thread goes (or, if deleting is refused, says so). */
+async function removeThread(target) {
+  const key = topicKey(target);
+  const root = st.topics[key];
+  if (!root) return;
+  delete st.topics[key];
+  delete st.roots[key];
+  delete st.names[key];
+  delete st.threads[root];
+  save();
+  try {
+    await graph.channelDelete(chan, root);
+  } catch {
+    await graph.channelSend(chan, root, `${TAG} 🗄 This chat was archived in Claude UI. Replies here no longer reach it.`).catch(() => {});
+  }
 }
 
 async function ping(title, text, url) {
@@ -266,6 +354,8 @@ async function sendAsk(item) {
   st.items[item.id].msg = id;
   if (chan) st.items[item.id].thread = st.sent[id].root || id;
   save();
+  const t = targetOf(item);
+  if (chan && t?.type === 'chat') await setRootStatus(t, { state: 'waiting', line: item.kind === 'question' ? item.questions?.[0]?.question : item.kind === 'signin' ? `Sign in to ${item.server}` : `Wants to use ${item.tool}${item.detail ? `: ${item.detail.split('\n')[0].slice(0, 120)}` : ''}`, running: 0 });
   if (await sendFlow(item)) return; // the workflow's card rings the phone
   await ping(`${item.session?.name || item.project?.name || 'An agent'} needs you`, item.question || item.questions?.[0]?.question || item.detail || item.tool || item.server || '', st.sent[id]?.url);
 }
@@ -284,6 +374,7 @@ async function onResolved(ev) {
   save();
   const sent = it.msg && st.sent[it.msg];
   if (!sent) return;
+  if (chan && sent.thread?.type === 'chat' && st.roots[topicKey(sent.thread)]?.state === 'waiting') await setRootStatus(sent.thread, { state: 'working', line: `Answered: ${ev.answer}`, running: 0 });
   let edited = false;
   try {
     if (chan) await graph.channelEdit(chan, it.msg, sent.root, sent.card ? null : resolvedHtml(sent.html, ev.answer, ev.by), sent.card ? answeredCard(sent.card, ev.answer, ev.by) : null);
@@ -308,20 +399,72 @@ async function onEvent(ev) {
   if (env.TEAMS_DEBUG) log('[event]', JSON.stringify(ev).slice(0, 300));
   if (ev.type === 'ask') return onAsk(ev.item);
   if (ev.type === 'resolved') return onResolved(ev);
-  if (ev.type === 'assistant') await done('assistant');
-  if (ev.type === 'post') await done(`project:${ev.project.id}`);
-  if (ev.type === 'turn') await done(`chat:${ev.session.id}`);
-  if (ev.type === 'assistant') return post(`${TAG} ${md(ev.text)}`, { kind: 'assistant' });
-  if (ev.type === 'notify' || ((ev.type === 'post' || ev.type === 'turn') && away())) {
+  if (ev.type === 'thread') return onThread(ev);
+  if (ev.type === 'archived') return chan && removeThread({ type: 'chat', id: ev.session.id });
+  if (ev.type === 'status') return chan && setRootStatus({ type: 'chat', id: ev.session.id, name: ev.session.name }, ev.status);
+  // You wrote to it from Teams and wait for its answer: that answer is posted even while you use the web UI.
+  const key = ev.type === 'post' ? `project:${ev.project?.id}` : ev.type === 'turn' ? `chat:${ev.session.id}` : 'assistant';
+  const asked = !!st.waiting[key]?.length || !!st.expect?.[key];
+  if (st.expect?.[key] && (ev.type === 'post' || (ev.type === 'turn' && (ev.isError || !ev.running)))) delete st.expect[key];
+  if (ev.type === 'assistant' || ev.type === 'post' || ev.type === 'turn') await done(key);
+  if (ev.type === 'assistant') return post(`${TAG} ${md(ev.text)}${takeLinks()}`, { kind: 'assistant' });
+  if (chan && ev.type === 'turn') return reportChannelTurn(ev, asked);
+  if (ev.type === 'notify' || ((ev.type === 'post' || ev.type === 'turn') && (away() || (chan && asked)))) {
     const target = ev.type === 'post' ? { type: 'project', id: ev.project.id, name: ev.project.name } : { type: 'chat', id: ev.session.id, name: ev.session.name };
-    // Asked through the Assistant: the answer comes back in the thread where you asked.
-    const viaAssistant = chan && ev.via === 'assistant' && st.assistantRoot;
-    const meta = { kind: 'target', target, thread: chan && !viaAssistant ? targetOf(ev) || target : undefined };
-    const root = viaAssistant ? st.assistantRoot : undefined;
-    if (ev.type === 'turn') return reportTurn(ev, meta, root);
-    const id = await post(postHtml(ev), meta, postCard(ev, cfg), root);
-    if (ev.type !== 'turn') await ping(target.name, ev.text, st.sent[id]?.url);
+    const meta = { kind: 'target', target, thread: chan ? targetOf(ev) || target : undefined };
+    if (ev.type === 'turn') return reportTurn(ev, meta);
+    const id = await post(postHtml(ev), meta, postCard(ev, cfg));
+    await ping(target.name, ev.text, st.sent[id]?.url);
   }
+}
+
+/**
+ * The Assistant pointed you to a chat's or project's thread (or passed your words to it): the thread
+ * opens if needed, and its link goes under the Assistant's reply.
+ */
+async function onThread(ev) {
+  if (!chan) return;
+  const root = await ensureRoot(ev.target, ev.status);
+  if (ev.status) await setRootStatus(ev.target, ev.status);
+  // Your words were passed on: its answer is for you, so it is posted in its thread even while you use the web UI.
+  if (ev.sent) {
+    (st.expect ||= {})[topicKey(ev.target)] = true;
+    save();
+  }
+  if (ev.via === 'assistant' && !st.links.some((l) => l.root === root)) {
+    st.links.push({ root, name: ev.target.name, type: ev.target.type });
+    save();
+  }
+}
+
+/** The thread links waiting to go under the Assistant's next reply. */
+function takeLinks() {
+  if (!chan || !st.links?.length) return '';
+  const out = st.links.map((l) => `→ <a href="${esc(threadUrl(l.root))}">${esc(l.name)}</a> (${l.type === 'project' ? "the project's" : "the chat's"} thread)`);
+  st.links = [];
+  save();
+  return `<br><br>${out.join('<br>')}`;
+}
+
+/**
+ * Channel mode: a chat's turn. The status card at the top of its thread always follows it. A reply in
+ * the thread only when it is meant for you: its answer to what you wrote there, or its final result
+ * (while you are away from the web UI). Steps in between stay on the card.
+ */
+async function reportChannelTurn(ev, asked) {
+  const target = { type: 'chat', id: ev.session.id, name: ev.session.name };
+  const finished = ev.isError || !ev.running;
+  const status = ev.status || { state: ev.isError ? 'error' : finished ? 'done' : 'working', line: ev.text?.split('\n')[0] || '', running: ev.running || 0 };
+  const text = (ev.text || '').trim();
+  st.turns ||= {};
+  const last = st.turns[target.id];
+  const shouldPost = (asked || (finished && away())) && !(ev.followUp && !text && !finished) && !(last && last.text === text && text && !asked);
+  if (shouldPost) {
+    await post(postHtml(ev), { kind: 'target', target, thread: target }, postCard(ev, cfg));
+    st.turns[target.id] = { text };
+    save();
+  } else if (!st.topics[topicKey(target)]) return;
+  await setRootStatus(target, finished ? { ...status, state: ev.isError ? 'error' : 'done', running: 0 } : status);
 }
 
 /**
@@ -330,7 +473,7 @@ async function onEvent(ev) {
  * notify). A new message, which notifies, comes when the chat has finished (nothing left running)
  * or failed. The same words again never post twice.
  */
-async function reportTurn(ev, meta, root) {
+async function reportTurn(ev, meta, root = undefined) {
   st.turns ||= {};
   const sid = ev.session.id;
   const last = st.turns[sid];
@@ -472,7 +615,13 @@ async function sendTo(target, text, msgId) {
     const r = target.type === 'project' ? await ui('POST', '/api/bridge/act', { action: 'project_send', project: target.id, text }) : await ui('POST', '/api/bridge/act', { action: 'send', chat: target.id, text });
     st.target = r.target || target;
     save();
-    if (!(msgId && (await working(msgId, topicKey(st.target))))) await post(`${TAG} Sent to ${esc(targetName(st.target))}.`, { kind: 'note' });
+    const reacted = msgId && (await working(msgId, topicKey(st.target)));
+    if (chan && r.target?.type === 'chat' && r.status) {
+      await setRootStatus(r.target, r.status);
+      // Busy: it reads your message when its current step ends. Say what it is doing meanwhile.
+      if (r.busy) return post(`${TAG} ⏳ <b>${esc(r.target.name)}</b> is busy${r.status.line ? `: ${esc(r.status.line)}` : ''}. Your message is queued, and it answers here when this step ends.`, { kind: 'note' });
+    }
+    if (!reacted) await post(`${TAG} Sent to ${esc(targetName(st.target))}.`, { kind: 'note' });
   } catch (e) {
     await post(`${TAG} Couldn't send to ${esc(targetName(target))}: ${esc(e.message)}`, { kind: 'note' });
   }
@@ -660,7 +809,7 @@ async function teamsLoop() {
         st.seen.push(...msgs.map((m) => m.id));
         st.started = true;
         save();
-        await post(`${TAG} Connected. ${chan ? 'Each project and chat gets its own thread here. Start a new post to talk to the Assistant or to use a command.' : "I'll post here when something needs you."}<br>${HELP.split('<br>').slice(1).join('<br>')}`, { kind: 'note' });
+        await post(`${TAG} Connected. ${chan ? 'Each project and chat gets its own thread here. Start a new post to talk to the Assistant: it answers in short and links the thread of the chat you asked about, where that chat answers you itself.' : "I'll post here when something needs you."}<br>${HELP.split('<br>').slice(1).join('<br>')}`, { kind: 'note' });
       } else {
         for (const m of msgs) {
           if (seen.has(m.id) || st.sent[m.id]) continue;
@@ -859,7 +1008,7 @@ async function main() {
   // "Connected", threads). Requests still open are posted again in the new place.
   const where = chan ? `channel:${chan.team}/${chan.channel}` : `chat:${cfg.chatId}`;
   if ((st.where || (st.started ? `chat:${st.chat || '48:notes'}` : where)) !== where) {
-    Object.assign(st, { started: false, topics: {}, names: {}, threads: {}, assistantRoot: null, seen: [], sent: {}, waiting: {} });
+    Object.assign(st, { started: false, topics: {}, names: {}, threads: {}, roots: {}, links: [], assistantRoot: null, seen: [], sent: {}, waiting: {} });
     for (const it of Object.values(st.items)) it.open = false;
     st.items = {};
   }

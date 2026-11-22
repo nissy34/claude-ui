@@ -35,6 +35,7 @@ const env = {
   CW_AUTO_TITLES: '0',
   CW_PROJECT_BATCH_QUIET_MS: '300',
   CW_PROJECT_BATCH_MAX_MS: '1500',
+  CW_BRIDGE_STATUS_MS: '300',
   FAKE_CLAUDE_LOG: path.join(tmp, 'fake.log'),
   CLAUDE_CONFIG_DIR: path.join(tmp, 'claude'),
 };
@@ -120,9 +121,14 @@ const graph = http.createServer((req, res) => {
     if (p.startsWith('/v1.0/teams/T1/channels/C2/messages')) {
       const parts = p.slice('/v1.0/teams/T1/channels/C2/messages'.length).split('/').filter(Boolean);
       if (parts.at(-1) === 'setReaction') return json(res, 204, {});
+      if (parts.at(-1) === 'softDelete') {
+        const top = chan.find((x) => x.id === parts[0]);
+        if (top) top.deletedDateTime = new Date().toISOString();
+        return json(res, top ? 204 : 404, {});
+      }
       if (!parts.length && req.method === 'GET') return json(res, 200, { value: [...chan].reverse() });
       const b = data ? JSON.parse(data) : {};
-      const mk = () => ({ id: `c${++n}`, webUrl: `https://teams.microsoft.com/l/message/C2/c${n + 1}`, subject: b.subject || null, messageType: 'message', createdDateTime: new Date(Date.now() + n).toISOString(), from: { user: { id: ME.id } }, body: b.body, attachments: b.attachments || [], bot: true, replies: [] });
+      const mk = () => ({ id: `c${++n}`, webUrl: `https://teams.microsoft.com/l/message/C2/c${n}`, subject: b.subject || null, messageType: 'message', createdDateTime: new Date(Date.now() + n).toISOString(), from: { user: { id: ME.id } }, body: b.body, attachments: b.attachments || [], bot: true, replies: [] });
       if (!parts.length && req.method === 'POST') {
         const m = mk();
         chan.push(m);
@@ -519,14 +525,53 @@ async function main() {
     check(true, "a new post goes to the Assistant, and its answer is a reply under that post");
     const docsChat = (await api('/api/sessions')).sessions.find((x) => /make docs/.test(x.name));
     const t3 = chanSay(`ask the docs chat<br>@@call assistant__message_chat {"chat":"${docsChat.id}","text":"@@say relayed answer here"}<br>@@say I asked it.`);
-    await until(() => chan.find((x) => x.id === t3).replies.some((m) => /relayed answer here/.test(txt(m))), 20_000, 'relayed answer in the asking thread');
-    check(true, 'a chat the Assistant asked answers in the thread where you asked');
+    await until(() => thread().replies.some((m) => /relayed answer here/.test(txt(m))), 20_000, "relayed answer in the chat's thread");
+    check(true, "a chat the Assistant passed your words to answers in its own thread");
+    const a3 = await until(() => chan.find((x) => x.id === t3).replies.find((m) => /I asked it\./.test(txt(m))), 20_000, 'assistant reply');
+    check(a3.body.content.includes(`parentMessageId=${t1}`), "the Assistant's reply links the chat's thread", a3.body.content);
     check(thread().subject && /make docs|ask Bash/.test(thread().subject), "the chat's thread is named after the chat", thread().subject);
     chanSay('/project demo: hello from the channel');
     const pt = await until(() => chan.find((m) => m.bot && m.subject === 'Demo'), 20_000, 'project thread');
-    check(/<b>Demo<\/b>/.test(pt.body.content) || pt.attachments.length, "the coordinator's reply starts a thread named after the project");
+    check(/Project thread/.test(pt.body.content), "the coordinator's reply opens a thread named after the project", pt.body.content);
     const pg = await until(() => pings.find((c) => c.body?.[0]?.text === 'Demo'), 10_000, 'ping');
-    check(pg.actions?.[0]?.url === pt.webUrl, 'the phone ping links to the post in Teams', pg.actions);
+    const cp = pt.replies.find((m) => /<b>Demo<\/b>:|"text":"Demo"/.test(txt(m)));
+    check(cp && pg.actions?.[0]?.url === cp.webUrl, "the phone ping links to the coordinator's post in its thread", pg.actions);
+
+    console.log('Channel mode: the channel is the coordinator, each chat answers in its own thread');
+    // A chat started in the web UI has no thread until you ask about it.
+    const { session: web } = await api('/api/sessions', { method: 'POST', body: { cwd: repo, kind: 'chat', name: 'Fix login test', prompt: '@@say The login test was flaky because of a race in the session cookie. Fixed it and added a retry-free check.' } });
+    await sleep(1500);
+    await until(async () => (await api('/api/sessions')).sessions.find((x) => x.id === web.id)?.state !== 'busy', 15_000, 'web chat done');
+    check(!chan.some((m) => m.subject === 'Fix login test'), 'a web UI chat gets no thread by itself');
+    const q1 = chanSay(`how did the login test chat go?<br>@@call assistant__open_thread {"chat":"${web.id}"}<br>@@say It fixed the flaky login test (a cookie race). Details in its thread.`);
+    const wroot = await until(() => chan.find((m) => m.bot && m.subject === 'Fix login test' && !m.deletedDateTime), 20_000, 'chat thread opened');
+    check(/✅ <b>Done<\/b>: The login test was flaky because of a race in the session cookie\./.test(wroot.body.content), 'its thread opens with a status card: done, with the first line of the result', wroot.body.content);
+    const a1 = await until(() => chan.find((x) => x.id === q1).replies.find((m) => /cookie race/.test(txt(m))), 20_000, 'assistant summary');
+    check(a1.body.content.includes(wroot.webUrl) && /Fix login test/.test(a1.body.content), 'the short answer at the top links that thread', a1.body.content);
+    // In its thread, the chat itself answers.
+    const wthread = () => chan.find((x) => x.id === wroot.id);
+    chanSay('which file did you change?<br>@@say I changed tests/login.spec.ts.', wroot.id);
+    await until(() => wthread().replies.some((m) => /tests\/login\.spec\.ts/.test(txt(m))), 20_000, 'chat answers in its thread');
+    check(true, 'a reply in the thread goes to that chat, and its answer comes back there');
+    // Busy: a long step with tools. The card follows the tools; a message meanwhile gets a status line and waits.
+    chanSay('now run the whole suite<br>@@call ui__notify_user {"text":"x"}<br>@@sleep 2500<br>@@say All 214 tests pass.', wroot.id);
+    await until(() => /🔄 <b>Working<\/b>/.test(wthread().body.content), 15_000, 'card shows working');
+    check(true, 'the card at the top switches to Working while the chat runs');
+    await until(() => /notify_user/.test(wthread().body.content), 15_000, 'card shows the tool');
+    check(true, 'and shows the tool it is running', wthread().body.content);
+    chanSay("what's the status?<br>@@say Still all green.", wroot.id);
+    const busy = await until(() => wthread().replies.find((m) => /is busy/.test(txt(m))), 15_000, 'busy note');
+    check(/queued/.test(busy.body.content), 'a message to a busy chat gets a one-line status at once and says it is queued', busy.body.content);
+    await until(() => wthread().replies.some((m) => /Still all green/.test(txt(m))), 25_000, 'queued answer');
+    check(wthread().replies.some((m) => /All 214 tests pass/.test(txt(m))), "the step's result is posted in the thread");
+    check(true, 'then the chat answers the queued message in the thread');
+    await until(() => /✅ <b>Done<\/b>/.test(wthread().body.content), 15_000, 'card done');
+    check(true, 'when it finishes, the card says Done');
+    check(!chan.find((x) => x.id === q1).replies.some((m) => /214 tests/.test(txt(m))), "nothing about the chat's steps lands at the top level");
+    // Archiving the chat in Claude UI removes its thread.
+    await api(`/api/sessions/${web.id}`, { method: 'PATCH', body: { archived: true } });
+    await until(() => wthread().deletedDateTime, 15_000, 'thread deleted');
+    check(true, 'archiving the chat in Claude UI deletes its thread');
   }
 
 }

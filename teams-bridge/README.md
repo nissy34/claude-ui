@@ -115,10 +115,14 @@ Messages the bridge posts appear as written by you, so Teams doesn't notify you 
 
 ### Threads (channel mode, optional)
 
-One chat gets crowded when several things run at once. In channel mode the bridge uses a Teams channel instead, and each project or chat gets its own thread there, holding its questions, updates and result:
+One chat gets crowded when several things run at once. In channel mode the bridge uses a Teams channel instead: **the top of the channel is the coordinator, and each chat has its own thread.**
 
-- A reply in a thread goes to that thread's project or chat. A one-word `yes`, `no` or number answers the request waiting in that thread.
-- A new post goes to the Assistant, and its answer comes back as a reply under your post. Commands work as new posts too. `/new folder: task` makes that post the new chat's thread.
+- **A new post goes to the Assistant.** It answers under your post in a sentence or two. When you ask about one specific chat or project ("how did the login test fix go?"), it answers in short and links that chat's thread, opening it if there isn't one yet. Broad questions ("what's running?") stay at the top.
+- **In a chat's thread, the chat itself answers.** What you write there goes in as if you typed it in the web UI, and its reply comes back to the thread. A one-word `yes`, `no` or number answers the request waiting in that thread. If the chat is busy, you get a one-line status at once ("⏳ busy: Bash: npm run test:e2e. Your message is queued") and the chat answers when its current step ends.
+- **The first post of a chat's thread is a live status card**: 🔄 Working (with the tool it is running, or what it is writing), ✋ Needs you, ✅ Done with the first line of the result, ⚠️ Stopped. It is edited in place (at most every 15 seconds, `CW_BRIDGE_STATUS_MS`), which doesn't notify. Replies in the thread are only what's meant for you: the chat's answers to what you wrote, its questions and approvals, and its final result. Tool steps stay in the web UI.
+- **Chats started in the web UI don't get a thread by themselves.** A thread opens when you ask the Assistant about the chat, when the Assistant passes your words to it or starts it, or when the chat needs you (an approval or a question). A project gets one thread too, which talks to its coordinator.
+- **Archiving or deleting a chat in Claude UI deletes its thread.**
+- Commands work as new posts. `/new folder: task` makes that post the new chat's thread.
 
 You need the delegated permissions **ChannelMessage.Send**, **ChannelMessage.Read.All** (admin consent), **Team.ReadBasic.All** and **Channel.ReadBasic.All** on the app registration. Then set the channel by name:
 
@@ -126,7 +130,11 @@ You need the delegated permissions **ChannelMessage.Send**, **ChannelMessage.Rea
 TEAMS_CHANNEL="My team / Claude"
 ```
 
-`bridge.mjs channels` lists the names. Everyone in the channel sees the posts, so use a team or private channel that only you are in. Only your own messages are read. If your tenant asks for a new sign-in after you add the permissions, Settings > Teams shows it. Threads are named after the project or the chat's title. Adding **ChannelMessage.ReadWrite** (admin consent) also lets the bridge rename a thread when the chat gets its proper title, and mark answered requests on the card itself. Without it, names stay as they started, and an answered request gets a short "✓ Answered" reply in its thread instead.
+`bridge.mjs channels` lists the names. Everyone in the channel sees the posts, so use a team or private channel that only you are in. Only your own messages are read. If your tenant asks for a new sign-in after you add the permissions, Settings > Teams shows it.
+
+**ChannelMessage.ReadWrite** (admin consent) is what lets the bridge edit and delete its own posts: the live status card, renaming a thread when the chat gets its proper title, marking answered requests on the card, and deleting an archived chat's thread. Without it, the status card keeps the text it was posted with, an answered request gets a short "✓ Answered" reply, and an archived chat's thread gets a last "archived" reply instead of being deleted. Everything else works.
+
+`npm run build && npm run demo:teams` records a walkthrough of these flows against a fake channel (screenshots and a video in `teams-demo/`).
 
 ### Buttons (optional, a Teams workflow)
 
@@ -193,9 +201,9 @@ On the Claude UI side, `CW_BRIDGE_API=0` turns the feed off.
 All under `/api/bridge`, `Authorization: Bearer <bridge token>`, requests with an `Origin` header are refused.
 
 - `GET /attention` → `{ seq, items, lastSeen }`: open permission prompts, questions, plans, sign-ins, decisions.
-- `GET /events?after=<seq>&wait=<seconds>` → `{ seq, lastSeen, events }`, long-poll. Events: `ask`, `resolved`, `post` (coordinator), `turn` (finished chat started from the bridge), `notify`.
+- `GET /events?after=<seq>&wait=<seconds>` → `{ seq, lastSeen, events }`, long-poll. Events: `ask`, `resolved`, `post` (coordinator), `turn` (a finished turn of a chat the bridge started, wrote to or gave a thread), `notify`, `thread` (open or link a chat's or project's thread), `status` (what a chat with a thread is doing now), `archived`.
 - `POST /answer` `{ id, text?, choice?, behavior?: allow|always|deny|accept|decline, answers? }`.
-- `POST /act` `{ action: project_send|new_chat|send|stop|status|folders, ... }`.
+- `POST /act` `{ action: project_send|new_chat|send|link|stop|status|folders, ... }`. `send` answers `busy` and `status` (what the chat was doing); `link` marks a chat as having a thread.
 - `POST /status` `{ state, message, code?, url? }`: the bridge's own state, shown in Settings > Teams and as a notice in the web UI.
 - `GET /signin-reply?wait=<seconds>` → `{ url }`: the address pasted in Settings > Teams, handed over once.
 

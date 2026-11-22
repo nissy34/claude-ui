@@ -64,6 +64,12 @@ const TOOLS = [
     inputSchema: { type: 'object', properties: { chat: str('Chat id or name.'), text: str('The message.') }, required: ['chat', 'text'] },
   },
   {
+    name: 'open_thread',
+    description:
+      "Point the user to one chat's (or project's) own thread in the Teams channel, making it if it doesn't exist yet. Use it when they ask about one specific chat or project, or want more detail than a short summary: answer in a sentence and open its thread, where that chat answers them itself. The link is added under your reply; don't write one.",
+    inputSchema: { type: 'object', properties: { chat: str('Chat id or name.'), project: str('Or: a project name or id.') } },
+  },
+  {
     name: 'stop_chat',
     description: 'Stop what a chat is doing. Only when the user asks.',
     inputSchema: { type: 'object', properties: { chat: str('Chat id or name.') }, required: ['chat'] },

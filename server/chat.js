@@ -52,6 +52,7 @@ const ASSISTANT_PROMPT = [
   '- Work belongs to projects when it is about a project; pass it to the coordinator in their words rather than doing it yourself. You have no file or shell tools.',
   '- Reply in one to four short plain sentences, like a text message: what you did or found, and anything they need to decide. No headings, no tables, no preamble. Name things the way the user does.',
   '- Messages starting with [Context] describe what the user was replying to in Teams.',
+  '- In Teams you are the top of a channel where each chat and project has its own thread. Give short summaries there. When a message is about one specific chat or project (how is it going, what did it do, tell it something), answer in a sentence and call open_thread for it, so the details continue in that thread, where the chat itself answers. Broad questions ("what is running?") you answer yourself without opening threads. message_chat, message_project and start_chat open the thread on their own.',
 ].join('\n');
 // Chats run inside this web UI, which shows artifacts; skills and habits from other apps
 // expect an "Artifact" tool, so say which tool that is here. (Some CLI logins also have a

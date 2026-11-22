@@ -7,7 +7,8 @@
 // never reachable from a browser page:
 //   GET  /api/bridge/attention          open items now (permission prompts, questions, sign-ins, decisions)
 //   GET  /api/bridge/events?after=N     long-poll for new events (asks, resolutions, coordinator posts,
-//                                       finished turns of chats started from the bridge, notify_user)
+//                                       finished turns and live status of chats with a Teams thread,
+//                                       threads to open, archived chats, notify_user)
 //   POST /api/bridge/answer             { id, choice?, text?, behavior?, always? }
 //   POST /api/bridge/act                { action, ... } start work: project_send, new_chat, send, stop, status
 import fs from 'node:fs';
@@ -45,6 +46,51 @@ function turnReply(s) {
   }
   return { text: out.join('\n\n'), followUp };
 }
+/** One short line from Markdown text: its first sentence or line, without formatting. */
+export function oneLine(text, n = 160) {
+  const t = String(text || '')
+    .replace(/```[\s\S]*?```/g, ' ')
+    .split('\n')
+    .map((l) => l.replace(/^\s*(?:[#>*-]+|\d+\.)\s*/, '').replace(/[*_`]/g, '').trim())
+    .find((l) => l && !/^\|/.test(l));
+  if (!t) return '';
+  const m = /^(.+?[.!?])(?:\s|$)/.exec(t);
+  return clip(m && m[1].length >= 20 ? m[1] : t, n);
+}
+
+/**
+ * Where a chat is, in one line, for the status card at the top of its Teams thread:
+ * working (and on what), waiting on you, or done (with the first line of its last reply).
+ */
+export function chatStatus(s) {
+  const running = (s.tasksSummary?.() || []).filter((t) => t.status === 'running').length;
+  if (s.pending?.size) {
+    const p = [...s.pending.values()][0];
+    return { state: 'waiting', line: p.tool === 'AskUserQuestion' ? clip(p.input?.questions?.[0]?.question || 'A question for you', 160) : `Wants to use ${p.tool}${describeTool(p.tool, p.input) ? `: ${clip(describeTool(p.tool, p.input), 120)}` : ''}`, running };
+  }
+  if (s.elicits?.size) return { state: 'waiting', line: `Needs a sign-in to ${[...s.elicits.values()][0].server || 'a service'}`, running };
+  const busy = s.turns > 0;
+  const ev = s.events || [];
+  if (busy) {
+    // The newest top-level step: a tool it is running, or the words it is writing.
+    for (let i = ev.length - 1; i >= 0; i--) {
+      const e = ev[i];
+      if (e.k === 'user') break;
+      if (e.k !== 'block' || e.parent) continue;
+      if (e.block?.type === 'tool_use') {
+        const d = describeTool(e.block.name, e.block.input);
+        return { state: 'working', line: `${e.block.name}${d ? `: ${clip(d.split('\n')[0], 120)}` : ''}`, running };
+      }
+      if (e.block?.type === 'text' && e.block.text?.trim()) return { state: 'working', line: oneLine(e.block.text.split('\n\n').at(-1)), running };
+    }
+    return { state: 'working', line: 'Thinking', running };
+  }
+  const last = s.lastReply?.() || '';
+  const failed = ev.at(-1)?.k === 'result' && ev.at(-1).isError;
+  if (running) return { state: 'working', line: `${running === 1 ? 'A background task is' : `${running} background tasks are`} running`, running, result: oneLine(last) };
+  return { state: failed ? 'error' : ev.some((e) => e.k === 'user') ? 'done' : 'idle', line: failed ? 'Stopped with an error' : oneLine(last) || 'Nothing yet', running: 0 };
+}
+
 /** Split a leading Markdown blockquote ("> …" lines, as a quote reply sends) from the rest: [quote lines or '', rest]. */
 const splitQuote = (text) => {
   const m = /^((?:>[^\n]*(?:\n|$))+)\n*/.exec(text || '');
@@ -176,7 +222,25 @@ export function createAttention({ store, engine, resolveDir, listProjects, deskt
   // ---------- hooks: chats ----------
   const permTools = new Map(); // request id -> tool, to word the answer
   store.recordHooks ||= new Set();
+  // Live status for chats with a Teams thread: what it is doing now, for the card at the top of the
+  // thread. At most one update per chat every STATUS_MS (the last one always goes out).
+  const STATUS_MS = Number(process.env.CW_BRIDGE_STATUS_MS) || 15_000;
+  const statusTimers = new Map(); // session id -> { at, timer }
+  function liveStatus(s) {
+    const t = statusTimers.get(s.id) || { at: 0, timer: null };
+    statusTimers.set(s.id, t);
+    if (t.timer) return;
+    const fire = () => {
+      t.timer = null;
+      t.at = Date.now();
+      if (s.turns > 0) push({ type: 'status', session: sessionInfo(s), status: chatStatus(s) });
+    };
+    const wait = Math.max(0, t.at + STATUS_MS - Date.now());
+    if (!wait) fire();
+    else t.timer = setTimeout(fire, wait);
+  }
   store.recordHooks.add((s, ev) => {
+    if (ev.k === 'block' && !ev.parent && (ev.block?.type === 'tool_use' || ev.block?.type === 'text') && s.meta.teamsThread && !s.meta.cproject && !s.meta.archived) liveStatus(s);
     switch (ev.k) {
       case 'perm':
         permTools.set(ev.reqId, ev.tool);
@@ -192,14 +256,15 @@ export function createAttention({ store, engine, resolveDir, listProjects, deskt
       case 'elicit_done':
         return push({ type: 'resolved', id: `elicit:${s.id}:${ev.reqId}`, answer: ev.action, by: s.lastAnswerBy || 'ui' });
       case 'result':
-        // Turn updates only for chats the bridge started or wrote to; projects report through their coordinator.
-        if (s.meta.bridge && !s.meta.cproject) {
+        // Turn updates only for chats the bridge started, wrote to, or gave a Teams thread; projects
+        // report through their coordinator.
+        if ((s.meta.bridge || s.meta.teamsThread) && !s.meta.cproject) {
           // Only this turn's words: a turn started by a background task's notice has no user message
           // before it, so the whole reply since your message would repeat the earlier report.
           const { text, followUp } = turnReply(s);
           const running = (s.tasksSummary?.() || []).filter((t) => t.status === 'running').length;
           // followUp with no text: nothing new to say, but the bridge can still mark the last report finished.
-          push({ type: 'turn', session: sessionInfo(s), via: s.meta.bridgeVia || null, isError: !!ev.isError, running, followUp, text: clip(ev.isError ? ev.text || 'The turn failed.' : text.trim(), 3000) });
+          push({ type: 'turn', session: sessionInfo(s), via: s.meta.bridgeVia || null, isError: !!ev.isError, running, followUp, text: clip(ev.isError ? ev.text || 'The turn failed.' : text.trim(), 3000), status: { ...chatStatus(s), ...(ev.isError ? { state: 'error', line: oneLine(ev.text || 'Stopped with an error') } : {}) } });
         }
         // The Assistant answers in Teams when the message came from Teams.
         if (s.meta.assistant && s.meta.teamsReply) {
@@ -344,6 +409,8 @@ export function createAttention({ store, engine, resolveDir, listProjects, deskt
       case 'project_send': {
         const p = project(a.project);
         projectVia.set(p.id, a.via || null);
+        // Asked through the Assistant: the project's thread in Teams opens (or is linked) for the answer.
+        if (a.via === 'assistant') push({ type: 'thread', target: { type: 'project', id: p.id, name: p.settings.name }, via: 'assistant', sent: true });
         engine.userMessage(p, String(a.text || ''), { from: 'user' });
         return { ok: true, target: { type: 'project', id: p.id, name: p.settings.name } };
       }
@@ -355,6 +422,11 @@ export function createAttention({ store, engine, resolveDir, listProjects, deskt
         s.meta.project = dir;
         s.meta.bridge = true;
         s.meta.bridgeVia = a.via || null;
+        // Started by the Assistant: the chat gets its own Teams thread before it can ask anything.
+        if (a.via === 'assistant') {
+          s.meta.teamsThread = true;
+          push({ type: 'thread', target: { type: 'chat', id: s.id, name: s.meta.name }, status: { state: 'working', line: 'Starting', running: 0 }, via: 'assistant', sent: true });
+        }
         s.send({ text });
         store.save();
         store.changed?.();
@@ -376,8 +448,24 @@ export function createAttention({ store, engine, resolveDir, listProjects, deskt
         }
         s.meta.bridge = true;
         s.meta.bridgeVia = a.via || null;
+        // What it was doing when your message came: if it is busy, your message waits for this step.
+        const before = chatStatus(s);
+        const busy = s.isBusy?.() || false;
+        if (a.via === 'assistant') {
+          s.meta.teamsThread = true;
+          push({ type: 'thread', target: { type: 'chat', id: s.id, name: s.meta.name }, status: before, via: 'assistant', sent: true });
+        }
         const r = s.deliver({ text: String(a.text || '') });
-        return { ok: true, target: { type: 'chat', id: s.id, name: s.meta.name }, queued: !!r?.queued };
+        return { ok: true, target: { type: 'chat', id: s.id, name: s.meta.name }, queued: !!r?.queued, busy, status: busy ? before : { state: 'working', line: 'Reading your message', running: before.running } };
+      }
+      case 'link': {
+        // The bridge opened a Teams thread for this chat: from now on its turns are reported there.
+        const s = chatOf(a.chat);
+        if (!s.meta.cproject && !s.meta.teamsThread) {
+          s.meta.teamsThread = true;
+          store.save();
+        }
+        return { ok: true, target: { type: 'chat', id: s.id, name: s.meta.name }, status: chatStatus(s) };
       }
       case 'stop': {
         const s = chatOf(a.chat);
@@ -481,6 +569,25 @@ export function createAttention({ store, engine, resolveDir, listProjects, deskt
         return act({ action: 'send', chat: a.chat, text: a.text, via: 'assistant' });
       case 'stop_chat':
         return act({ action: 'stop', chat: a.chat });
+      case 'open_thread': {
+        // The chat's (or project's) own thread in the Teams channel: made if it doesn't exist yet,
+        // and the bridge adds its link under your reply.
+        if (a.project) {
+          const p = project(a.project);
+          push({ type: 'thread', target: { type: 'project', id: p.id, name: p.settings.name }, via: 'assistant' });
+          return { ok: true, note: `The thread for project ${p.settings.name} is linked under your reply in Teams. Don't paste a link yourself.` };
+        }
+        const c = chatOf(a.chat);
+        if (c.meta.cproject) {
+          const p = engine.projectOf(c);
+          push({ type: 'thread', target: { type: 'project', id: p.id, name: p.settings.name }, via: 'assistant' });
+          return { ok: true, note: `That chat belongs to project ${p.settings.name}; its project thread is linked under your reply.` };
+        }
+        c.meta.teamsThread = true;
+        store.save();
+        push({ type: 'thread', target: { type: 'chat', id: c.id, name: c.meta.name }, status: chatStatus(c), via: 'assistant' });
+        return { ok: true, status: chatStatus(c), note: "The chat's thread is linked under your reply in Teams. Don't paste a link yourself." };
+      }
       default:
         throw new Error(`Unknown tool ${name}`);
     }
@@ -590,6 +697,11 @@ export function createAttention({ store, engine, resolveDir, listProjects, deskt
     },
     assistant,
     assistantTool,
+    /** A chat was archived or deleted: its Teams thread goes away. */
+    archived(s) {
+      if (s?.meta?.kind !== 'chat') return;
+      return push({ type: 'archived', session: { id: s.id, name: s.meta.name } });
+    },
     notify(s, text) {
       return push({ type: 'notify', session: sessionInfo(s), text: clip(text, 2000) });
     },

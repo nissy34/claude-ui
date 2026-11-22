@@ -12,6 +12,10 @@
 //   @@ratelimit <json>               emit a rate_limit_event with these plan usage windows
 //   @@ask <tool> <json>              ask permission to use a tool (can_use_tool) and wait; then say the answer
 //   @@bgtask <ms> [text]             start a background agent that ends <ms> later and wakes a follow-up turn
+//   @@bash <command>                 a Bash call that succeeds (tool_use + tool_result "ok")
+//   @@approve <tool> <json>          like @@ask, without saying the answer afterwards
+// FAKE_CLAUDE_SCRIPT=<file.json>: [{ "match": "words", "run": ["@@say …", …] }] adds those directives
+// to any message containing the words, so demos can show plain messages.
 //                                    with no user message (saying [text], or nothing)
 // PostToolUse HTTP hooks from --settings run after each tool call, like the real CLI's
 // ($VAR headers from allowedEnvVars); additionalContext they return is logged as hookContext.
@@ -93,13 +97,20 @@ let running = false;
 
 async function runTurn(text) {
   const t0 = Date.now();
+  if (process.env.FAKE_CLAUDE_SCRIPT) {
+    try {
+      const rules = JSON.parse(fs.readFileSync(process.env.FAKE_CLAUDE_SCRIPT, 'utf8'));
+      const hit = rules.find((r) => text.toLowerCase().includes(r.match.toLowerCase()));
+      if (hit) text = `${text}\n${hit.run.join('\n')}`;
+    } catch {}
+  }
   const lines = text.split('\n');
   let said = false;
   let failed = false;
   let inputTokens = 100;
   // Only top-level directives of the prompt (not ones nested inside JSON strings).
   for (const line of lines) {
-    const m = /^@@(call|say|sleep|fail|write|writetool|bashfail|usage|ratelimit|ask|bgtask)\b\s*(.*)$/.exec(line.trim());
+    const m = /^@@(call|say|sleep|fail|write|writetool|bashfail|bash|usage|ratelimit|ask|approve|bgtask)\b\s*(.*)$/.exec(line.trim());
     if (!m) continue;
     const [, cmd, rest] = m;
     if (cmd === 'usage') {
@@ -138,12 +149,17 @@ async function runTurn(text) {
       fs.writeFileSync(file, (sp < 0 ? '' : rest.slice(sp + 1)) + '\n');
       out({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: useId, content: `File created successfully at: ${file}` }] }, parent_tool_use_id: null, session_id: sessionId, uuid: crypto.randomUUID() });
       await postToolUse('Write', { file_path: file }, 'ok');
+    } else if (cmd === 'bash') {
+      const useId = `toolu_${crypto.randomBytes(6).toString('hex')}`;
+      out({ type: 'assistant', message: { id: `msg_${++msgN}`, role: 'assistant', content: [{ type: 'tool_use', id: useId, name: 'Bash', input: { command: rest } }] }, parent_tool_use_id: null, session_id: sessionId });
+      out({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: useId, content: 'ok' }] }, parent_tool_use_id: null, session_id: sessionId, uuid: crypto.randomUUID() });
+      await postToolUse('Bash', { command: rest }, 'ok');
     } else if (cmd === 'bashfail') {
       const useId = `toolu_${crypto.randomBytes(6).toString('hex')}`;
       out({ type: 'assistant', message: { id: `msg_${++msgN}`, role: 'assistant', content: [{ type: 'tool_use', id: useId, name: 'Bash', input: { command: rest } }] }, parent_tool_use_id: null, session_id: sessionId });
       out({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: useId, content: 'Exit code 1\nboom', is_error: true }] }, parent_tool_use_id: null, session_id: sessionId, uuid: crypto.randomUUID() });
       await postToolUse('Bash', { command: rest }, 'Exit code 1');
-    } else if (cmd === 'ask') {
+    } else if (cmd === 'ask' || cmd === 'approve') {
       const sp = rest.indexOf(' ');
       const tool = sp < 0 ? rest : rest.slice(0, sp);
       let input = {};
@@ -160,8 +176,10 @@ async function runTurn(text) {
       note({ asked: tool, answer: r });
       const ans = r?.behavior === 'allow' ? `allowed${r.updatedInput?.answers ? ` ${JSON.stringify(r.updatedInput.answers)}` : ''}${r.updatedPermissions ? ' always' : ''}` : `denied${r?.message ? `: ${r.message}` : ''}`;
       out({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: useId, content: ans }] }, parent_tool_use_id: null, session_id: sessionId, uuid: crypto.randomUUID() });
-      out({ type: 'assistant', message: { id: `msg_${++msgN}`, role: 'assistant', content: [{ type: 'text', text: `answer: ${ans}` }] }, parent_tool_use_id: null, session_id: sessionId });
-      said = true;
+      if (cmd === 'ask') {
+        out({ type: 'assistant', message: { id: `msg_${++msgN}`, role: 'assistant', content: [{ type: 'text', text: `answer: ${ans}` }] }, parent_tool_use_id: null, session_id: sessionId });
+        said = true;
+      }
     } else if (cmd === 'call') {
       const sp = rest.indexOf(' ');
       const full = sp < 0 ? rest : rest.slice(0, sp);
@@ -186,7 +204,7 @@ async function runTurn(text) {
       await postToolUse(`mcp__${server}__${tool}`, input, result);
     }
   }
-  if (!said && !failed && !lines.some((l) => /^@@(call|write|writetool|bashfail|bgtask|quiet)/.test(l.trim()))) {
+  if (!said && !failed && !lines.some((l) => /^@@(call|write|writetool|bashfail|bash|approve|bgtask|quiet)/.test(l.trim()))) {
     out({ type: 'assistant', message: { id: `msg_${++msgN}`, role: 'assistant', content: [{ type: 'text', text: `ok: ${lines.find((l) => l.trim()) || ''}`.slice(0, 200) }] }, parent_tool_use_id: null, session_id: sessionId });
   }
   out({ type: 'result', subtype: failed ? 'error_during_execution' : 'success', is_error: failed, result: failed ? (typeof failed === 'string' ? failed : 'fake failure') : 'done', duration_ms: Date.now() - t0, num_turns: 1, total_cost_usd: Math.max(0.001, inputTokens * 3e-6), modelUsage: { 'claude-fake': { inputTokens, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 } }, session_id: sessionId });
