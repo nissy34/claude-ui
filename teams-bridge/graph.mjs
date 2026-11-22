@@ -4,6 +4,8 @@ import fs from 'node:fs';
 import crypto from 'node:crypto';
 
 const SCOPES = 'offline_access User.Read Chat.ReadWrite';
+// Channel mode also reads and posts channel messages (ChannelMessage.Read.All needs admin consent).
+export const CHANNEL_SCOPES = `${SCOPES} ChannelMessage.Send ChannelMessage.Read.All Team.ReadBasic.All Channel.ReadBasic.All`;
 
 export class Graph {
   /**
@@ -26,6 +28,10 @@ export class Graph {
     this.signingIn = null;
   }
 
+  get scopes() {
+    return this.o.scopes || SCOPES;
+  }
+
   authUrl(p) {
     return `${this.o.loginUrl}/${encodeURIComponent(this.o.tenant)}/oauth2/v2.0/${p}`;
   }
@@ -44,7 +50,7 @@ export class Graph {
   /** Swap the refresh token for a new pair. Returns false when a person has to sign in again. */
   async refresh() {
     if (!this.tokens?.refresh) return false;
-    const r = await this.form(this.authUrl('token'), { grant_type: 'refresh_token', client_id: this.o.clientId, refresh_token: this.tokens.refresh, scope: SCOPES });
+    const r = await this.form(this.authUrl('token'), { grant_type: 'refresh_token', client_id: this.o.clientId, refresh_token: this.tokens.refresh, scope: this.scopes });
     if (r.ok) {
       this.save(r.j);
       return true;
@@ -62,7 +68,7 @@ export class Graph {
   async deviceLogin() {
     return (async () => {
       for (;;) {
-        const d = await this.form(this.authUrl('devicecode'), { client_id: this.o.clientId, scope: SCOPES });
+        const d = await this.form(this.authUrl('devicecode'), { client_id: this.o.clientId, scope: this.scopes });
         if (!d.ok) throw new Error(`device code request failed: ${d.j.error_description || d.status}`);
         this.o.onAuth?.({ state: 'signin', message: d.j.message, code: d.j.user_code, url: d.j.verification_uri });
         const until = Date.now() + (Number(d.j.expires_in) || 900) * 1000;
@@ -129,7 +135,7 @@ export class Graph {
       response_type: 'code',
       redirect_uri: this.o.redirectUri,
       response_mode: 'query',
-      scope: SCOPES,
+      scope: this.scopes,
       state,
       code_challenge: crypto.createHash('sha256').update(verifier).digest('base64url'),
       code_challenge_method: 'S256',
@@ -152,7 +158,7 @@ export class Graph {
     const code = u.searchParams.get('code');
     if (!code) throw new Error('No code in that address. Copy the whole address after signing in.');
     if (!this.pkce || u.searchParams.get('state') !== this.pkce.state) throw new Error('That address belongs to an older sign-in link. Open the newest link and try again.');
-    const t = await this.form(this.authUrl('token'), { grant_type: 'authorization_code', client_id: this.o.clientId, code, redirect_uri: this.o.redirectUri, code_verifier: this.pkce.verifier, scope: SCOPES });
+    const t = await this.form(this.authUrl('token'), { grant_type: 'authorization_code', client_id: this.o.clientId, code, redirect_uri: this.o.redirectUri, code_verifier: this.pkce.verifier, scope: this.scopes });
     if (!t.ok) throw new Error(`sign-in failed: ${t.j.error_description || t.j.error || t.status}`);
     this.pkce = null;
     this.save(t.j);
@@ -247,6 +253,46 @@ export class Graph {
   editCard(chatId, messageId, card) {
     const id = `c${Date.now().toString(36)}`;
     return this.call('PATCH', `/chats/${encodeURIComponent(chatId)}/messages/${encodeURIComponent(messageId)}`, { body: { contentType: 'html', content: `<attachment id="${id}"></attachment>` }, attachments: [{ id, contentType: 'application/vnd.microsoft.card.adaptive', contentUrl: null, content: JSON.stringify(card) }] });
+  }
+
+  // ----- channels: one thread per topic -----
+  teams() {
+    return this.call('GET', '/me/joinedTeams?$select=id,displayName');
+  }
+
+  channels(teamId) {
+    return this.call('GET', `/teams/${encodeURIComponent(teamId)}/channels?$select=id,displayName`);
+  }
+
+  chanPath(c, id, root) {
+    const base = `/teams/${encodeURIComponent(c.team)}/channels/${encodeURIComponent(c.channel)}/messages`;
+    if (!id) return base;
+    return root ? `${base}/${encodeURIComponent(root)}/replies/${encodeURIComponent(id)}` : `${base}/${encodeURIComponent(id)}`;
+  }
+
+  /** The newest threads of a channel, with their replies. */
+  channelRecent(c, top = 20) {
+    return this.call('GET', `${this.chanPath(c)}?$top=${top}&$expand=replies`);
+  }
+
+  /** Post in a channel: a new thread, or a reply in thread `root`. */
+  channelSend(c, root, html, card) {
+    const url = root ? `${this.chanPath(c)}/${encodeURIComponent(root)}/replies` : this.chanPath(c);
+    return this.call('POST', url, this.msgBody(html, card));
+  }
+
+  channelEdit(c, id, root, html, card) {
+    return this.call('PATCH', this.chanPath(c, id, root), this.msgBody(html, card));
+  }
+
+  channelReact(c, id, root) {
+    return this.call('POST', `${this.chanPath(c, id, root)}/setReaction`, { reactionType: 'like' });
+  }
+
+  msgBody(html, card) {
+    if (!card) return { body: { contentType: 'html', content: html } };
+    const id = `c${Date.now().toString(36)}`;
+    return { body: { contentType: 'html', content: `<attachment id="${id}"></attachment>` }, attachments: [{ id, contentType: 'application/vnd.microsoft.card.adaptive', contentUrl: null, content: JSON.stringify(card) }] };
   }
 
   edit(chatId, messageId, html) {

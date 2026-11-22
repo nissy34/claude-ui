@@ -113,6 +113,21 @@ In a chat with other people, only your own messages are read.
 
 Messages the bridge posts appear as written by you, so Teams doesn't notify you about them. If you want your phone to ring for questions, add a Teams **Workflows** webhook: in Teams, Workflows > "Post to a chat when a webhook request is received", pick "Chat with Flow bot", copy the URL into `TEAMS_PING_URL`. The bridge then also sends a short ping through it for each request and post (an outbound HTTPS call). Reply in your chat with yourself as usual.
 
+### Threads (channel mode, optional)
+
+One chat gets crowded when several things run at once. In channel mode the bridge uses a Teams channel instead, and each project or chat gets its own thread there, holding its questions, updates and result:
+
+- A reply in a thread goes to that thread's project or chat. A one-word `yes`, `no` or number answers the request waiting in that thread.
+- A new post goes to the Assistant, and its answer comes back as a reply under your post. Commands work as new posts too. `/new folder: task` makes that post the new chat's thread.
+
+You need the delegated permissions **ChannelMessage.Send**, **ChannelMessage.Read.All** (admin consent), **Team.ReadBasic.All** and **Channel.ReadBasic.All** on the app registration. Then set the channel by name:
+
+```sh
+TEAMS_CHANNEL="My team / Claude"
+```
+
+`bridge.mjs channels` lists the names. Everyone in the channel sees the posts, so use a team or private channel that only you are in. Only your own messages are read. If your tenant asks for a new sign-in after you add the permissions, Settings > Teams shows it. Editing posts needs ChannelMessage.ReadWrite. Without it, an answered request gets a short "✓ Answered" reply in its thread instead.
+
 ### Buttons (optional, a Teams workflow)
 
 Cards the bridge posts itself can't have working buttons (that needs a registered bot). A Power Automate workflow can: the bridge sends each request to the workflow (an outbound HTTPS call), the workflow shows it as a card with buttons in your chat with the Workflows bot and waits, then posts what you tapped back into that chat, where the bridge reads it. The buttons come from the request: Yes / Always / No and a reason box for tool approvals, the options and a text box for questions, one button per option for decisions, Sign in / Done / Cancel for sign-ins. Because the Workflows bot posts the card, your phone also rings.
@@ -146,6 +161,7 @@ If your company has a **sign-in frequency** policy (for example "sign in again e
 | `TEAMS_TENANT_ID` | `organizations` | Entra tenant id or domain |
 | `TEAMS_CLIENT_ID` | (required) | app registration |
 | `TEAMS_CHAT_ID` | `48:notes` | the chat to use |
+| `TEAMS_CHANNEL` | | channel mode: `Team / Channel`, one thread per project or chat (or `TEAMS_TEAM_ID` + `TEAMS_CHANNEL_ID`) |
 | `TEAMS_AUTH` | `browser` | `browser`, `device` (device code) or `auto` (device code, then browser) |
 | `TEAMS_REDIRECT_URI` | `http://localhost` | must match the app registration |
 | `TEAMS_CARDS` | `1` | post requests and updates as Adaptive Cards; `0` = formatted text |

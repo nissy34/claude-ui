@@ -11,9 +11,10 @@
 // Settings are environment variables; see teams-bridge/README.md.
 import fs from 'node:fs';
 import crypto from 'node:crypto';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import os from 'node:os';
 import path from 'node:path';
-import { Graph } from './graph.mjs';
+import { CHANNEL_SCOPES, Graph } from './graph.mjs';
 import { answeredCard, askCard, flowAnswer, flowCard, postCard } from './cards.mjs';
 import { HELP, TAG, askHtml, esc, md, parseCommand, permissionReply, plain, postHtml, resolvedHtml } from './text.mjs';
 
@@ -24,6 +25,10 @@ const cfg = {
   tenant: env.TEAMS_TENANT_ID || 'organizations',
   clientId: env.TEAMS_CLIENT_ID || '',
   chatId: env.TEAMS_CHAT_ID || '48:notes',
+  // Channel mode: one thread per project or chat. "Team / Channel", or the two ids.
+  channel: env.TEAMS_CHANNEL || '',
+  teamId: env.TEAMS_TEAM_ID || '',
+  channelId: env.TEAMS_CHANNEL_ID || '',
   ui: (env.CLAUDE_UI_URL || `http://127.0.0.1:${env.CW_PORT || 8787}`).replace(/\/$/, ''),
   token: env.CW_BRIDGE_TOKEN || '',
   tokenFile: home(env.CW_BRIDGE_TOKEN_FILE || path.join(dataDir, 'bridge-token')),
@@ -53,7 +58,7 @@ const log = (...a) => console.log(new Date().toISOString(), ...a);
 
 // ---------- state (survives restarts) ----------
 const STATE_FILE = path.join(cfg.dir, 'state.json');
-let st = { sent: {}, items: {}, codes: {}, nextCode: 1, target: null, seen: [], started: false, nonces: {}, flowSeen: null, flowChat: '' };
+let st = { sent: {}, items: {}, codes: {}, nextCode: 1, target: null, seen: [], started: false, nonces: {}, flowSeen: null, flowChat: '', topics: {}, threads: {}, assistantRoot: null };
 try {
   st = { ...st, ...JSON.parse(fs.readFileSync(STATE_FILE, 'utf8')) };
 } catch {}
@@ -65,7 +70,8 @@ const save = () => {
     const trim = (o) => Object.fromEntries(Object.entries(o).slice(-300));
     st.sent = trim(st.sent);
     st.items = trim(st.items);
-    st.seen = st.seen.slice(-500);
+    st.seen = st.seen.slice(-3000);
+    st.threads = trim(st.threads);
     fs.writeFileSync(STATE_FILE, JSON.stringify(st), { mode: 0o600 });
   }, 200);
 };
@@ -100,15 +106,32 @@ async function waitForReply() {
     return null;
   }
 }
-const graph = new Graph({ tenant: cfg.tenant, clientId: cfg.clientId, tokenFile: path.join(cfg.dir, 'token.json'), graphUrl: cfg.graphUrl, loginUrl: cfg.loginUrl, auth: cfg.auth, redirectUri: cfg.redirectUri, waitForReply, onAuth: reportAuth });
+const useChannel = !!(cfg.channel || (cfg.teamId && cfg.channelId));
+const graph = new Graph({ scopes: useChannel ? CHANNEL_SCOPES : undefined, tenant: cfg.tenant, clientId: cfg.clientId, tokenFile: path.join(cfg.dir, 'token.json'), graphUrl: cfg.graphUrl, loginUrl: cfg.loginUrl, auth: cfg.auth, redirectUri: cfg.redirectUri, waitForReply, onAuth: reportAuth });
 let me = null;
 
 let cardsWork = cfg.cards;
-async function post(html, meta, card) {
+let chan = null; // { team, channel } in channel mode
+// What the message being handled is (its thread), so replies and notes land in that thread.
+const here = new AsyncLocalStorage();
+const topicKey = (t) => (t ? `${t.type}:${t.id}` : '');
+
+/** Channel mode: the thread a message belongs in. `meta.thread` (a target) picks that topic's thread. */
+function rootFor(meta, root) {
+  if (!chan) return null;
+  if (root !== undefined) return root;
+  if (meta.thread) return st.topics[topicKey(meta.thread)] || null;
+  if (meta.kind === 'assistant') return st.assistantRoot || null;
+  return here.getStore()?.root || null;
+}
+
+async function post(html, meta, card, root) {
+  root = rootFor(meta, root);
+  const send = (c) => (chan ? graph.channelSend(chan, root, html, c) : c ? graph.sendCard(cfg.chatId, c) : graph.send(cfg.chatId, html));
   let m;
   if (card && cardsWork) {
     try {
-      m = await graph.sendCard(cfg.chatId, card);
+      m = await send(card);
     } catch (e) {
       // Some tenants refuse cards from users: fall back to formatted text for the rest of this run.
       cardsWork = false;
@@ -117,9 +140,20 @@ async function post(html, meta, card) {
   }
   if (!m) {
     card = null;
-    m = await graph.send(cfg.chatId, html);
+    m = await send(null);
   }
-  st.sent[m.id] = { ...meta, html, ...(card ? { card } : {}) };
+  st.sent[m.id] = { ...meta, html, ...(card ? { card } : {}), ...(chan ? { root } : {}) };
+  if (chan) {
+    // A message posted outside any thread starts one: later messages on its topic go under it.
+    const thread = root || m.id;
+    if (meta.thread) {
+      if (!root) st.topics[topicKey(meta.thread)] = m.id;
+      st.threads[thread] = st.threads[thread] || { target: meta.thread };
+    } else if (meta.kind === 'assistant') {
+      st.assistantRoot = thread;
+      st.threads[thread] = st.threads[thread] || { assistant: true };
+    }
+  }
   st.seen.push(m.id);
   save();
   return m.id;
@@ -139,11 +173,24 @@ async function ping(title, text) {
 
 async function react(messageId) {
   try {
+    if (chan) {
+      const h = here.getStore();
+      await graph.channelReact(chan, messageId, h?.msgId === messageId ? h.msgRoot : null);
+      return true;
+    }
     await graph.call('POST', `/chats/${encodeURIComponent(cfg.chatId)}/messages/${encodeURIComponent(messageId)}/setReaction`, { reactionType: 'like' });
     return true;
   } catch {
     return false;
   }
+}
+
+/** The project or chat a request or update is about. */
+function targetOf(x) {
+  const p = x.session?.project || x.project;
+  if (p?.id) return { type: 'project', id: p.id, name: p.name };
+  if (x.session?.id) return { type: 'chat', id: x.session.id, name: x.session.name };
+  return null;
 }
 
 const targetName = (t) => (t ? `${t.type === 'project' ? 'project ' : ''}${t.name}` : 'nobody yet');
@@ -158,8 +205,9 @@ async function sendAsk(item) {
   const code = st.nextCode++;
   st.codes[code] = item.id;
   st.items[item.id] = { code, kind: item.kind, open: true, msg: null, ...(item.kind === 'question' ? { item: { questions: item.questions } } : {}) };
-  const id = await post(askHtml(item, code, cfg), { kind: 'ask', item: item.id }, askCard(item, code, cfg));
+  const id = await post(askHtml(item, code, cfg), { kind: 'ask', item: item.id, thread: targetOf(item) }, askCard(item, code, cfg));
   st.items[item.id].msg = id;
+  if (chan) st.items[item.id].thread = st.sent[id].root || id;
   save();
   if (await sendFlow(item)) return; // the workflow's card rings the phone
   await ping(`${item.session?.name || item.project?.name || 'An agent'} needs you`, item.question || item.questions?.[0]?.question || item.detail || item.tool || item.server || '');
@@ -180,11 +228,12 @@ async function onResolved(ev) {
   const sent = it.msg && st.sent[it.msg];
   if (!sent) return;
   try {
-    if (sent.card) await graph.editCard(cfg.chatId, it.msg, answeredCard(sent.card, ev.answer, ev.by));
+    if (chan) await graph.channelEdit(chan, it.msg, sent.root, sent.card ? null : resolvedHtml(sent.html, ev.answer, ev.by), sent.card ? answeredCard(sent.card, ev.answer, ev.by) : null);
+    else if (sent.card) await graph.editCard(cfg.chatId, it.msg, answeredCard(sent.card, ev.answer, ev.by));
     else await graph.edit(cfg.chatId, it.msg, resolvedHtml(sent.html, ev.answer, ev.by));
   } catch (e) {
-    // Editing can be refused (policy, old message). Confirm your own answers with a short line instead.
-    if (ev.by === 'bridge') await post(`${TAG} ✓ Answered: ${esc(ev.answer)}`, { kind: 'note' });
+    // Editing can be refused (policy, old message, no ChannelMessage.ReadWrite). Say it with a short line instead.
+    if (ev.by === 'bridge' || chan) await post(`${TAG} ✓ ${ev.by === 'bridge' ? 'Answered' : 'Answered in the web UI'}: ${esc(ev.answer)}`, { kind: 'note' }, null, chan ? sent.root || it.msg : undefined);
   }
 }
 
@@ -195,7 +244,7 @@ async function onEvent(ev) {
   if (ev.type === 'assistant') return post(`${TAG} ${md(ev.text)}`, { kind: 'assistant' });
   if (ev.type === 'notify' || ((ev.type === 'post' || ev.type === 'turn') && away())) {
     const target = ev.type === 'post' ? { type: 'project', id: ev.project.id, name: ev.project.name } : { type: 'chat', id: ev.session.id, name: ev.session.name };
-    await post(postHtml(ev), { kind: 'target', target }, postCard(ev, cfg));
+    await post(postHtml(ev), { kind: 'target', target, thread: chan ? targetOf(ev) || target : undefined }, postCard(ev, cfg));
     if (ev.type !== 'turn') await ping(target.name, ev.text);
   }
 }
@@ -286,6 +335,13 @@ async function sendTo(target, text, msgId) {
 
 /** Plain words go to the Assistant (a Haiku chat in Claude UI), which works out what you mean. */
 async function toAssistant(text, msgId, context) {
+  if (chan) {
+    const root = here.getStore()?.root;
+    if (root) {
+      st.assistantRoot = root;
+      st.threads[root] = { ...(st.threads[root] || {}), assistant: true };
+    }
+  }
   try {
     await ui('POST', '/api/bridge/act', { action: 'assistant', text, ...(context ? { context } : {}) });
     if (msgId) await react(msgId);
@@ -315,6 +371,18 @@ async function handle(msg) {
     if (s.kind === 'target') return sendTo(s.target, text, msg.id);
     if (s.kind === 'assistant') return toAssistant(text, msg.id);
   }
+  if (chan && msg.root && !text.startsWith('/')) {
+    // A reply in a thread: it belongs to that thread's project or chat (or the Assistant).
+    const th = st.threads[msg.root];
+    if (th?.target) {
+      const open = openAsks().filter(([, it]) => it.thread === msg.root);
+      const short = /^\S+$/.test(text.trim());
+      if (open.length === 1 && short && (permissionReply(text) || /^\d+$/.test(text.trim()))) return answer(open[0][0], text, msg.id);
+      if (open.length === 1 && open[0][1].kind === 'question') return answer(open[0][0], text, msg.id);
+      return sendTo(th.target, text, msg.id);
+    }
+    if (cfg.assistant) return toAssistant(text, msg.id);
+  }
   const c = parseCommand(text);
   switch (c.cmd) {
     case 'answer': {
@@ -330,6 +398,12 @@ async function handle(msg) {
       try {
         const r = await ui('POST', '/api/bridge/act', { action: 'new_chat', folder: c.folder, text: c.text });
         st.target = r.target;
+        const root = chan && here.getStore()?.root;
+        if (root) {
+          // This thread is now that chat's: its questions and result come here, and replies go to it.
+          st.topics[topicKey(r.target)] = root;
+          st.threads[root] = { target: r.target };
+        }
         save();
         return post(`${TAG} Started <b>${esc(r.target.name)}</b>. I'll tell you when it finishes; plain text now goes there.`, { kind: 'target', target: r.target });
       } catch (e) {
@@ -357,7 +431,7 @@ async function handle(msg) {
       for (const item of a.items) {
         const it = st.items[item.id];
         if (!it) await sendAsk(item);
-        else await post(askHtml(item, it.code, cfg), { kind: 'ask', item: item.id }, askCard(item, it.code, cfg));
+        else await post(askHtml(item, it.code, cfg), { kind: 'ask', item: item.id, thread: targetOf(item) }, askCard(item, it.code, cfg));
       }
       return;
     }
@@ -401,18 +475,42 @@ async function switchTo(name, only) {
   return post(`${TAG} Plain text now goes to ${esc(targetName(st.target))}.`, { kind: 'target', target: st.target });
 }
 
+/** The newest messages: the chat's, or in channel mode the channel's threads and their replies (with .root). */
+async function readMessages() {
+  if (!chan) return (await graph.recent(cfg.chatId, 20)).value || [];
+  const out = [];
+  const old = Date.now() - 2 * 86400_000; // threads quiet for two days are left alone
+  for (const m of (await graph.channelRecent(chan, 20)).value || []) {
+    out.push({ ...m, root: null });
+    for (const x of m.replies || []) if (Date.parse(x.createdDateTime) > old) out.push({ ...x, root: m.id });
+  }
+  return out;
+}
+
+/** Channel mode: find the team and channel from TEAMS_CHANNEL ("Team / Channel") or the ids. */
+async function findChannel() {
+  if (cfg.teamId && cfg.channelId) return { team: cfg.teamId, channel: cfg.channelId };
+  const [tn, cn] = cfg.channel.split('/').map((x) => x.trim().toLowerCase());
+  const teams = (await graph.teams()).value || [];
+  const team = teams.find((t) => t.id === tn || t.displayName.toLowerCase() === tn);
+  if (!team) throw new Error(`No team "${tn}" among yours: ${teams.map((t) => t.displayName).join(', ')}`);
+  const chs = (await graph.channels(team.id)).value || [];
+  const ch = chs.find((c) => c.id === cn || c.displayName.toLowerCase() === (cn || 'general'));
+  if (!ch) throw new Error(`No channel "${cn}" in ${team.displayName}: ${chs.map((c) => c.displayName).join(', ')}`);
+  return { team: team.id, channel: ch.id, name: `${team.displayName} / ${ch.displayName}` };
+}
+
 async function teamsLoop() {
   for (;;) {
     try {
-      const r = await graph.recent(cfg.chatId, 20);
-      const msgs = (r.value || []).filter((m) => m.messageType === 'message' && !m.deletedDateTime).sort((a, b) => Date.parse(a.createdDateTime) - Date.parse(b.createdDateTime));
+      const msgs = (await readMessages()).filter((m) => m.messageType === 'message' && !m.deletedDateTime).sort((a, b) => Date.parse(a.createdDateTime) - Date.parse(b.createdDateTime));
       const seen = new Set(st.seen);
       if (!st.started) {
         // First run: everything already in the chat is history.
         st.seen.push(...msgs.map((m) => m.id));
         st.started = true;
         save();
-        await post(`${TAG} Connected. I'll post here when something needs you.<br>${HELP.split('<br>').slice(1).join('<br>')}`, { kind: 'note' });
+        await post(`${TAG} Connected. ${chan ? 'Each project and chat gets its own thread here. Start a new post to talk to the Assistant or to use a command.' : "I'll post here when something needs you."}<br>${HELP.split('<br>').slice(1).join('<br>')}`, { kind: 'note' });
       } else {
         for (const m of msgs) {
           if (seen.has(m.id) || st.sent[m.id]) continue;
@@ -420,7 +518,7 @@ async function teamsLoop() {
           save();
           if (m.from?.user?.id && me && m.from.user.id !== me.id) continue; // only you
           try {
-            await handle(m);
+            await here.run({ root: chan ? m.root || m.id : null, msgId: m.id, msgRoot: m.root || null }, () => handle(m));
           } catch (e) {
             log('[teams] handling failed:', e.message);
             await post(`${TAG} Something went wrong: ${esc(e.message)}`, { kind: 'note' }).catch(() => {});
@@ -544,6 +642,11 @@ async function main() {
     rl.close();
     return;
   }
+  if (process.argv[2] === 'channels') {
+    for (const t of (await graph.teams()).value || []) for (const c of (await graph.channels(t.id)).value || []) console.log(`${t.displayName} / ${c.displayName}`);
+    console.log('\nSet TEAMS_CHANNEL to one of these ("Team / Channel").');
+    return;
+  }
   if (process.argv[2] === 'chats') {
     const r = await graph.chats();
     for (const c of r.value || []) {
@@ -558,7 +661,12 @@ async function main() {
     process.exit(1);
   }
   me = await graph.me();
-  log(`signed in as ${me.displayName}; chat ${cfg.chatId}; Claude UI ${cfg.ui}`);
+  if (useChannel) {
+    chan = await findChannel();
+    if (st.chan && st.chan !== `${chan.team}/${chan.channel}`) Object.assign(st, { started: false, topics: {}, threads: {}, assistantRoot: null, seen: [] });
+    st.chan = `${chan.team}/${chan.channel}`;
+  }
+  log(`signed in as ${me.displayName}; ${chan ? `channel ${chan.name || chan.channel}` : `chat ${cfg.chatId}`}; Claude UI ${cfg.ui}`);
   await reportAuth({ state: 'ok', message: `Teams bridge connected as ${me.displayName}.` });
   graph.keepAlive();
   await Promise.all([uiLoop(), teamsLoop(), flowLoop()]);

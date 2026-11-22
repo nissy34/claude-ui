@@ -66,6 +66,7 @@ async function until(fn, ms = 15_000, label = 'condition') {
 const ME = { id: 'user-me', displayName: 'Test Person' };
 const chat = []; // messages, oldest first
 const flowMsgs = []; // the chat with the Workflows bot
+const chan = []; // channel threads: { ...message, replies: [] }
 const flowCards = []; // cards posted to the workflow's webhook
 const reactions = [];
 const edits = [];
@@ -106,6 +107,33 @@ const graph = http.createServer((req, res) => {
     }
     if (!/^Bearer at-/.test(req.headers.authorization || '')) return json(res, 401, { error: { message: 'no token' } });
     if (p === '/v1.0/me') return json(res, 200, ME);
+    if (p === '/v1.0/me/joinedTeams') return json(res, 200, { value: [{ id: 'T1', displayName: 'Eng' }] });
+    if (p === '/v1.0/teams/T1/channels') return json(res, 200, { value: [{ id: 'C1', displayName: 'General' }, { id: 'C2', displayName: 'Claude' }] });
+    if (p.startsWith('/v1.0/teams/T1/channels/C2/messages')) {
+      const parts = p.slice('/v1.0/teams/T1/channels/C2/messages'.length).split('/').filter(Boolean);
+      if (parts.at(-1) === 'setReaction') return json(res, 204, {});
+      if (!parts.length && req.method === 'GET') return json(res, 200, { value: [...chan].reverse() });
+      const b = data ? JSON.parse(data) : {};
+      const mk = () => ({ id: `c${++n}`, messageType: 'message', createdDateTime: new Date(Date.now() + n).toISOString(), from: { user: { id: ME.id } }, body: b.body, attachments: b.attachments || [], bot: true, replies: [] });
+      if (!parts.length && req.method === 'POST') {
+        const m = mk();
+        chan.push(m);
+        return json(res, 201, m);
+      }
+      const top = chan.find((x) => x.id === parts[0]);
+      if (!top) return json(res, 404, { error: { message: 'no thread' } });
+      if (parts[1] === 'replies' && parts.length === 2 && req.method === 'POST') {
+        const m = mk();
+        delete m.replies;
+        top.replies.push(m);
+        return json(res, 201, m);
+      }
+      if (req.method === 'PATCH') {
+        const m = parts[2] ? top.replies.find((x) => x.id === parts[2]) : top;
+        Object.assign(m, { body: b.body, attachments: b.attachments || [] });
+        return json(res, 204, {});
+      }
+    }
     let m;
     if ((m = /^\/v1\.0\/chats\/([^/]+)\/messages$/.exec(p))) {
       if (req.method === 'GET' && m[1] === 'flow-chat') return json(res, 200, { value: [...flowMsgs].reverse() });
@@ -352,6 +380,47 @@ async function main() {
   say('/new demo: @@ask Bash {"command":"make lint"}');
   const p7 = await until(() => findBot(/wants to use <b>Bash<\/b>:<br><code>make lint<\/code>/), 15_000, 'text fallback');
   check(!p7.attachments.length, 'the request falls back to a text message');
+  refuseCards = false;
+
+  console.log('Channel mode: one thread per chat');
+  {
+    const gone = new Promise((r) => bridge.once('exit', r));
+    bridge.kill();
+    await gone;
+    const dir2 = path.join(tmp, 'teams2');
+    fs.mkdirSync(dir2, { recursive: true });
+    fs.copyFileSync(path.join(tmp, 'teams', 'token.json'), path.join(dir2, 'token.json'));
+    bridge = spawn(process.execPath, [path.join(root, 'teams-bridge', 'bridge.mjs')], {
+      env: { ...env, CLAUDE_UI_URL: base, CW_BRIDGE_TOKEN_FILE: tokenFile, TEAMS_DATA_DIR: dir2, TEAMS_CLIENT_ID: 'client', TEAMS_TENANT_ID: 'tenant', TEAMS_GRAPH_URL: `http://127.0.0.1:${gport}/v1.0`, TEAMS_LOGIN_URL: `http://127.0.0.1:${gport}`, TEAMS_POLL_SECONDS: '2', TEAMS_AWAY_MINUTES: '0', TEAMS_CHANNEL: 'Eng / Claude' },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    bridge.stdout.on('data', (d) => bridgeLog.push(String(d)));
+    bridge.stderr.on('data', (d) => process.stderr.write(`[bridge] ${d}`));
+    const txt = (m) => m.body.content + (m.attachments || []).map((a) => a.content || '').join('');
+    await until(() => chan.find((m) => /Connected\. Each project and chat gets its own thread/.test(m.body.content)), 15_000, 'channel connected');
+    check(true, 'the bridge finds the channel by name and says hello there');
+    const chanSay = (text, rootId) => {
+      const m = { id: `u${++n}`, messageType: 'message', createdDateTime: new Date(Date.now() + n).toISOString(), from: { user: { id: ME.id } }, body: { contentType: 'html', content: `<p>${text}</p>` }, attachments: [], replies: [] };
+      if (rootId) chan.find((x) => x.id === rootId).replies.push(m);
+      else chan.push(m);
+      return m.id;
+    };
+    const t1 = chanSay('/new demo: @@ask Bash {"command":"make docs"}');
+    const thread = () => chan.find((x) => x.id === t1);
+    await until(() => thread().replies.some((m) => /make docs/.test(txt(m)) && /Wants to use Bash/.test(txt(m))), 15_000, 'request in the thread');
+    check(thread().replies.some((m) => /Started/.test(txt(m))), 'the new chat is confirmed in the same thread');
+    check(true, "the chat's request is posted in its thread");
+    chanSay('yes', t1);
+    await until(() => thread().replies.some((m) => /finished/.test(txt(m)) && /answer: allowed/.test(txt(m))), 15_000, 'finished in thread');
+    check(true, 'yes in the thread answers it, and the result comes back in the same thread');
+    chanSay('now the readme<br>@@say continued in the thread', t1);
+    await until(() => thread().replies.some((m) => /continued in the thread/.test(txt(m))), 15_000, 'follow-up in thread');
+    check(true, 'other text in the thread goes to that chat');
+    const t2 = chanSay('what is going on?<br>@@say Nothing waits on you.');
+    await until(() => chan.find((x) => x.id === t2).replies.some((m) => /Nothing waits on you\./.test(txt(m))), 20_000, 'assistant reply in thread');
+    check(true, "a new post goes to the Assistant, and its answer is a reply under that post");
+  }
+
 }
 
 main()
