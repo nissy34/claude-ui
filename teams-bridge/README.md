@@ -111,7 +111,7 @@ In a chat with other people, only your own messages are read.
 
 ### Phone notifications (optional)
 
-Messages the bridge posts appear as written by you, so Teams doesn't notify you about them. If you want your phone to ring for questions, add a Teams **Workflows** webhook: in Teams, Workflows > "Post to a chat when a webhook request is received", pick "Chat with Flow bot", copy the URL into `TEAMS_PING_URL`. The bridge then also sends a short ping through it for each request and post (an outbound HTTPS call). Reply in your chat with yourself as usual.
+Messages the bridge posts appear as written by you, so Teams doesn't notify you about them. If you want your phone to ring for questions, add a Teams **Workflows** webhook: in Teams, Workflows > "Post to a chat when a webhook request is received", pick "Chat with Flow bot", copy the URL into `TEAMS_PING_URL`. The bridge then also sends a short ping through it for each request and post (an outbound HTTPS call), with an **Open in Teams** button that jumps to the post to answer. Reply in your chat with yourself as usual.
 
 ### Threads (channel mode, optional)
 

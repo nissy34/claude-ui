@@ -166,7 +166,7 @@ async function post(html, meta, card, root) {
     card = null;
     m = await send(null);
   }
-  st.sent[m.id] = { ...meta, html, ...(card ? { card } : {}), ...(chan ? { root } : {}) };
+  st.sent[m.id] = { ...meta, html, ...(card ? { card } : {}), ...(chan ? { root } : {}), url: m.webUrl || (chan ? undefined : `https://teams.microsoft.com/l/message/${encodeURIComponent(cfg.chatId)}/${m.id}?context=${encodeURIComponent('{"contextType":"chat"}')}`) };
   if (chan) {
     // A message posted outside any thread starts one: later messages on its topic go under it.
     const thread = root || m.id;
@@ -186,12 +186,12 @@ async function post(html, meta, card, root) {
   return m.id;
 }
 
-async function ping(title, text) {
+async function ping(title, text, url) {
   if (!cfg.pingUrl) return;
   try {
     // The shape Teams Workflows' "Post to a chat when a webhook request is received" template reads:
     // a message with an Adaptive Card. Its post comes from the Workflows bot, so your phone rings.
-    const card = { type: 'AdaptiveCard', $schema: 'http://adaptivecards.io/schemas/adaptive-card.json', version: '1.4', body: [{ type: 'TextBlock', text: title, weight: 'Bolder', wrap: true }, { type: 'TextBlock', text: String(text).slice(0, 500), wrap: true }] };
+    const card = { type: 'AdaptiveCard', $schema: 'http://adaptivecards.io/schemas/adaptive-card.json', version: '1.4', body: [{ type: 'TextBlock', text: title, weight: 'Bolder', wrap: true }, { type: 'TextBlock', text: String(text).slice(0, 500), wrap: true }], ...(url ? { actions: [{ type: 'Action.OpenUrl', title: 'Open in Teams', url }] } : {}) };
     await fetch(cfg.pingUrl, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ type: 'message', title, text: String(text).slice(0, 500), attachments: [{ contentType: 'application/vnd.microsoft.card.adaptive', contentUrl: null, content: card }] }) });
   } catch (e) {
     log('[ping] failed:', e.message);
@@ -267,7 +267,7 @@ async function sendAsk(item) {
   if (chan) st.items[item.id].thread = st.sent[id].root || id;
   save();
   if (await sendFlow(item)) return; // the workflow's card rings the phone
-  await ping(`${item.session?.name || item.project?.name || 'An agent'} needs you`, item.question || item.questions?.[0]?.question || item.detail || item.tool || item.server || '');
+  await ping(`${item.session?.name || item.project?.name || 'An agent'} needs you`, item.question || item.questions?.[0]?.question || item.detail || item.tool || item.server || '', st.sent[id]?.url);
 }
 
 async function onAsk(item) {
@@ -306,8 +306,8 @@ async function onEvent(ev) {
     const target = ev.type === 'post' ? { type: 'project', id: ev.project.id, name: ev.project.name } : { type: 'chat', id: ev.session.id, name: ev.session.name };
     // Asked through the Assistant: the answer comes back in the thread where you asked.
     const viaAssistant = chan && ev.via === 'assistant' && st.assistantRoot;
-    await post(postHtml(ev), { kind: 'target', target, thread: chan && !viaAssistant ? targetOf(ev) || target : undefined }, postCard(ev, cfg), viaAssistant ? st.assistantRoot : undefined);
-    if (ev.type !== 'turn') await ping(target.name, ev.text);
+    const id = await post(postHtml(ev), { kind: 'target', target, thread: chan && !viaAssistant ? targetOf(ev) || target : undefined }, postCard(ev, cfg), viaAssistant ? st.assistantRoot : undefined);
+    if (ev.type !== 'turn') await ping(target.name, ev.text, st.sent[id]?.url);
   }
 }
 
