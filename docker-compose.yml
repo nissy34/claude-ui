@@ -14,6 +14,7 @@ services:
       args:
         CLAUDE_CODE_VERSION: ${CLAUDE_CODE_VERSION:-latest}
         WITH_BROWSER: ${WITH_BROWSER:-1}
+        WITH_DOCKER: ${WITH_DOCKER:-1}
         EXTRA_APT_PACKAGES: ${EXTRA_APT_PACKAGES:-}
     image: claude-ui
     restart: unless-stopped
@@ -21,6 +22,9 @@ services:
       # Use "127.0.0.1:8787:8787" to reach it only from this machine.
       - "${CW_PORT:-8787}:8787"
     env_file: .env
+    # Lets chats reach ports that containers they start publish on the host.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
       HOME: ${HOME}
       USER: ${USER:-claude}
@@ -51,6 +55,15 @@ services:
         source: ${HOME}/.gitconfig
         target: ${HOME}/.gitconfig
         read_only: true
+        bind: { create_host_path: false }
+      # The host's Docker, so chats can run docker and docker compose. Containers
+      # they start run on the host beside this one, and since your folders are
+      # mounted at their host paths, `docker run -v "$PWD":/src` works as usual.
+      # This gives chats the same power as root on the host; remove it (and
+      # build with WITH_DOCKER=0) if you don't want that.
+      - type: bind
+        source: /var/run/docker.sock
+        target: /var/run/docker.sock
         bind: { create_host_path: false }
       # Optional: let "Clone from git" in New chat reach private repositories with your
       # SSH key (git@github.com:...) or saved HTTPS logins. Uncomment what you use.

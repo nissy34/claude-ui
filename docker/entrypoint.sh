@@ -29,9 +29,31 @@ if ! getent passwd "$uid" >/dev/null; then
   echo "$name:x:$uid:$gid::$HOME:/bin/bash" >> /etc/passwd
 fi
 
+# The host's Docker socket, if mounted: join the group that owns it so chats can
+# run docker. Containers they start run on the host, next to this one.
+groups=""
+sock=${DOCKER_HOST#unix://}
+case "$sock" in /*) ;; *) sock=/var/run/docker.sock ;; esac
+if [ -S "$sock" ]; then
+  sgid=$(stat -c %g "$sock")
+  if [ "$sgid" != "$gid" ]; then
+    getent group "$sgid" >/dev/null || echo "docker-host:x:$sgid:" >> /etc/group
+    sname=$(getent group "$sgid" | cut -d: -f1)
+    # List yourself as a member, so `id` and `groups` show it too.
+    if ! getent group "$sgid" | cut -d: -f4 | tr , '\n' | grep -qx "$name"; then
+      sed -i "/^$sname:[^:]*:$sgid:/{s/:\$/:$name/;t;s/\$/,$name/}" /etc/group
+    fi
+    groups=$sgid
+  fi
+fi
+
 # Docker creates the parent folders of bind mounts (and missing mount sources)
 # as root. Hand those to you; anything already yours is left alone.
 find "$HOME" -maxdepth 3 -xdev -type d -user 0 -exec chown "$uid:$gid" {} + 2>/dev/null || true
 
-# Run as you. Keep the env (HOME, CW_*), drop root's groups.
+# Run as you. Keep the env (HOME, CW_*), drop root's groups (keeping the
+# Docker socket's group, if any).
+if [ -n "$groups" ]; then
+  exec setpriv --reuid="$uid" --regid="$gid" --groups="$groups" -- "$@"
+fi
 exec setpriv --reuid="$uid" --regid="$gid" --clear-groups -- "$@"
