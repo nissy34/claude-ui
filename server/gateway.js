@@ -37,9 +37,9 @@ function load() {
   if (cached !== undefined) return cached;
   try {
     const j = JSON.parse(fs.readFileSync(FILE(), 'utf8'));
-    cached = { enabled: !!j.enabled, baseUrl: String(j.baseUrl || ''), token: String(j.token || ''), discovery: j.discovery !== false };
+    cached = { enabled: !!j.enabled, baseUrl: String(j.baseUrl || ''), token: String(j.token || ''), discovery: j.discovery !== false, saved: true };
   } catch {
-    cached = { enabled: false, baseUrl: '', token: '', discovery: true };
+    cached = { enabled: false, baseUrl: '', token: '', discovery: true, saved: false };
   }
   return cached;
 }
@@ -47,12 +47,13 @@ function load() {
 function save(c) {
   fs.mkdirSync(config.dataDir, { recursive: true });
   const tmp = FILE() + '.tmp';
+  c = { enabled: c.enabled, baseUrl: c.baseUrl, token: c.token, discovery: c.discovery };
   fs.writeFileSync(tmp, JSON.stringify(c, null, 2), { mode: 0o600 });
   fs.renameSync(tmp, FILE());
   try {
     fs.chmodSync(FILE(), 0o600);
   } catch {}
-  cached = c;
+  cached = { ...c, saved: true };
   for (const fn of listeners) {
     try {
       fn();
@@ -72,8 +73,22 @@ export function gatewayActive() {
   return !!(c.enabled && c.baseUrl && c.token);
 }
 
-/** Gateway set up outside the UI: in the server's environment or ~/.claude/settings.json. */
+// The gateway's own variables. Once the switch has been turned off in the UI they are also
+// removed from the server's environment (.env), so "off" really means the Claude login.
+const GATEWAY_ENV = ['ANTHROPIC_BASE_URL', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY'];
+
+/** Turned off in the UI (saved), as opposed to never set up here. */
+function switchedOff() {
+  const c = load();
+  return c.saved && !gatewayActive();
+}
+
+/**
+ * Gateway set up outside the UI (.env or ~/.claude/settings.json). It applies only until the
+ * switch here is used: from then on the switch decides (see gatewaySettingsEnv).
+ */
 function externalGateway() {
+  if (switchedOff()) return null;
   if (process.env.ANTHROPIC_BASE_URL && process.env.ANTHROPIC_AUTH_TOKEN) return { source: 'env', baseUrl: process.env.ANTHROPIC_BASE_URL };
   const e = settingsEnv();
   if (e.ANTHROPIC_BASE_URL && e.ANTHROPIC_AUTH_TOKEN) return { source: 'settings', baseUrl: e.ANTHROPIC_BASE_URL };
@@ -129,6 +144,25 @@ export function fixSettingsConflicts() {
   return { removed: keys, backup: f + '.before-gateway' };
 }
 
+/**
+ * Move a gateway written by hand into ~/.claude/settings.json (as the gateway's own setup does)
+ * into this server's setting, so the switch here can turn it off. A copy of the old file is kept.
+ */
+export function importFromSettings() {
+  const s = readSettings();
+  const e = s?.env || {};
+  if (!e.ANTHROPIC_BASE_URL || !e.ANTHROPIC_AUTH_TOKEN) throw new Error('No gateway in settings.json to take over.');
+  const c = { ...load(), enabled: true, baseUrl: trimUrl(e.ANTHROPIC_BASE_URL), token: String(e.ANTHROPIC_AUTH_TOKEN).trim() };
+  if ('CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY' in e) c.discovery = e.CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY !== '0';
+  const f = settingsFile();
+  fs.copyFileSync(f, f + '.before-gateway');
+  for (const k of GATEWAY_ENV) delete s.env[k];
+  if (!Object.keys(s.env).length) delete s.env;
+  fs.writeFileSync(f, JSON.stringify(s, null, 2) + '\n');
+  save(c);
+  return gatewayStatus();
+}
+
 function trimUrl(u) {
   return String(u || '').trim().replace(/\/+$/, '');
 }
@@ -155,6 +189,10 @@ export function gatewayStatus() {
     settingsConflicts: settingsConflicts(),
     envConflicts,
     settingsPath: settingsFile(),
+    // An apiKeyHelper (another way to hand Claude Code a key) also skips the Claude login.
+    apiKeyHelper: !!readSettings()?.apiKeyHelper,
+    // A gateway written into settings.json by hand (ignored by chats here once the switch is used).
+    settingsGateway: !!(settingsEnv().ANTHROPIC_BASE_URL && settingsEnv().ANTHROPIC_AUTH_TOKEN),
   };
 }
 
@@ -185,7 +223,10 @@ export function setGateway({ enabled, baseUrl, token, discovery }) {
  */
 export function applyGateway(env, extra = {}) {
   for (const k of PRIVATE_ENV) delete env[k];
-  if (!gatewayActive()) return env;
+  if (!gatewayActive()) {
+    if (switchedOff()) for (const k of GATEWAY_ENV) if (!(k in extra)) delete env[k];
+    return env;
+  }
   const c = load();
   for (const k of CONFLICT_ENV) delete env[k];
   for (const k of MODEL_PINS) if (!(k in extra)) delete env[k];
@@ -194,6 +235,46 @@ export function applyGateway(env, extra = {}) {
   if (c.discovery) env.CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY = '1';
   else delete env.CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY;
   return env;
+}
+
+/**
+ * The same choice as settings for a claude session's --settings flag. Claude Code applies the
+ * "env" of ~/.claude/settings.json (and a project's .claude/settings*.json) over the environment
+ * we pass, but --settings over those, so this is what makes the switch win whatever those files
+ * say. An empty value unsets a variable. The key itself only goes in here when settings.json has
+ * a key of its own to override (it is in the environment already otherwise).
+ */
+export function gatewaySettingsEnv() {
+  const c = load();
+  if (gatewayActive()) {
+    const out = Object.fromEntries(CONFLICT_ENV.map((k) => [k, '']));
+    out.ANTHROPIC_BASE_URL = c.baseUrl;
+    out.CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY = c.discovery ? '1' : '';
+    if (settingsEnv().ANTHROPIC_AUTH_TOKEN) out.ANTHROPIC_AUTH_TOKEN = c.token;
+    return out;
+  }
+  if (switchedOff()) return Object.fromEntries([...GATEWAY_ENV, 'CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_USE_FOUNDRY'].map((k) => [k, '']));
+  return null;
+}
+
+/** Add gatewaySettingsEnv() to a claude session's arguments (merged into a --settings already there). */
+export function withGatewayArgs(args) {
+  const genv = gatewaySettingsEnv();
+  if (!genv) return args;
+  const out = [...args];
+  const i = out.lastIndexOf('--settings');
+  if (i >= 0 && i + 1 < out.length) {
+    let s;
+    try {
+      s = JSON.parse(out[i + 1]);
+    } catch {}
+    if (s && typeof s === 'object') {
+      out[i + 1] = JSON.stringify({ ...s, env: { ...(s.env || {}), ...genv } });
+      return out;
+    }
+  }
+  out.push('--settings', JSON.stringify({ env: genv }));
+  return out;
 }
 
 /** The environment for a claude process: the server's own, plus `extra`, in gateway mode if on. */

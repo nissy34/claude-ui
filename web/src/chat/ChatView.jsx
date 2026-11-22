@@ -24,6 +24,14 @@ import { deleteChat } from './deleteChat.js';
 import { copyText } from '../ui/clipboard.js';
 import { useGatewayMode } from '../Gateway.jsx';
 
+/** How the running claude process signs in, from its init message. */
+function signedInWith(m) {
+  if (m.servedByAnthropic === false) return 'AI gateway (billed to the gateway key)';
+  if (m.apiKeySource && m.apiKeySource !== 'none') return `API key (${m.apiKeySource})`;
+  if (m.servedByAnthropic === true) return 'Claude subscription';
+  return '–';
+}
+
 const AUTH_RE = /oauth|authenticat|\/login|not logged in|invalid api key|credentials/i;
 
 function notify(title, body) {
@@ -299,6 +307,8 @@ function InfoDialog({ meta, onClose, onSignIn }) {
           <span className="v">{meta.contextTokens ? `${fmtTokens(meta.contextTokens)} tokens` : '–'}</span>
           <span className="k">Session cost</span>
           <span className="v">{meta.totalCost ? `$${meta.totalCost.toFixed(2)} (API-equivalent estimate)` : '–'}</span>
+          <span className="k">Signed in with</span>
+          <span className="v">{signedInWith(meta)}</span>
           <span className="k">Claude Code</span>
           <span className="v">{meta.cliVersion || '–'}</span>
           <span className="k">Conversation id</span>
@@ -821,6 +831,11 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
               <span className="muted tcwd">{project}</span>
               {meta.worktree && <span className="pill mono hide-mobile">⎇ {meta.worktree.branch}</span>}
               {meta.envName && <span className="pill hide-mobile" title="Environment">{meta.envName}</span>}
+              {meta.servedByAnthropic === false && meta.live && (
+                <span className="pill hide-mobile" title="This chat runs through the company AI gateway, not your Claude subscription">
+                  Gateway
+                </span>
+              )}
             </div>
             {parent && (
               <button className="parent-link hide-mobile" onClick={() => onSelect(parent.id)}>

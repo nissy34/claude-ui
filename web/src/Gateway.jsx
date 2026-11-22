@@ -71,6 +71,16 @@ export function GatewaySettings({ onError, onChange }) {
       setBusy('');
     }
   };
+  const takeOver = async () => {
+    setBusy('import');
+    try {
+      take(await api('/api/gateway/import', { method: 'POST' }));
+    } catch (e) {
+      onError(e);
+    } finally {
+      setBusy('');
+    }
+  };
   const fix = async () => {
     setBusy('fix');
     try {
@@ -92,19 +102,38 @@ export function GatewaySettings({ onError, onChange }) {
         Use your company's AI gateway (for example Bifrost) instead of a Claude login. Every chat, project, terminal, the Assistant and chat titles then send requests to the gateway with your personal key, and are billed to your team. On a machine with no browser, get the key on your laptop with <code>bifrost-auth-macos get-key</code> (or <code>bifrost-auth-linux get-key</code>) and paste it here.
       </p>
 
-      {s.external && (
+      {s.external?.source === 'env' && (
         <div className="set-note">
           <Pill tone="green">In use</Pill>{' '}
           <span className="muted">
-            A gateway is already set up in {s.external.source === 'env' ? "this server's environment (.env)" : s.settingsPath}: {s.external.baseUrl}. You don't need to set it here.
+            A gateway is set up in this server's environment (.env): {s.external.baseUrl}. Chats use it until you use the switch below. From then on the switch alone decides.
           </span>
         </div>
+      )}
+      {s.settingsGateway && (
+        <div className="set-note warn-box">
+          {s.external?.source === 'settings' ? (
+            <b>Chats use the gateway from {s.settingsPath} ({s.external.baseUrl}).</b>
+          ) : (
+            <b>{s.settingsPath} also has a gateway.</b>
+          )}{' '}
+          {s.external?.source === 'settings' ? 'Move it here to switch it on and off.' : 'Chats here ignore it and follow the switch; Claude Code run directly on the host still uses it.'}{' '}
+          <Button size="sm" variant={s.external ? 'primary' : undefined} disabled={!!busy} onClick={takeOver}>
+            {busy === 'import' ? 'Moving…' : 'Move it here'}
+          </Button>
+          <div className="muted">Saves its address and key here, turns the gateway on, and removes those lines from settings.json (a copy is kept as settings.json.before-gateway). That file is shared with Claude Code on the host.</div>
+        </div>
+      )}
+      {s.apiKeyHelper && !s.active && (
+        <p className="set-note warn-box">
+          <b>{s.settingsPath} sets apiKeyHelper</b>, so Claude Code takes its key from that helper instead of the Claude login. Remove it from that file to use your subscription.
+        </p>
       )}
 
       <div className="set-row">
         <div className="set-label">
           <div>Use the AI gateway</div>
-          <div className="desc">{s.active ? 'On: new chats and helpers use the gateway. Running chats switch when they restart.' : 'Off: Claude Code uses its own login.'}</div>
+          <div className="desc">{s.active ? 'On: every chat uses the gateway. Open chats switch with their next message.' : s.external ? 'Not used yet: chats follow the gateway set up outside this page (above).' : 'Off: every chat uses your Claude login. Open chats switch with their next message.'}</div>
         </div>
         <Toggle
           value={s.enabled}

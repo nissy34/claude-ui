@@ -3,7 +3,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { createRequire } from 'node:module';
 import { config } from './config.js';
-import { claudeEnv } from './gateway.js';
+import { claudeEnv, withGatewayArgs } from './gateway.js';
 import { sessionExtras } from './environments.js';
 import { ChatSession, claudeProjectDir, transcriptPath } from './chat.js';
 
@@ -90,6 +90,7 @@ class Session {
         m.claudeSessionId = m.claudeSessionId || crypto.randomUUID();
         args.push('--session-id', m.claudeSessionId);
       }
+      args = withGatewayArgs(args);
     }
 
     if (m.startedOnce) {

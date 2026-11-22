@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import readline from 'node:readline';
 import { spawn } from 'node:child_process';
 import { config } from './config.js';
-import { claudeEnv } from './gateway.js';
+import { claudeEnv, withGatewayArgs } from './gateway.js';
 import { resolveCommand } from './launch.js';
 import { transcriptPath } from './chat.js';
 
@@ -22,7 +22,7 @@ export function sideChat(session, question, history, { onDelta, onDone }) {
     (prior ? `\n\nEarlier side questions:\n${prior}` : '') +
     `\n\n${question}`;
   const env = claudeEnv();
-  const cmd = resolveCommand(config.claudeBin, args);
+  const cmd = resolveCommand(config.claudeBin, withGatewayArgs(args));
   const p = spawn(cmd.file, cmd.args, { cwd: m.cwd, env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
   let text = '';
   let err = '';

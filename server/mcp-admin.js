@@ -12,7 +12,7 @@ import crypto from 'node:crypto';
 import readline from 'node:readline';
 import { spawn } from 'node:child_process';
 import { config } from './config.js';
-import { claudeEnv } from './gateway.js';
+import { claudeEnv, withGatewayArgs } from './gateway.js';
 import { resolveCommand } from './launch.js';
 import { withOpener } from './opener.js';
 
@@ -218,7 +218,7 @@ export class McpAdmin {
     const args = ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--permission-prompt-tool', 'stdio', ...config.claudeArgs];
     let proc;
     try {
-      const cmd = resolveCommand(config.claudeBin, args);
+      const cmd = resolveCommand(config.claudeBin, withGatewayArgs(args));
       proc = spawn(cmd.file, cmd.args, { cwd: this.cwd, env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
     } catch {
       return;
