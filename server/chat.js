@@ -11,7 +11,7 @@ import { sessionExtras } from './environments.js';
 import { fileURLToPath } from 'node:url';
 import { browserAvailable } from './browser.js';
 import { config } from './config.js';
-import { claudeEnv } from './gateway.js';
+import { claudeEnv, withGatewayArgs } from './gateway.js';
 import { resolveCommand } from './launch.js';
 import { withOpener } from './opener.js';
 import { toolResultParts } from './tool-images.js';
@@ -442,7 +442,7 @@ export class ChatSession {
 
     let proc;
     try {
-      const cmd = resolveCommand(config.claudeBin, args);
+      const cmd = resolveCommand(config.claudeBin, withGatewayArgs(args));
       const env = childEnv(m.id, envx.env);
       // Our own switch decides; an inherited CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=0 would silence them.
       if (config.promptSuggestions) delete env.CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION;
@@ -566,6 +566,8 @@ export class ChatSession {
           m.mcpServers = msg.mcp_servers || [];
           m.cliVersion = msg.claude_code_version;
           m.apiKeySource = msg.apiKeySource;
+          // false when the CLI talks to a gateway (ANTHROPIC_BASE_URL), true for the Claude login / API.
+          m.servedByAnthropic = typeof msg.served_by_anthropic === 'boolean' ? msg.served_by_anthropic : null;
           this.broadcastState();
         } else if (msg.subtype === 'status') {
           this.broadcast({ t: 'status', status: msg.status });
@@ -1102,6 +1104,13 @@ export class ChatSession {
     if (this.proc) await this.control({ subtype: 'set_model', model: model || 'default' }).catch((e) => this.record({ k: 'error', text: `Could not change model: ${e.message}` }));
     this.store.save();
     this.broadcastState();
+  }
+
+  /** The sign-in changed (gateway on/off): relaunch now if idle, else once this turn ends. */
+  restartForEnv() {
+    if (!this.proc) return;
+    if (this.state === 'idle') this.stopAndWait();
+    else this.effortPending = true;
   }
 
   async setEffort(effort) {
