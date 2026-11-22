@@ -58,7 +58,7 @@ const log = (...a) => console.log(new Date().toISOString(), ...a);
 
 // ---------- state (survives restarts) ----------
 const STATE_FILE = path.join(cfg.dir, 'state.json');
-let st = { sent: {}, items: {}, codes: {}, nextCode: 1, target: null, seen: [], started: false, nonces: {}, flowSeen: null, flowChat: '', topics: {}, threads: {}, assistantRoot: null };
+let st = { sent: {}, items: {}, codes: {}, nextCode: 1, target: null, seen: [], started: false, nonces: {}, waiting: {}, flowSeen: null, flowChat: '', topics: {}, names: {}, threads: {}, assistantRoot: null };
 try {
   st = { ...st, ...JSON.parse(fs.readFileSync(STATE_FILE, 'utf8')) };
 } catch {}
@@ -125,9 +125,32 @@ function rootFor(meta, root) {
   return here.getStore()?.root || null;
 }
 
+/** A thread's name: the project's name, or the chat's title. */
+const threadName = (t) => String(t.name || 'Chat').replace(/\s+/g, ' ').trim().slice(0, 120);
+let renameWorks = true;
+
+/** Keep a thread's name in step with the chat's title (chats get a proper title after their first turn). */
+async function nameThread(t) {
+  const key = topicKey(t);
+  const id = st.topics[key];
+  const name = threadName(t);
+  if (!chan || !id || !renameWorks || st.names[key] === name || !t.name) return;
+  st.names[key] = name;
+  save();
+  try {
+    await graph.channelRename(chan, id, name);
+  } catch (e) {
+    if (e.status === 403 || e.status === 401) {
+      renameWorks = false; // no ChannelMessage.ReadWrite: names stay as they started
+      log('[teams] renaming threads needs ChannelMessage.ReadWrite; thread names stay as they started.');
+    }
+  }
+}
+
 async function post(html, meta, card, root) {
   root = rootFor(meta, root);
-  const send = (c) => (chan ? graph.channelSend(chan, root, html, c) : c ? graph.sendCard(cfg.chatId, c) : graph.send(cfg.chatId, html));
+  const subject = chan && !root && meta.thread ? threadName(meta.thread) : undefined;
+  const send = (c) => (chan ? graph.channelSend(chan, root, html, c, subject) : c ? graph.sendCard(cfg.chatId, c) : graph.send(cfg.chatId, html));
   let m;
   if (card && cardsWork) {
     try {
@@ -147,7 +170,10 @@ async function post(html, meta, card, root) {
     // A message posted outside any thread starts one: later messages on its topic go under it.
     const thread = root || m.id;
     if (meta.thread) {
-      if (!root) st.topics[topicKey(meta.thread)] = m.id;
+      if (!root) {
+        st.topics[topicKey(meta.thread)] = m.id;
+        st.names[topicKey(meta.thread)] = subject;
+      } else await nameThread(meta.thread);
       st.threads[thread] = st.threads[thread] || { target: meta.thread };
     } else if (meta.kind === 'assistant') {
       st.assistantRoot = thread;
@@ -171,17 +197,47 @@ async function ping(title, text) {
   }
 }
 
-async function react(messageId) {
+// Reactions on your messages: 👀 while it's being worked on, ✅ once the answer is back (or at once
+// for answers to requests). Tenants that only know the old reactions get 👍.
+const SEEN = '👀';
+const DONE = '✅';
+async function react(messageId, emoji = DONE, whereOverride) {
+  const h = here.getStore();
+  const where = whereOverride || (chan ? { chan, root: h?.msgId === messageId ? h.msgRoot : null } : cfg.chatId);
   try {
-    if (chan) {
-      const h = here.getStore();
-      await graph.channelReact(chan, messageId, h?.msgId === messageId ? h.msgRoot : null);
-      return true;
-    }
-    await graph.call('POST', `/chats/${encodeURIComponent(cfg.chatId)}/messages/${encodeURIComponent(messageId)}/setReaction`, { reactionType: 'like' });
+    await graph.react(where, messageId, emoji);
     return true;
   } catch {
-    return false;
+    try {
+      if (emoji !== DONE) return false; // 👀 is a nicety; 👍 would read as done
+      await graph.react(where, messageId, 'like');
+      return true;
+    } catch {
+      return false;
+    }
+  }
+}
+
+/** Mark a message as being worked on, until `key`'s answer arrives (see done()). */
+async function working(messageId, key) {
+  const h = here.getStore();
+  const where = chan ? { chan, root: h?.msgId === messageId ? h.msgRoot : null } : cfg.chatId;
+  const ok = await react(messageId, SEEN, where);
+  (st.waiting[key] = st.waiting[key] || []).push({ id: messageId, where });
+  st.waiting[key] = st.waiting[key].slice(-10);
+  save();
+  return ok;
+}
+
+/** The answer for `key` arrived: 👀 becomes ✅ on the messages that waited for it. */
+async function done(key) {
+  const list = st.waiting[key];
+  if (!list?.length) return;
+  delete st.waiting[key];
+  save();
+  for (const w of list) {
+    await graph.react(w.where, w.id, SEEN, false).catch(() => {});
+    await react(w.id, DONE, w.where);
   }
 }
 
@@ -241,6 +297,9 @@ async function onEvent(ev) {
   if (env.TEAMS_DEBUG) log('[event]', JSON.stringify(ev).slice(0, 300));
   if (ev.type === 'ask') return onAsk(ev.item);
   if (ev.type === 'resolved') return onResolved(ev);
+  if (ev.type === 'assistant') await done('assistant');
+  if (ev.type === 'post') await done(`project:${ev.project.id}`);
+  if (ev.type === 'turn') await done(`chat:${ev.session.id}`);
   if (ev.type === 'assistant') return post(`${TAG} ${md(ev.text)}`, { kind: 'assistant' });
   if (ev.type === 'notify' || ((ev.type === 'post' || ev.type === 'turn') && away())) {
     const target = ev.type === 'post' ? { type: 'project', id: ev.project.id, name: ev.project.name } : { type: 'chat', id: ev.session.id, name: ev.session.name };
@@ -327,7 +386,7 @@ async function sendTo(target, text, msgId) {
     const r = target.type === 'project' ? await ui('POST', '/api/bridge/act', { action: 'project_send', project: target.id, text }) : await ui('POST', '/api/bridge/act', { action: 'send', chat: target.id, text });
     st.target = r.target || target;
     save();
-    if (!(msgId && (await react(msgId)))) await post(`${TAG} Sent to ${esc(targetName(st.target))}.`, { kind: 'note' });
+    if (!(msgId && (await working(msgId, topicKey(st.target))))) await post(`${TAG} Sent to ${esc(targetName(st.target))}.`, { kind: 'note' });
   } catch (e) {
     await post(`${TAG} Couldn't send to ${esc(targetName(target))}: ${esc(e.message)}`, { kind: 'note' });
   }
@@ -344,7 +403,7 @@ async function toAssistant(text, msgId, context) {
   }
   try {
     await ui('POST', '/api/bridge/act', { action: 'assistant', text, ...(context ? { context } : {}) });
-    if (msgId) await react(msgId);
+    if (msgId) await working(msgId, 'assistant');
   } catch (e) {
     await post(`${TAG} Couldn't reach the Assistant: ${esc(e.message)}`, { kind: 'note' });
   }
@@ -398,6 +457,7 @@ async function handle(msg) {
       try {
         const r = await ui('POST', '/api/bridge/act', { action: 'new_chat', folder: c.folder, text: c.text });
         st.target = r.target;
+        await working(msg.id, topicKey(r.target));
         const root = chan && here.getStore()?.root;
         if (root) {
           // This thread is now that chat's: its questions and result come here, and replies go to it.

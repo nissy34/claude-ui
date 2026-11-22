@@ -22,7 +22,7 @@ Talk to your agents from a Microsoft Teams chat. The bridge runs next to Claude 
 | An MCP sign-in link | The link | `done` after you sign in, `no` to cancel |
 | A coordinator post, a finished chat started from Teams, `notify_user` | The text | reply to continue that conversation |
 
-Answer by **replying to the message** (swipe it on the phone, or hover and Reply). A bare `yes` or `2` answers the one open request when there is only one. Whichever side answers first wins: answer in the web UI and the Teams message is marked "Answered in the web UI".
+Answer by **replying to the message** (swipe it on the phone, or hover and Reply). Your message gets 👀 while it's being worked on, and ✅ once the answer is back. A bare `yes` or `2` answers the one open request when there is only one. Whichever side answers first wins: answer in the web UI and the Teams message is marked "Answered in the web UI".
 
 MCP sign-in **forms** (usernames, passwords) never go to Teams; fill those in the web UI.
 
@@ -126,7 +126,7 @@ You need the delegated permissions **ChannelMessage.Send**, **ChannelMessage.Rea
 TEAMS_CHANNEL="My team / Claude"
 ```
 
-`bridge.mjs channels` lists the names. Everyone in the channel sees the posts, so use a team or private channel that only you are in. Only your own messages are read. If your tenant asks for a new sign-in after you add the permissions, Settings > Teams shows it. Editing posts needs ChannelMessage.ReadWrite. Without it, an answered request gets a short "✓ Answered" reply in its thread instead.
+`bridge.mjs channels` lists the names. Everyone in the channel sees the posts, so use a team or private channel that only you are in. Only your own messages are read. If your tenant asks for a new sign-in after you add the permissions, Settings > Teams shows it. Threads are named after the project or the chat's title. Adding **ChannelMessage.ReadWrite** (admin consent) also lets the bridge rename a thread when the chat gets its proper title, and mark answered requests on the card itself. Without it, names stay as they started, and an answered request gets a short "✓ Answered" reply in its thread instead.
 
 ### Buttons (optional, a Teams workflow)
 

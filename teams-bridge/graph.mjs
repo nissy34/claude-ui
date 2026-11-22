@@ -276,17 +276,24 @@ export class Graph {
   }
 
   /** Post in a channel: a new thread, or a reply in thread `root`. */
-  channelSend(c, root, html, card) {
+  channelSend(c, root, html, card, subject) {
     const url = root ? `${this.chanPath(c)}/${encodeURIComponent(root)}/replies` : this.chanPath(c);
-    return this.call('POST', url, this.msgBody(html, card));
+    return this.call('POST', url, { ...this.msgBody(html, card), ...(subject && !root ? { subject } : {}) });
+  }
+
+  /** Rename a thread (its first post's subject). Needs ChannelMessage.ReadWrite. */
+  channelRename(c, id, subject) {
+    return this.call('PATCH', this.chanPath(c, id), { subject });
   }
 
   channelEdit(c, id, root, html, card) {
     return this.call('PATCH', this.chanPath(c, id, root), this.msgBody(html, card));
   }
 
-  channelReact(c, id, root) {
-    return this.call('POST', `${this.chanPath(c, id, root)}/setReaction`, { reactionType: 'like' });
+  /** Add (or with on=false take away) a reaction. `where` is a chat id, or { chan, root } in a channel. */
+  react(where, id, emoji, on = true) {
+    const base = typeof where === 'string' ? `/chats/${encodeURIComponent(where)}/messages/${encodeURIComponent(id)}` : this.chanPath(where.chan, id, where.root);
+    return this.call('POST', `${base}/${on ? 'setReaction' : 'unsetReaction'}`, { reactionType: emoji });
   }
 
   msgBody(html, card) {

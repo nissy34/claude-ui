@@ -114,7 +114,7 @@ const graph = http.createServer((req, res) => {
       if (parts.at(-1) === 'setReaction') return json(res, 204, {});
       if (!parts.length && req.method === 'GET') return json(res, 200, { value: [...chan].reverse() });
       const b = data ? JSON.parse(data) : {};
-      const mk = () => ({ id: `c${++n}`, messageType: 'message', createdDateTime: new Date(Date.now() + n).toISOString(), from: { user: { id: ME.id } }, body: b.body, attachments: b.attachments || [], bot: true, replies: [] });
+      const mk = () => ({ id: `c${++n}`, subject: b.subject || null, messageType: 'message', createdDateTime: new Date(Date.now() + n).toISOString(), from: { user: { id: ME.id } }, body: b.body, attachments: b.attachments || [], bot: true, replies: [] });
       if (!parts.length && req.method === 'POST') {
         const m = mk();
         chan.push(m);
@@ -130,7 +130,8 @@ const graph = http.createServer((req, res) => {
       }
       if (req.method === 'PATCH') {
         const m = parts[2] ? top.replies.find((x) => x.id === parts[2]) : top;
-        Object.assign(m, { body: b.body, attachments: b.attachments || [] });
+        if (b.subject !== undefined) m.subject = b.subject;
+        if (b.body) Object.assign(m, { body: b.body, attachments: b.attachments || [] });
         return json(res, 204, {});
       }
     }
@@ -144,8 +145,10 @@ const graph = http.createServer((req, res) => {
       chat.push(msg);
       return json(res, 201, msg);
     }
-    if ((m = /^\/v1\.0\/chats\/([^/]+)\/messages\/([^/]+)\/setReaction$/.exec(p))) {
-      reactions.push(m[2]);
+    if ((m = /^\/v1\.0\/chats\/([^/]+)\/messages\/([^/]+)\/(setReaction|unsetReaction)$/.exec(p))) {
+      const emoji = JSON.parse(data).reactionType;
+      if (m[3] === 'setReaction') reactions.push(m[2], `${m[2]}:${emoji}`);
+      else reactions.push(`${m[2]}:-${emoji}`);
       return json(res, 204, {});
     }
     if ((m = /^\/v1\.0\/chats\/([^/]+)\/messages\/([^/]+)$/.exec(p)) && req.method === 'PATCH') {
@@ -240,7 +243,7 @@ async function main() {
   const answerMsg = say('yes', perm.id);
   await until(() => /Answered: allowed/.test(chat.find((m) => m.id === perm.id).body.content), 15_000, 'prompt marked answered');
   check(true, 'the prompt is edited to show the answer');
-  check(reactions.includes(answerMsg), 'your reply gets a like');
+  check(reactions.includes(`${answerMsg}:✅`), 'your answer gets a ✅');
   const done = await until(() => findBot(/finished:[\s\S]*answer: allowed/), 15_000, 'turn finished message');
   check(done, 'a finished turn of a chat started from Teams is reported');
   const sessions = (await api('/api/sessions')).sessions;
@@ -337,7 +340,10 @@ async function main() {
   const open6 = (await api('/api/bridge/attention', { headers: { authorization: `Bearer ${token}` } })).items.find((i) => i.detail === 'npm test');
   check(open6, 'the prompt is in the attention list');
   say(`what is waiting?<br>@@call assistant__overview {}<br>@@say One thing waits: npm test.`);
+  const askMsg = chat.at(-1).id;
   await until(() => findBot(/Claude<\/b> › One thing waits: npm test\./), 20_000, 'assistant reply');
+  await until(() => reactions.includes(`${askMsg}:✅`), 5000, 'done reaction');
+  check(reactions.indexOf(`${askMsg}:👀`) < reactions.indexOf(`${askMsg}:-👀`) && reactions.indexOf(`${askMsg}:-👀`) < reactions.indexOf(`${askMsg}:✅`), 'your message gets 👀 until the Assistant answers, then ✅', reactions.filter((x) => x.startsWith(askMsg)));
   check(true, 'plain text goes to the Assistant and its reply comes back to Teams');
   const sessions2 = (await api('/api/sessions')).sessions;
   const asst = sessions2.find((x) => x.name === 'Assistant');
@@ -419,6 +425,10 @@ async function main() {
     const t2 = chanSay('what is going on?<br>@@say Nothing waits on you.');
     await until(() => chan.find((x) => x.id === t2).replies.some((m) => /Nothing waits on you\./.test(txt(m))), 20_000, 'assistant reply in thread');
     check(true, "a new post goes to the Assistant, and its answer is a reply under that post");
+    check(thread().subject && /make docs|ask Bash/.test(thread().subject), "the chat's thread is named after the chat", thread().subject);
+    chanSay('/project demo: hello from the channel');
+    const pt = await until(() => chan.find((m) => m.bot && m.subject === 'Demo'), 20_000, 'project thread');
+    check(/<b>Demo<\/b>/.test(pt.body.content) || pt.attachments.length, "the coordinator's reply starts a thread named after the project");
   }
 
 }
