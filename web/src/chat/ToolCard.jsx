@@ -179,6 +179,38 @@ function childSessionId(result) {
 
 const STOPPED_RE = /^\s*(The user doesn't want to proceed with this tool use|\[Request interrupted by user)/;
 
+// The tool_result Claude Code returns when auto mode's safety classifier blocked the call.
+const CLASSIFIER_RE = /denied by the Claude Code auto mode classifier\.(?:\s*Reason:\s*(.+?)\.(?:\s+If you have|\s*$))?/is;
+
+/** Auto mode blocked this call: say so plainly, with the classifier's reason and a way to approve it. */
+function AutoModeBlocked({ item, reason }) {
+  const ctx = useContext(ChatCtx);
+  const [sent, setSent] = useState(false);
+  const allowed = item.allowed || sent;
+  const what = item.name === 'Bash' || item.name === 'PowerShell' ? 'this command' : 'this call';
+  return (
+    <div className="tool-blocked">
+      <span className="tb-text" title={reason || undefined}>
+        Auto mode blocked {what}
+        {reason ? <span className="muted">: {reason.replace(/^\[|\]$/g, '')}</span> : null}
+      </span>
+      {allowed ? (
+        <span className="muted tb-done">Allowed in this chat</span>
+      ) : !ctx.allowDenied ? null : (
+        <Button
+          size="sm"
+          title={`Allow ${what} for the rest of this chat and ask Claude to run it again`}
+          onClick={() => {
+            if (ctx.allowDenied?.(item.id)) setSent(true);
+          }}
+        >
+          Allow and run again
+        </Button>
+      )}
+    </div>
+  );
+}
+
 /** First meaningful line of a failed tool's result, for the collapsed row. */
 function errorLine(text) {
   const line = String(text).split('\n').map((l) => l.trim()).find(Boolean) || '';
@@ -257,6 +289,7 @@ export default function ToolCard({ item, cwd, children }) {
   // Stop (or a denial) makes the CLI answer the tool with its own "doesn't want to proceed" boilerplate.
   const stopped = !!result?.isError && STOPPED_RE.test(result.text || '');
   const status = stopped ? 'stopped' : result ? (result.isError ? 'error' : 'done') : item.perm && !item.perm.done ? 'waiting' : 'running';
+  const blocked = status === 'error' && !plan ? CLASSIFIER_RE.exec(result.text || '') : null;
   const summary = toolSummary(name, input, cwd);
   const body = open ? <ToolBody name={name} input={input} cwd={cwd} /> : null;
   const resultText = result?.text || '';
@@ -305,7 +338,8 @@ export default function ToolCard({ item, cwd, children }) {
       </button>
       {result?.images?.length > 0 && <ToolImages images={result.images} label={name.replace(/^mcp__([^_]+)__/, '$1 · ')} />}
       {stopped && !open && item.perm?.done !== 'deny' && <div className="tool-stopped">Stopped</div>}
-      {status === 'error' && !open && resultText && (
+      {blocked && <AutoModeBlocked item={item} reason={blocked[1]} />}
+      {status === 'error' && !blocked && !open && resultText && (
         <div className="tool-err" title={resultText} onClick={() => setOpen(true)}>
           {errorLine(resultText)}
         </div>
