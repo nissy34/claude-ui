@@ -445,6 +445,8 @@ app.post('/api/bridge-signin', (req, res) => {
   res.json({ ok: true });
 });
 if (config.bridgeApi) attention.mount(app);
+// The Assistant chat is always there (pinned in the sidebar), not only after the first Teams message.
+if (config.assistant) attention.assistant();
 
 // Artifact files, authorised by a per-session signature in the path (no cookie: sandboxed
 // HTML artifacts load their own CSS/JS from here with an opaque origin).

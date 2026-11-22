@@ -164,6 +164,8 @@ async function main() {
   const token = fs.readFileSync(tokenFile, 'utf8').trim();
   check((await api('/api/bridge/attention', { headers: { cookie: '' }, allowError: true })).status === 401, 'no token: refused');
   check((await api('/api/bridge/attention', { headers: { authorization: `Bearer ${token}`, origin: 'http://evil' }, allowError: true })).status === 403, 'a browser page: refused');
+  const first = (await api('/api/sessions')).sessions.find((x) => x.name === 'Assistant');
+  check(first?.pinned, 'the Assistant chat exists and is pinned from the start', first);
   const empty = await api('/api/bridge/attention', { headers: { authorization: `Bearer ${token}` } });
   check(Array.isArray(empty.items) && empty.items.length === 0, 'nothing is waiting at start');
 

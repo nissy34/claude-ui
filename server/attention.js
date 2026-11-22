@@ -367,6 +367,7 @@ export function createAttention({ store, engine, resolveDir, listProjects, deskt
   function assistant() {
     let s = [...store.sessions.values()].find((x) => x.meta.assistant && !x.meta.archived);
     if (!s) {
+      if (!config.assistant) throw new Error('The Assistant is turned off (CW_ASSISTANT=0).');
       s = store.create({ cwd: config.scratchDir, kind: 'chat', name: 'Assistant', model: config.assistantModel });
       s.meta.assistant = true;
       s.meta.customName = true;

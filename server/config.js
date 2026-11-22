@@ -83,6 +83,7 @@ export const config = {
   schedules: env.CW_SCHEDULES !== '0',
   desktopMcp: env.CW_DESKTOP_MCP !== '0',
   bridgeApi: env.CW_BRIDGE_API !== '0',
+  assistant: env.CW_ASSISTANT !== '0',
   assistantModel: env.CW_ASSISTANT_MODEL || 'haiku',
   assistantMayApprove: env.CW_ASSISTANT_APPROVE !== '0',
   internalToken: crypto.randomBytes(24).toString('hex'),
