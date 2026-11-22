@@ -99,6 +99,21 @@ app.use('/internal', (req, res, next) => {
   next();
 });
 
+// Find a session the way a model names one: the full id, a unique id prefix (chats often quote
+// the first 8 characters), or a unique chat name. Throws a helpful error when it is ambiguous.
+function findSession(ref) {
+  const id = String(ref ?? '').trim();
+  if (!id) return null;
+  const exact = store.get(id);
+  if (exact) return exact;
+  const all = [...store.sessions.values()];
+  const lower = id.toLowerCase();
+  let hits = lower.length >= 4 ? all.filter((s) => s.id.toLowerCase().startsWith(lower)) : [];
+  if (!hits.length) hits = all.filter((s) => String(s.meta.name || '').trim().toLowerCase() === lower);
+  if (hits.length > 1) throw new Error(`"${id}" matches ${hits.length} sessions: ${hits.slice(0, 5).map((s) => `${s.id} "${s.meta.name}"`).join(', ')}. Use the full session id.`);
+  return hits[0] || null;
+}
+
 function sessionSummary(s) {
   const j = s.toJSON();
   return { id: j.id, name: j.name, cwd: j.cwd, kind: j.kind, state: j.state || j.status, parentId: j.parentId || null, worktree: j.worktree || null, model: j.model || 'default', effort: j.effort || 'default', permissionMode: j.permissionMode || 'default' };
@@ -146,9 +161,9 @@ app.post(
       id = parentId;
       if (!id) throw new Error('This session has no parent chat. Ask the user in your reply instead.');
     }
-    const s = store.get(id);
+    const s = findSession(id);
     if (!s || s.meta.kind !== 'chat') {
-      throw new Error(`No chat session with id "${id}".${parentId ? ' To reach the chat that started this one, use id "parent".' : ''} list_sessions shows the ids of your child sessions.`);
+      throw new Error(`No chat session with id "${id}" on this server.${parentId ? ' To reach the chat that started this one, use id "parent".' : ''} list_sessions with all=true shows every chat here (a chat on another machine can't be reached).`);
     }
     if (s === sender) throw new Error('That is this session. To reach the chat that started this one, use id "parent".');
     const text = String(req.body?.message || '');
@@ -209,8 +224,8 @@ app.post(
 app.post(
   '/internal/sessions/:id/options',
   wrap(async (req, res) => {
-    const s = store.get(req.params.id);
-    if (!s || s.meta.kind !== 'chat') throw new Error('No such chat session');
+    const s = findSession(req.params.id);
+    if (!s || s.meta.kind !== 'chat') throw new Error(`No chat session with id "${req.params.id}". list_sessions with all=true shows every chat.`);
     const { model, effort, permissionMode } = req.body || {};
     if (model == null && effort == null && permissionMode == null) throw new Error('Give model, effort or permission_mode');
     const done = await s.setOptions({ model, effort, permissionMode });
@@ -222,8 +237,8 @@ app.post(
 app.post(
   '/internal/sessions/:id/control/:action',
   wrap(async (req, res) => {
-    const s = store.get(req.params.id);
-    if (!s) throw new Error('No such session. list_sessions shows the ids.');
+    const s = findSession(req.params.id);
+    if (!s) throw new Error(`No session with id "${req.params.id}". list_sessions with all=true shows every chat.`);
     const caller = store.get(req.headers['x-cw-session']);
     if (s === caller && req.params.action === 'stop') throw new Error('That is this session.');
     res.json({ ...(await controlSession(store, s, req.params.action, req.body || {}, caller ? `chat "${caller.meta.name}"` : 'another chat')), session: sessionSummary(s) });
@@ -233,8 +248,8 @@ app.post(
 app.get(
   '/internal/sessions/:id',
   wrap(async (req, res) => {
-    const s = store.get(req.params.id);
-    if (!s || s.meta.kind !== 'chat') throw new Error('No such chat session');
+    const s = findSession(req.params.id);
+    if (!s || s.meta.kind !== 'chat') throw new Error(`No chat session with id "${req.params.id}". list_sessions with all=true shows every chat.`);
     if (req.query.wait === '1') {
       const until = Date.now() + Math.min(Number(req.query.timeout) || 300, 1800) * 1000;
       // Stop early when the session is blocked on a question to the caller: nobody else will answer it.
@@ -389,9 +404,14 @@ app.post(
 const engine = new ProjectEngine(store);
 
 app.get('/internal/sessions', (req, res) => {
-  let list = [...store.sessions.values()];
-  if (req.query.parentId) list = list.filter((s) => s.meta.parentId === req.query.parentId);
-  res.json({ sessions: list.map(sessionSummary) });
+  const all = [...store.sessions.values()];
+  if (req.query.parentId) {
+    const kids = all.filter((s) => s.meta.parentId === req.query.parentId);
+    // The caller chooses the scope with all=true. An empty list alone reads as "there are no other
+    // chats", so say how to see them.
+    return res.json({ sessions: kids.map(sessionSummary), note: kids.length ? 'Only this session\'s children. Call with all=true for every chat.' : `This session has no child sessions. ${all.length - 1} other chat(s) exist on this server: call list_sessions with all=true to see them.` });
+  }
+  res.json({ sessions: all.map(sessionSummary) });
 });
 
 // ---------- scheduled tasks ----------

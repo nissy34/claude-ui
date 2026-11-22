@@ -39,6 +39,8 @@ jobs:
         run: npm run test:bridge
       - name: AI gateway mode (fake CLI, fake gateway)
         run: npm run test:gateway
+      - name: Chat-to-chat messaging test
+        run: npm run test:sessions
 
   ui:
     name: UI smoke test (headless Chrome)

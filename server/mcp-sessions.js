@@ -48,7 +48,7 @@ const TOOLS = [
     inputSchema: {
       type: 'object',
       properties: {
-        id: { type: 'string', description: 'Session id, or "parent" for the chat that started this one.' },
+        id: { type: 'string', description: 'Session id (full, or a unique prefix), a chat name, or "parent" for the chat that started this one.' },
         message: { type: 'string', description: 'The message. For a question, make it clear and self-contained.' },
         wait_for_reply: { type: 'boolean', description: 'Block until the other session replies, and return its reply. Default false.' },
         steer: { type: 'boolean', description: 'Steer immediately: if the other session is busy, stop its current turn and deliver this right away instead of queueing it. Only for urgent course corrections. Default false.' },
@@ -84,7 +84,7 @@ const TOOLS = [
   },
   {
     name: 'list_sessions',
-    description: 'List sessions. By default only the children of this session; set all=true for every session.',
+    description: 'List sessions on this server (chats on other machines are not included). By default only the children of this session; set all=true for every chat (do this to find a chat you did not start). send_to_session and read_session take a full id, a unique id prefix, or a chat name.',
     inputSchema: { type: 'object', properties: { all: { type: 'boolean' } } },
   },
 ];
