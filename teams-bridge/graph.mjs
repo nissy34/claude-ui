@@ -238,6 +238,17 @@ export class Graph {
     return this.call('POST', `/chats/${encodeURIComponent(chatId)}/messages`, { body: { contentType: 'html', content: html } });
   }
 
+  /** A message holding one Adaptive Card. */
+  sendCard(chatId, card) {
+    const id = `c${Date.now().toString(36)}`;
+    return this.call('POST', `/chats/${encodeURIComponent(chatId)}/messages`, { body: { contentType: 'html', content: `<attachment id="${id}"></attachment>` }, attachments: [{ id, contentType: 'application/vnd.microsoft.card.adaptive', contentUrl: null, content: JSON.stringify(card) }] });
+  }
+
+  editCard(chatId, messageId, card) {
+    const id = `c${Date.now().toString(36)}`;
+    return this.call('PATCH', `/chats/${encodeURIComponent(chatId)}/messages/${encodeURIComponent(messageId)}`, { body: { contentType: 'html', content: `<attachment id="${id}"></attachment>` }, attachments: [{ id, contentType: 'application/vnd.microsoft.card.adaptive', contentUrl: null, content: JSON.stringify(card) }] });
+  }
+
   edit(chatId, messageId, html) {
     return this.call('PATCH', `/chats/${encodeURIComponent(chatId)}/messages/${encodeURIComponent(messageId)}`, { body: { contentType: 'html', content: html } });
   }

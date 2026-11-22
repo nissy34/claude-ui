@@ -13,6 +13,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { Graph } from './graph.mjs';
+import { answeredCard, askCard, postCard } from './cards.mjs';
 import { HELP, TAG, askHtml, esc, md, parseCommand, permissionReply, plain, postHtml, resolvedHtml } from './text.mjs';
 
 const env = process.env;
@@ -31,6 +32,8 @@ const cfg = {
   allowPermissions: env.TEAMS_ALLOW_PERMISSIONS !== '0',
   defaultProject: env.TEAMS_DEFAULT_PROJECT || '',
   assistant: env.TEAMS_ASSISTANT !== '0',
+  cards: env.TEAMS_CARDS !== '0',
+  uiUrl: env.TEAMS_UI_LINK || env.CW_PUBLIC_URL || '',
   pingUrl: env.TEAMS_PING_URL || '',
   graphUrl: env.TEAMS_GRAPH_URL,
   loginUrl: env.TEAMS_LOGIN_URL,
@@ -97,9 +100,23 @@ async function waitForReply() {
 const graph = new Graph({ tenant: cfg.tenant, clientId: cfg.clientId, tokenFile: path.join(cfg.dir, 'token.json'), graphUrl: cfg.graphUrl, loginUrl: cfg.loginUrl, auth: cfg.auth, redirectUri: cfg.redirectUri, waitForReply, onAuth: reportAuth });
 let me = null;
 
-async function post(html, meta) {
-  const m = await graph.send(cfg.chatId, html);
-  st.sent[m.id] = { ...meta, html };
+let cardsWork = cfg.cards;
+async function post(html, meta, card) {
+  let m;
+  if (card && cardsWork) {
+    try {
+      m = await graph.sendCard(cfg.chatId, card);
+    } catch (e) {
+      // Some tenants refuse cards from users: fall back to formatted text for the rest of this run.
+      cardsWork = false;
+      log('[teams] cards refused, using text:', e.message);
+    }
+  }
+  if (!m) {
+    card = null;
+    m = await graph.send(cfg.chatId, html);
+  }
+  st.sent[m.id] = { ...meta, html, ...(card ? { card } : {}) };
   st.seen.push(m.id);
   save();
   return m.id;
@@ -138,7 +155,7 @@ async function sendAsk(item) {
   const code = st.nextCode++;
   st.codes[code] = item.id;
   st.items[item.id] = { code, kind: item.kind, open: true, msg: null };
-  const id = await post(askHtml(item, code, cfg), { kind: 'ask', item: item.id });
+  const id = await post(askHtml(item, code, cfg), { kind: 'ask', item: item.id }, askCard(item, code, cfg));
   st.items[item.id].msg = id;
   save();
   await ping(`#${code} needs you`, item.question || item.questions?.[0]?.question || item.detail || item.tool || item.server || '');
@@ -159,7 +176,8 @@ async function onResolved(ev) {
   const sent = it.msg && st.sent[it.msg];
   if (!sent) return;
   try {
-    await graph.edit(cfg.chatId, it.msg, resolvedHtml(sent.html, ev.answer, ev.by));
+    if (sent.card) await graph.editCard(cfg.chatId, it.msg, answeredCard(sent.card, ev.answer, ev.by));
+    else await graph.edit(cfg.chatId, it.msg, resolvedHtml(sent.html, ev.answer, ev.by));
   } catch (e) {
     // Editing can be refused (policy, old message). Confirm your own answers with a short line instead.
     if (ev.by === 'bridge') await post(`${TAG} ✓ #${it.code}: ${esc(ev.answer)}`, { kind: 'note' });
@@ -173,7 +191,7 @@ async function onEvent(ev) {
   if (ev.type === 'assistant') return post(`${TAG} ${md(ev.text)}`, { kind: 'assistant' });
   if (ev.type === 'notify' || ((ev.type === 'post' || ev.type === 'turn') && away())) {
     const target = ev.type === 'post' ? { type: 'project', id: ev.project.id, name: ev.project.name } : { type: 'chat', id: ev.session.id, name: ev.session.name };
-    await post(postHtml(ev), { kind: 'target', target });
+    await post(postHtml(ev), { kind: 'target', target }, postCard(ev, cfg));
     if (ev.type !== 'turn') await ping(target.name, ev.text);
   }
 }
@@ -335,7 +353,7 @@ async function handle(msg) {
       for (const item of a.items) {
         const it = st.items[item.id];
         if (!it) await sendAsk(item);
-        else await post(askHtml(item, it.code, cfg), { kind: 'ask', item: item.id });
+        else await post(askHtml(item, it.code, cfg), { kind: 'ask', item: item.id }, askCard(item, it.code, cfg));
       }
       return;
     }

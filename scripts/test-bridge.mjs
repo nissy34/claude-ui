@@ -68,7 +68,8 @@ const chat = []; // messages, oldest first
 const reactions = [];
 const edits = [];
 let tokenCalls = 0;
-let challenge = ''; // PKCE challenge from the sign-in link the bridge made
+let challenge = '';
+let refuseCards = false; // a tenant that doesn't let users post cards // PKCE challenge from the sign-in link the bridge made
 let refreshes = 0;
 let n = 0;
 const json = (res, code, body) => {
@@ -103,7 +104,8 @@ const graph = http.createServer((req, res) => {
     if ((m = /^\/v1\.0\/chats\/([^/]+)\/messages$/.exec(p))) {
       if (req.method === 'GET') return json(res, 200, { value: [...chat].reverse().slice(0, Number(url.searchParams.get('$top')) || 20) });
       const b = JSON.parse(data);
-      const msg = { id: `m${++n}`, messageType: 'message', createdDateTime: new Date(Date.now() + n).toISOString(), from: { user: { id: ME.id } }, body: b.body, attachments: [], bot: true };
+      if (refuseCards && b.attachments?.length) return json(res, 403, { error: { message: 'cards not allowed' } });
+      const msg = { id: `m${++n}`, messageType: 'message', createdDateTime: new Date(Date.now() + n).toISOString(), from: { user: { id: ME.id } }, body: b.body, attachments: b.attachments || [], bot: true };
       chat.push(msg);
       return json(res, 201, msg);
     }
@@ -114,7 +116,9 @@ const graph = http.createServer((req, res) => {
     if ((m = /^\/v1\.0\/chats\/([^/]+)\/messages\/([^/]+)$/.exec(p)) && req.method === 'PATCH') {
       const msg = chat.find((x) => x.id === m[2]);
       if (!msg) return json(res, 404, { error: { message: 'gone' } });
-      msg.body = JSON.parse(data).body;
+      const up = JSON.parse(data);
+      msg.body = up.body;
+      msg.attachments = up.attachments || [];
       edits.push(m[2]);
       return json(res, 204, {});
     }
@@ -129,7 +133,8 @@ function say(text, replyTo) {
   return id;
 }
 const botMsgs = () => chat.filter((m) => m.bot);
-const findBot = (re) => botMsgs().find((m) => re.test(m.body.content));
+const textOf = (m) => m.body.content + (m.attachments || []).map((a) => (a.contentType === 'application/vnd.microsoft.card.adaptive' ? a.content : '')).join('');
+const findBot = (re) => botMsgs().find((m) => re.test(textOf(m)));
 const lastBot = () => botMsgs().at(-1);
 
 // ---------- processes ----------
@@ -164,7 +169,7 @@ async function main() {
 
   console.log('Start the bridge: device code is blocked, so browser sign-in with a pasted address');
   bridge = spawn(process.execPath, [path.join(root, 'teams-bridge', 'bridge.mjs')], {
-    env: { ...env, CLAUDE_UI_URL: base, CW_BRIDGE_TOKEN_FILE: tokenFile, TEAMS_DATA_DIR: path.join(tmp, 'teams'), TEAMS_CLIENT_ID: 'client', TEAMS_TENANT_ID: 'tenant', TEAMS_GRAPH_URL: `http://127.0.0.1:${gport}/v1.0`, TEAMS_LOGIN_URL: `http://127.0.0.1:${gport}`, TEAMS_POLL_SECONDS: '2', TEAMS_AWAY_MINUTES: '0', TEAMS_AUTH: 'auto', TEAMS_ASSISTANT: '0' },
+    env: { ...env, CLAUDE_UI_URL: base, CW_BRIDGE_TOKEN_FILE: tokenFile, TEAMS_DATA_DIR: path.join(tmp, 'teams'), TEAMS_CLIENT_ID: 'client', TEAMS_TENANT_ID: 'tenant', TEAMS_GRAPH_URL: `http://127.0.0.1:${gport}/v1.0`, TEAMS_LOGIN_URL: `http://127.0.0.1:${gport}`, TEAMS_POLL_SECONDS: '2', TEAMS_AWAY_MINUTES: '0', TEAMS_AUTH: 'auto', TEAMS_ASSISTANT: '0', TEAMS_CARDS: '0' },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   bridge.stdout.on('data', (d) => (bridgeLog.push(String(d)), process.env.VERBOSE && process.stdout.write(`[bridge] ${d}`)));
@@ -278,7 +283,7 @@ async function main() {
   await new Promise((r) => bridge.once('exit', r));
   const count = botMsgs().length;
   bridge = spawn(process.execPath, [path.join(root, 'teams-bridge', 'bridge.mjs')], {
-    env: { ...env, CLAUDE_UI_URL: base, CW_BRIDGE_TOKEN_FILE: tokenFile, TEAMS_DATA_DIR: path.join(tmp, 'teams'), TEAMS_CLIENT_ID: 'client', TEAMS_TENANT_ID: 'tenant', TEAMS_GRAPH_URL: `http://127.0.0.1:${gport}/v1.0`, TEAMS_LOGIN_URL: `http://127.0.0.1:${gport}`, TEAMS_POLL_SECONDS: '2', TEAMS_AWAY_MINUTES: '0' },
+    env: { ...env, CLAUDE_UI_URL: base, CW_BRIDGE_TOKEN_FILE: tokenFile, TEAMS_DATA_DIR: path.join(tmp, 'teams'), TEAMS_CLIENT_ID: 'client', TEAMS_TENANT_ID: 'tenant', TEAMS_GRAPH_URL: `http://127.0.0.1:${gport}/v1.0`, TEAMS_LOGIN_URL: `http://127.0.0.1:${gport}`, TEAMS_POLL_SECONDS: '2', TEAMS_AWAY_MINUTES: '0', TEAMS_UI_LINK: 'http://bamba:8787' },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   bridge.stderr.on('data', (d) => process.stderr.write(`[bridge] ${d}`));
@@ -288,7 +293,10 @@ async function main() {
 
   console.log('The Assistant (bridge restarted with it on, the default)');
   say('/new demo: @@ask Bash {"command":"npm test"}');
-  const p6 = await until(() => findBot(/wants to use <b>Bash<\/b>:<br><code>npm test<\/code>/), 15_000, 'npm test prompt');
+  const p6 = await until(() => findBot(/Wants to use Bash[\s\S]*npm test/), 15_000, 'npm test card');
+  const card6 = JSON.parse(p6.attachments[0].content);
+  check(p6.attachments[0].contentType === 'application/vnd.microsoft.card.adaptive' && card6.type === 'AdaptiveCard', 'requests are posted as Adaptive Cards');
+  check(card6.actions?.[0]?.url?.startsWith('http://bamba:8787/#s='), 'the card links to the chat in the web UI', card6.actions);
   const open6 = (await api('/api/bridge/attention', { headers: { authorization: `Bearer ${token}` } })).items.find((i) => i.detail === 'npm test');
   check(open6, 'the prompt is in the attention list');
   say(`what is waiting?<br>@@call assistant__overview {}<br>@@say One thing waits: npm test.`);
@@ -303,10 +311,17 @@ async function main() {
   const argv = log.find((x) => x.argv?.includes('--allowedTools') && x.argv.includes('mcp__assistant__*'))?.argv || [];
   check(argv[argv.indexOf('--tools') + 1] === '', 'the Assistant has no file or shell tools');
   say(`yes run the tests<br>@@call assistant__answer_request {"id":"${open6.id}","quote":"yes run the tests","behavior":"allow"}<br>@@say Done, npm test is running.`);
-  await until(() => /Answered: allowed/.test(chat.find((m) => m.id === p6.id).body.content), 20_000, 'prompt answered by the Assistant');
+  await until(() => /Answered: allowed/.test(textOf(chat.find((m) => m.id === p6.id))), 20_000, 'prompt answered by the Assistant');
+  check(!JSON.parse(chat.find((m) => m.id === p6.id).attachments[0].content).actions, 'the answered card shows the answer and drops its link');
   check(true, 'the Assistant answers a request when the user clearly said so');
   await until(() => findBot(/Done, npm test is running\./), 10_000, 'assistant confirmation');
   check(true, 'and confirms in Teams');
+
+  console.log('A tenant that refuses cards gets formatted text');
+  refuseCards = true;
+  say('/new demo: @@ask Bash {"command":"make lint"}');
+  const p7 = await until(() => findBot(/wants to use <b>Bash<\/b>:<br><code>make lint<\/code>/), 15_000, 'text fallback');
+  check(!p7.attachments.length, 'the request falls back to a text message');
 }
 
 main()

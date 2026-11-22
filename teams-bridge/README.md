@@ -11,7 +11,7 @@ Talk to your agents from a Microsoft Teams chat. The bridge runs next to Claude 
 
 ## What it does
 
-**Things waiting on you show up in the chat**, each with a short number:
+**Things waiting on you show up in the chat as cards** (Adaptive Cards: a title, the command or options laid out, an "Open in web UI" link when `CW_PUBLIC_URL` or `TEAMS_UI_LINK` is set), each with a short number. The cards are read-only, because buttons need a registered Teams bot; you answer by replying. If your tenant doesn't let users post cards, the bridge falls back to formatted text by itself (`TEAMS_CARDS=0` forces text).
 
 | In Claude UI | In Teams | You reply |
 | --- | --- | --- |
@@ -128,6 +128,8 @@ If your company has a **sign-in frequency** policy (for example "sign in again e
 | `TEAMS_CHAT_ID` | `48:notes` | the chat to use |
 | `TEAMS_AUTH` | `browser` | `browser`, `device` (device code) or `auto` (device code, then browser) |
 | `TEAMS_REDIRECT_URI` | `http://localhost` | must match the app registration |
+| `TEAMS_CARDS` | `1` | post requests and updates as Adaptive Cards; `0` = formatted text |
+| `TEAMS_UI_LINK` | `CW_PUBLIC_URL` | web UI address for the cards' links, e.g. `http://bamba:8787` |
 | `TEAMS_ASSISTANT` | `1` | plain text goes to the Assistant; `0` = to the last target |
 | `TEAMS_DEFAULT_PROJECT` | the only project | with the Assistant off: who gets plain text before you pick with `/to` |
 | `TEAMS_AWAY_MINUTES` | `5` | hold questions while you use the web UI; `0` sends at once |
