@@ -1435,6 +1435,7 @@ function handleChat(ws, s) {
       else if (msg.t === 'queue_now') await s.sendQueuedNow(msg.id);
       else if (msg.t === 'queue_remove') s.removeQueued(msg.id);
       else if (msg.t === 'perm') s.answerPermission(msg);
+      else if (msg.t === 'allow_denied') await s.allowDenied(msg);
       else if (msg.t === 'elicit') s.answerElicit(msg);
       else if (msg.t === 'interrupt') await s.interrupt();
       else if (msg.t === 'mode') await s.setMode(msg.mode);

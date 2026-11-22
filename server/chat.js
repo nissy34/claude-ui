@@ -16,6 +16,7 @@ import { resolveCommand } from './launch.js';
 import { withOpener } from './opener.js';
 import { toolResultParts } from './tool-images.js';
 import { elicitationEvent, elicitationResponse, mcpAuthMethods, slimServers } from './mcp-admin.js';
+import { allowRuleFor, withAllowRules } from './allow-rules.js';
 
 const CHAT_DIR = path.join(config.dataDir, 'chats');
 fs.mkdirSync(CHAT_DIR, { recursive: true });
@@ -410,7 +411,8 @@ export class ChatSession {
       if (proj?.allowed) allowed.push(...proj.allowed);
       if (allowed.length) args.push('--allowedTools', allowed.join(','));
       if (proj?.disallowed?.length) args.push('--disallowedTools', proj.disallowed.join(','));
-      if (proj?.settings) args.push('--settings', JSON.stringify(proj.settings));
+      const settings = withAllowRules(proj?.settings, m.allowRules);
+      if (settings) args.push('--settings', JSON.stringify(settings));
       if (proj && typeof proj.tools === 'string') args.push('--tools', proj.tools);
       for (const d of proj?.addDirs || []) args.push('--add-dir', d);
     }
@@ -976,6 +978,38 @@ export class ChatSession {
     this.store.save();
     this.broadcastState();
     return true;
+  }
+
+  /**
+   * The user approved a call that auto mode's classifier blocked. Add a narrow allow rule for this
+   * chat (the exact Bash command, the file, the site), which Claude Code checks before the
+   * classifier, then ask Claude to run it again. The rule is applied to the running process
+   * (apply_flag_settings) and passed with --settings on every later start of this chat.
+   */
+  async allowDenied({ toolUseId }) {
+    const ev = this.events.find((e) => e.k === 'block' && e.block?.type === 'tool_use' && e.block.id === toolUseId);
+    if (!ev) return;
+    const rule = allowRuleFor(ev.block.name, ev.block.input, this.meta.cwd);
+    if (!rule) return;
+    const m = this.meta;
+    m.allowRules = [...new Set([...(m.allowRules || []), rule])].slice(-50);
+    this.record({ k: 'allowed', toolUseId, rule });
+    if (this.proc) {
+      try {
+        await this.control({ subtype: 'apply_flag_settings', settings: { permissions: { allow: m.allowRules } } });
+      } catch {
+        // An older CLI without live settings: restart it so the next message launches with the rule.
+        if (this.isBusy()) await this.interrupt();
+        await this.stopAndWait();
+      }
+    }
+    const cmd = ev.block.name === 'Bash' || ev.block.name === 'PowerShell' ? ev.block.input?.command : null;
+    const text = cmd
+      ? `I approved this blocked command. Run it again:\n\n${cmd}`
+      : `I approved the blocked ${ev.block.name} call. Run it again.`;
+    this.submit({ text });
+    this.store.save();
+    this.broadcastState();
   }
 
   answerPermission({ reqId, behavior, updatedInput, message, always }) {

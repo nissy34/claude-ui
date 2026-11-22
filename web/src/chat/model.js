@@ -87,6 +87,11 @@ export function buildItems(events, deltas, offset = 0) {
         if (it) it.done = e.action;
         break;
       }
+      case 'allowed': {
+        const t = tools.get(e.toolUseId);
+        if (t) t.allowed = e.rule;
+        break;
+      }
       case 'perm_done': {
         const p = perms.get(e.reqId);
         if (p) p.done = e.behavior;

@@ -684,10 +684,12 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
       },
       bgTasks,
       openSession: (id) => onSelect(id),
+      // Auto mode blocked a call and the user approves it: allow it in this chat and run it again.
+      allowDenied: (toolUseId) => send({ t: 'allow_denied', toolUseId }),
       parentId: meta.parentId || null,
       verbose,
     }),
-    [meta.cwd, meta.parentId, onSelect, verbose, bgTasks]
+    [meta.cwd, meta.parentId, onSelect, verbose, bgTasks, send]
   );
   useEffect(() => {
     const onKey = (e) => {
