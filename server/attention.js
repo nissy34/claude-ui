@@ -23,6 +23,11 @@ const clip = (s, n) => {
   s = String(s ?? '');
   return s.length > n ? `${s.slice(0, n - 1)}…` : s;
 };
+/** Split a leading Markdown blockquote ("> …" lines, as a quote reply sends) from the rest: [quote lines or '', rest]. */
+const splitQuote = (text) => {
+  const m = /^((?:>[^\n]*(?:\n|$))+)\n*/.exec(text || '');
+  return m ? [m[1].trimEnd(), text.slice(m[0].length)] : ['', text];
+};
 
 let token = process.env.CW_BRIDGE_TOKEN || '';
 if (!token) {
@@ -359,8 +364,12 @@ export function createAttention({ store, engine, resolveDir, listProjects, deskt
         if (!text) throw new Error('Message is empty');
         const s = assistant();
         s.meta.teamsReply = true;
-        s.meta.lastUserText = text;
-        const r = s.deliver({ text: a.context ? `${String(a.context).slice(0, 2000)}\n\n${text}` : text });
+        // A Teams quote reply arrives as a "> quoted" blockquote on top. Only your own words below it can
+        // back answer_request's quote, and the blockquote stays first so the web UI shows it as a quote.
+        const [quoted, own] = splitQuote(text);
+        s.meta.lastUserText = own;
+        const body = a.context ? `${String(a.context).slice(0, 2000)}\n\n${own}` : own;
+        const r = s.deliver({ text: quoted ? `${quoted}\n\n${body}` : body });
         return { ok: true, target: { type: 'chat', id: s.id, name: s.meta.name }, queued: !!r?.queued };
       }
       case 'folders':
