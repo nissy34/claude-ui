@@ -21,6 +21,8 @@ FROM ubuntu:24.04
 ARG CLAUDE_CODE_VERSION=latest
 # 0 = leave out the built-in browser (Chromium, about 400 MB).
 ARG WITH_BROWSER=1
+# 0 = leave out the docker CLI (chats run docker through the host's socket).
+ARG WITH_DOCKER=1
 # Anything else your projects or MCP servers need, e.g. "golang make jq".
 ARG EXTRA_APT_PACKAGES=""
 
@@ -39,6 +41,20 @@ RUN set -eux; \
 # uv / uvx, for Python-based MCP servers (e.g. "command": "uvx" in your MCP config).
 RUN python3 -m venv /opt/uv && /opt/uv/bin/pip install --no-cache-dir uv \
  && ln -s /opt/uv/bin/uv /opt/uv/bin/uvx /usr/local/bin/
+
+# The docker CLI with the compose and buildx plugins, from Docker's own apt
+# repository. No daemon: docker-compose.yml mounts the host's Docker socket, so
+# containers a chat starts run on the host, next to this one.
+RUN if [ "$WITH_DOCKER" = 1 ]; then \
+      set -eux; \
+      install -m 0755 -d /etc/apt/keyrings; \
+      curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc; \
+      echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable" \
+        > /etc/apt/sources.list.d/docker.list; \
+      apt-get update; \
+      apt-get install -y --no-install-recommends docker-ce-cli docker-buildx-plugin docker-compose-plugin; \
+      rm -rf /var/lib/apt/lists/*; \
+    fi
 
 RUN npm install -g --no-audit --no-fund @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} \
  && npm cache clean --force
