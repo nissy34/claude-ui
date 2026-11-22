@@ -83,7 +83,7 @@ export function removePermissionRule(cwd, { scope, behavior, rule }) {
 }
 
 // ---------- MCP servers (structured) ----------
-const homeConfigPath = () => (process.env.CLAUDE_CONFIG_DIR ? path.join(config.claudeConfigDir, '.claude.json') : path.join(path.dirname(config.claudeConfigDir), '.claude.json'));
+export const homeConfigPath = () => (process.env.CLAUDE_CONFIG_DIR ? path.join(config.claudeConfigDir, '.claude.json') : path.join(path.dirname(config.claudeConfigDir), '.claude.json'));
 
 function statusMap(text) {
   const out = {};

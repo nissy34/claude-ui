@@ -28,6 +28,7 @@ import { browserAvailable } from './browser.js';
 import { listArtifacts, publishArtifact, rawHandler, rawUrl, writtenPaths } from './artifacts.js';
 import * as admin from './claude-admin.js';
 import { McpAdmin, onSignedIn, stopAllAdmins } from './mcp-admin.js';
+import { tokenKeeper } from './token-keeper.js';
 import { getModels } from './models.js';
 import { sideChat } from './side-chat.js';
 import { prStatus, mergeWhenReady } from './pr-status.js';
@@ -911,8 +912,21 @@ app.post(
     res.json({ ...out, ...a.snapshot() });
   })
 );
+// Settings → Sign-ins: keep MCP logins refreshed before they expire (server/token-keeper.js).
+app.get('/api/sign-ins', wrap(async (req, res) => res.json(tokenKeeper.status())));
+app.post(
+  '/api/sign-ins/:action',
+  wrap(async (req, res) => {
+    const act = req.params.action;
+    if (act === 'enable') tokenKeeper.setEnabled(!!req.body?.enabled);
+    else if (act === 'refresh') await tokenKeeper.refresh(String(req.body?.id || ''), { manual: true });
+    else throw new Error('Unknown action');
+    res.json(tokenKeeper.status());
+  })
+);
 // After a sign-in anywhere, running chats (and other folders' helpers) pick the server up again.
 onSignedIn((name, from) => {
+  tokenKeeper.signedIn(name);
   const hosts = [...[...store.sessions.values()].filter((s) => s.meta.kind === 'chat' && s.running), ...McpAdmin.all().filter((a) => a.proc)];
   for (const h of hosts) {
     if (h === from) continue;
@@ -1364,6 +1378,7 @@ if (config.schedules) schedules.startScheduler(async (t) => {
 
 server.listen(config.port, config.host, () => {
   startPrSweep(store);
+  tokenKeeper.start();
   const h = ['0.0.0.0', '::', ''].includes(config.host) ? '127.0.0.1' : config.host.includes(':') ? `[${config.host}]` : config.host;
   config.internalUrl = `http://${h}:${config.port}`;
   console.log(`claude-web listening on http://${config.host}:${config.port}`);
@@ -1383,6 +1398,7 @@ function shutdown(sig) {
   shuttingDown = true;
   console.log(`${sig}: saving sessions and shutting down`);
   store.shutdown();
+  tokenKeeper.stop();
   stopAllAdmins();
   browser.shutdown();
   server.close();
