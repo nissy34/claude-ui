@@ -408,7 +408,7 @@ async function main() {
     await gone;
     const dir2 = path.join(tmp, 'teams'); // the same state as in chat mode: switching must start fresh
     bridge = spawn(process.execPath, [path.join(root, 'teams-bridge', 'bridge.mjs')], {
-      env: { ...env, CLAUDE_UI_URL: base, CW_BRIDGE_TOKEN_FILE: tokenFile, TEAMS_DATA_DIR: dir2, TEAMS_CLIENT_ID: 'client', TEAMS_TENANT_ID: 'tenant', TEAMS_GRAPH_URL: `http://127.0.0.1:${gport}/v1.0`, TEAMS_LOGIN_URL: `http://127.0.0.1:${gport}`, TEAMS_POLL_SECONDS: '2', TEAMS_AWAY_MINUTES: '0', TEAMS_CHANNEL: 'Eng / Claude', TEAMS_PING_URL: `http://127.0.0.1:${gport}/ping`, TEAMS_FLOW_URL: `http://127.0.0.1:${gport}/flow` },
+      env: { ...env, CLAUDE_UI_URL: base, CW_BRIDGE_TOKEN_FILE: tokenFile, TEAMS_DATA_DIR: dir2, TEAMS_CLIENT_ID: 'client', TEAMS_TENANT_ID: 'tenant', TEAMS_GRAPH_URL: `http://127.0.0.1:${gport}/v1.0`, TEAMS_LOGIN_URL: `http://127.0.0.1:${gport}`, TEAMS_POLL_SECONDS: '2', TEAMS_AWAY_MINUTES: '0', TEAMS_CHANNEL: 'Eng / Claude', TEAMS_PING_URL: `http://127.0.0.1:${gport}/ping`, TEAMS_FLOW_URL: `http://127.0.0.1:${gport}/flow`, TEAMS_FLOW_CHAT_ID: 'flow-chat' },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     bridge.stdout.on('data', (d) => bridgeLog.push(String(d)));
@@ -438,6 +438,17 @@ async function main() {
     thread().replies.push({ id: `w${++n}`, messageType: 'message', createdDateTime: new Date(Date.now() + n).toISOString(), from: { application: { displayName: 'Workflows' } }, body: { contentType: 'html', content: `<p>cw:${JSON.stringify(yes2.data).replace(/"/g, '&quot;')}</p>` } });
     await until(async () => !(await api('/api/bridge/attention', { headers: { authorization: `Bearer ${token}` } })).items.some((i) => i.detail === 'make site'), 15_000, 'make site answered');
     check(true, "the workflow's reply in the thread answers the request");
+    // The clean way: the workflow posts its "✅ Yes" card (data hidden) in the Workflows chat; the thread gets a quote reply.
+    chanSay('@@ask Bash {"command":"make site2"}', t1);
+    const wf2 = await until(() => flowRaw.find((x) => JSON.stringify(x).includes('make site2')), 15_000, 'workflow card 2');
+    const no2 = wf2.attachments[0].content.actions.find((a) => a.title === 'No');
+    const doneCard = no2.data.done.replace('CWDATA', Buffer.from(JSON.stringify({ ...no2.data, text: 'not now' })).toString('base64'));
+    check(/✅ No/.test(doneCard) && /make site2/.test(doneCard) && !/"cw"/.test(JSON.stringify(JSON.parse(doneCard).body.filter((b) => b.isVisible !== false))), 'the confirmation card shows "✅ No" and the question, with the data hidden');
+    flowMsgs.push({ id: `w${++n}`, messageType: 'message', createdDateTime: new Date(Date.now() + n).toISOString(), from: { application: { displayName: 'Workflows' } }, body: { contentType: 'html', content: '<attachment id="x"></attachment>' }, attachments: [{ id: 'x', contentType: 'application/vnd.microsoft.card.adaptive', content: doneCard }] });
+    await until(async () => !(await api('/api/bridge/attention', { headers: { authorization: `Bearer ${token}` } })).items.some((i) => i.detail === 'make site2'), 15_000, 'make site2 answered');
+    check(true, 'tapping No answers the request (with the reason)');
+    const q2 = await until(() => thread().replies.find((m) => (m.attachments || []).some((a) => a.contentType === 'messageReference') && /✓ denied/.test(m.body.content)), 10_000, 'quote reply');
+    check(q2, 'the thread gets a quote reply to the question with the answer');
     chanSay('now the readme<br>@@say continued in the thread', t1);
     await until(() => thread().replies.some((m) => /continued in the thread/.test(txt(m))), 15_000, 'follow-up in thread');
     check(true, 'other text in the thread goes to that chat');

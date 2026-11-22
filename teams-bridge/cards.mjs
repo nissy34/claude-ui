@@ -119,7 +119,11 @@ export function flowCard(item, nonce, { allowPermissions = true, uiUrl } = {}) {
   if (!base) return null;
   const body = base.body.slice(0, -1); // everything but the "reply to this message" hint
   // `say` is what the workflow's reply shows in the thread ("✅ Yes"); the bridge reads the rest.
-  const submit = (title, data, style) => ({ type: 'Action.Submit', title, data: { cw: nonce, say: title, ...data }, ...(style ? { style } : {}) });
+  // `done` is the small card the workflow posts after a tap ("✅ Yes"): the workflow puts what you
+  // tapped, base64, in place of CWDATA, in a hidden line the bridge reads. Nobody sees JSON.
+  const about = clip(item.kind === 'question' ? item.questions?.[0]?.question : item.kind === 'decision' ? item.question : item.kind === 'permission' ? `${item.tool}${item.detail ? `: ${item.detail}` : ''}` : item.kind === 'plan' ? 'The plan' : item.server || '', 160);
+  const done = (say) => JSON.stringify({ type: 'AdaptiveCard', $schema: 'http://adaptivecards.io/schemas/adaptive-card.json', version: '1.4', body: [T(`✅ ${say}`, { weight: 'Bolder' }), ...(about ? [T(about, { size: 'Small', isSubtle: true, spacing: 'None' })] : []), { type: 'TextBlock', text: 'cw64:CWDATA', isVisible: false }] });
+  const submit = (title, data, style) => ({ type: 'Action.Submit', title, data: { cw: nonce, say: data.say || title, done: done(data.say || title), ...data }, ...(style ? { style } : {}) });
   const actions = [];
   switch (item.kind) {
     case 'permission':

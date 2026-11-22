@@ -151,7 +151,7 @@ async function nameThread(t) {
 async function post(html, meta, card, root) {
   root = rootFor(meta, root);
   const subject = chan && !root && meta.thread ? threadName(meta.thread) : undefined;
-  const send = (c) => (chan ? graph.channelSend(chan, root, html, c, subject) : c ? graph.sendCard(cfg.chatId, c) : graph.send(cfg.chatId, html));
+  const send = (c) => (chan ? graph.channelSend(chan, root, html, c, subject, c ? null : meta.quote) : c ? graph.sendCard(cfg.chatId, c) : graph.send(cfg.chatId, html, meta.quote));
   let m;
   if (card && cardsWork) {
     try {
@@ -284,14 +284,24 @@ async function onResolved(ev) {
   save();
   const sent = it.msg && st.sent[it.msg];
   if (!sent) return;
+  let edited = false;
   try {
     if (chan) await graph.channelEdit(chan, it.msg, sent.root, sent.card ? null : resolvedHtml(sent.html, ev.answer, ev.by), sent.card ? answeredCard(sent.card, ev.answer, ev.by) : null);
     else if (sent.card) await graph.editCard(cfg.chatId, it.msg, answeredCard(sent.card, ev.answer, ev.by));
     else await graph.edit(cfg.chatId, it.msg, resolvedHtml(sent.html, ev.answer, ev.by));
-  } catch (e) {
-    // Editing can be refused (policy, old message, no ChannelMessage.ReadWrite). Say it with a short line instead.
-    if (ev.by === 'bridge' || chan) await post(`${TAG} ✓ ${ev.by === 'bridge' ? 'Answered' : 'Answered in the web UI'}: ${esc(ev.answer)}`, { kind: 'note' }, null, chan ? sent.root || it.msg : undefined);
+    edited = true;
+  } catch {
+    // Editing can be refused (policy, old message, no ChannelMessage.ReadWrite).
   }
+  // A quote reply to the request with the answer: when you answered with a button or in the web UI
+  // (in channel mode, always then), or when the request couldn't be marked. Not when you just replied
+  // in Teams yourself: your reply and its ✅ already say it.
+  const typed = ev.by === 'bridge' && !it.viaFlow;
+  if (typed ? chan || edited : edited && !chan) return;
+  const quote = { id: it.msg, preview: plain(sent.html).replace(/\s+/g, ' ').trim(), user: me ? { id: me.id, displayName: me.displayName } : null };
+  const line = `${TAG} ✓ ${ev.by === 'bridge' ? '' : 'In the web UI: '}${esc(ev.answer)}`;
+  const where = chan ? sent.root || it.msg : undefined;
+  await post(line, { kind: 'note', quote }, null, where).catch(() => post(line, { kind: 'note' }, null, where));
 }
 
 async function onEvent(ev) {
@@ -640,6 +650,15 @@ async function flowChat() {
 }
 
 function parseFlow(text) {
+  // The workflow's "✅ Yes" card carries what you tapped as base64 in a hidden line.
+  const b64 = /cw64:([A-Za-z0-9+/=_-]{8,})/.exec(text);
+  if (b64) {
+    try {
+      return JSON.parse(Buffer.from(b64[1], 'base64').toString('utf8'));
+    } catch {
+      return null;
+    }
+  }
   const i = text.indexOf('cw:');
   if (i < 0) return null;
   const a = text.indexOf('{', i);
@@ -654,7 +673,7 @@ function parseFlow(text) {
 
 /** A "cw:{…}" line the workflow posted with what you tapped. True when it was one. */
 async function flowReply(m) {
-  const d = parseFlow(plain(m.body?.content));
+  const d = parseFlow(`${plain(m.body?.content)} ${(m.attachments || []).map((a) => (typeof a.content === 'string' ? a.content : JSON.stringify(a.content || ''))).join(' ')}`);
   if (!d) return false;
   // Only answers that carry the secret of a card the bridge posted count.
   const n = st.nonces[d.cw];
@@ -662,14 +681,14 @@ async function flowReply(m) {
   delete st.nonces[d.cw];
   save();
   const it = st.items[n.id];
+  if (it) it.viaFlow = true;
   const text = it ? flowAnswer(it.item || {}, d) : null;
   if (text) await here.run({ root: it.thread || null, msgId: null, msgRoot: null }, () => answer(n.id, text, null));
   return true;
 }
 
 async function flowLoop() {
-  // In channel mode the workflow replies in the request's thread, which the bridge reads anyway.
-  if (!cfg.flowUrl || chan) return;
+  if (!cfg.flowUrl) return;
   for (;;) {
     try {
       const id = await flowChat();

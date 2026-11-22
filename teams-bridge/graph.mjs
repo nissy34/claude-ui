@@ -243,8 +243,8 @@ export class Graph {
     return this.call('GET', `/chats/${encodeURIComponent(chatId)}/messages?$top=${top}&$orderby=createdDateTime desc`);
   }
 
-  send(chatId, html) {
-    return this.call('POST', `/chats/${encodeURIComponent(chatId)}/messages`, { body: { contentType: 'html', content: html } });
+  send(chatId, html, quote) {
+    return this.call('POST', `/chats/${encodeURIComponent(chatId)}/messages`, this.msgBody(html, null, quote));
   }
 
   /** A message holding one Adaptive Card. */
@@ -279,9 +279,9 @@ export class Graph {
   }
 
   /** Post in a channel: a new thread, or a reply in thread `root`. */
-  channelSend(c, root, html, card, subject) {
+  channelSend(c, root, html, card, subject, quote) {
     const url = root ? `${this.chanPath(c)}/${encodeURIComponent(root)}/replies` : this.chanPath(c);
-    return this.call('POST', url, { ...this.msgBody(html, card), ...(subject && !root ? { subject } : {}) });
+    return this.call('POST', url, { ...this.msgBody(html, card, quote), ...(subject && !root ? { subject } : {}) });
   }
 
   /** Rename a thread (its first post's subject). Needs ChannelMessage.ReadWrite. */
@@ -299,7 +299,12 @@ export class Graph {
     return this.call('POST', `${base}/${on ? 'setReaction' : 'unsetReaction'}`, { reactionType: emoji });
   }
 
-  msgBody(html, card) {
+  /** quote: { id, preview, user: { id, displayName } } shows the message as a quote above the text (a "quote reply"). */
+  msgBody(html, card, quote) {
+    if (quote && !card) {
+      const ref = { id: quote.id, contentType: 'messageReference', contentUrl: null, content: JSON.stringify({ messageId: quote.id, messagePreview: String(quote.preview || '').slice(0, 120), messageSender: { user: quote.user || null } }) };
+      return { body: { contentType: 'html', content: `<attachment id="${quote.id}"></attachment>${html}` }, attachments: [ref] };
+    }
     if (!card) return { body: { contentType: 'html', content: html } };
     const id = `c${Date.now().toString(36)}`;
     return { body: { contentType: 'html', content: `<attachment id="${id}"></attachment>` }, attachments: [{ id, contentType: 'application/vnd.microsoft.card.adaptive', contentUrl: null, content: JSON.stringify(card) }] };

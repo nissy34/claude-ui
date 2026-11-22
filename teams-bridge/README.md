@@ -130,7 +130,7 @@ TEAMS_CHANNEL="My team / Claude"
 
 ### Buttons (optional, a Teams workflow)
 
-Cards the bridge posts itself can't have working buttons (that needs a registered bot). A Power Automate workflow can: the bridge sends each request to the workflow (an outbound HTTPS call), the workflow shows it as a card with buttons in your chat with the Workflows bot and waits, then posts what you tapped back into that chat, where the bridge reads it. The buttons come from the request: Yes / Always / No and a reason box for tool approvals, the options and a text box for questions, one button per option for decisions, Sign in / Done / Cancel for sign-ins. Because the Workflows bot posts the card, your phone also rings.
+Cards the bridge posts itself can't have working buttons (that needs a registered bot). A Power Automate workflow can: the bridge sends each request to the workflow (an outbound HTTPS call), the workflow shows it as a card with buttons in your chat with the Workflows bot and waits, then posts a small "✅ Yes" card back into that chat, where the bridge reads it. The buttons come from the request: Yes / Always / No and a reason box for tool approvals, the options and a text box for questions, one button per option for decisions, Sign in / Done / Cancel for sign-ins. Because the Workflows bot posts the card, your phone also rings.
 
 Make the workflow once, at make.powerautomate.com > Create > Instant cloud flow > skip:
 
@@ -139,16 +139,12 @@ Make the workflow once, at make.powerautomate.com > Create > Instant cloud flow 
    - Post as **Flow bot**, Post in **Chat with Flow bot**, Recipient: you.
    - Message: an expression, `string(triggerBody()?['attachments']?[0]?['content'])`.
    - Update message: `✓ Sent`. Should update card: **Yes**.
-3. Action **Post message in a chat or channel**:
+3. Action **Post card in a chat or channel** (the "✅ Yes" confirmation):
    - Post as **Flow bot**, Post in **Chat with Flow bot**, Recipient: you.
-   - Message: an expression, `concat('cw:', string(body('Post_card_in_a_chat_or_channel_and_wait_for_a_response')?['data']))`. Use your step 2 action's name, with spaces as underscores (often `Post_adaptive_card_and_wait_for_a_response`).
+   - Adaptive Card: an expression, `replace(body('Post_adaptive_card_and_wait_for_a_response')?['data']?['done'], 'CWDATA', base64(string(body('Post_adaptive_card_and_wait_for_a_response')?['data'])))`. Use your step 2 action's name, with spaces as underscores.
 4. Save, then copy the trigger's URL into `TEAMS_FLOW_URL`.
 
-**In channel mode**, make step 3 **Reply to a message in a channel** instead, so your tap shows up under the question in its thread (and the bridge reads it there):
-   - Post as **Flow bot**. Team: `triggerBody()?['reply']?['team']`. Channel: `triggerBody()?['reply']?['channel']`. Message: `triggerBody()?['reply']?['message']` (each as an expression; pick "Enter custom value" first).
-   - Reply: `concat('✅ ', body('Post_adaptive_card_and_wait_for_a_response')?['data']?['say'], '<br><sub>cw:', string(body('Post_adaptive_card_and_wait_for_a_response')?['data']), '</sub>')`. It shows "✅ Yes" (or what you picked) with the bridge's code small underneath.
-
-In chat mode, the bridge finds the chat with the Workflows bot by itself after the first card. If it doesn't, list your chats (`bridge.mjs chats`) and set `TEAMS_FLOW_CHAT_ID`. Each card carries a random secret, and only answers that echo it back count. Requests still appear in your own chat too, where replying keeps working. With `TEAMS_FLOW_URL` set, `TEAMS_PING_URL` isn't needed for requests.
+The confirmation card shows what you tapped; what the bridge needs rides hidden inside it. The request's thread (or chat) then gets a quote reply with your answer. The bridge finds the chat with the Workflows bot by itself after the first card. If it doesn't, list your chats (`bridge.mjs chats`) and set `TEAMS_FLOW_CHAT_ID`. Each card carries a random secret, and only answers that echo it back count. Requests still appear in your own chat too, where replying keeps working. With `TEAMS_FLOW_URL` set, `TEAMS_PING_URL` isn't needed for requests.
 
 If a request is answered somewhere else first, its workflow card keeps its buttons. Tapping one then just says it was already answered.
 
