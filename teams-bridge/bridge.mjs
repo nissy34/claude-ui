@@ -127,22 +127,23 @@ function rootFor(meta, root) {
 
 /** A thread's name: the project's name, or the chat's title. */
 const threadName = (t) => String(t.name || 'Chat').replace(/\s+/g, ' ').trim().slice(0, 120);
-let renameWorks = true;
+let renameRefused = 0; // when renaming was last refused (no ChannelMessage.ReadWrite); retried hourly
 
 /** Keep a thread's name in step with the chat's title (chats get a proper title after their first turn). */
 async function nameThread(t) {
   const key = topicKey(t);
   const id = st.topics[key];
   const name = threadName(t);
-  if (!chan || !id || !renameWorks || st.names[key] === name || !t.name) return;
+  if (!chan || !id || Date.now() - renameRefused < 3600_000 || st.names[key] === name || !t.name) return;
   st.names[key] = name;
   save();
   try {
     await graph.channelRename(chan, id, name);
   } catch (e) {
     if (e.status === 403 || e.status === 401) {
-      renameWorks = false; // no ChannelMessage.ReadWrite: names stay as they started
-      log('[teams] renaming threads needs ChannelMessage.ReadWrite; thread names stay as they started.');
+      if (!renameRefused) log('[teams] renaming threads needs ChannelMessage.ReadWrite; trying again hourly.');
+      renameRefused = Date.now();
+      delete st.names[key]; // try this one again later
     }
   }
 }
