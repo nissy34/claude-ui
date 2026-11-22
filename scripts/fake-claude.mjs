@@ -110,8 +110,9 @@ async function runTurn(text) {
       out({ type: 'assistant', message: { id: `msg_${++msgN}`, role: 'assistant', content: [{ type: 'text', text: rest }], usage: { input_tokens: inputTokens, output_tokens: 10 } }, parent_tool_use_id: null, session_id: sessionId });
       said = true;
     } else if (cmd === 'bgtask') {
-      const [, ms, words] = /^(\d+)\s*([\s\S]*)$/.exec(rest) || [, '500', ''];
-      const taskId = `task_${crypto.randomBytes(4).toString('hex')}`;
+      // @@bgtask <ms> [#<task id>] [words to say when it ends]
+      const [, ms, fixedId, words] = /^(\d+)\s*(?:#(\S+)\s*)?([\s\S]*)$/.exec(rest) || [, '500', null, ''];
+      const taskId = fixedId || `task_${crypto.randomBytes(4).toString('hex')}`;
       out({ type: 'system', subtype: 'task_started', task_id: taskId, task_type: 'local_agent', description: 'fake agent', is_backgrounded: true, session_id: sessionId });
       setTimeout(() => {
         out({ type: 'system', subtype: 'task_updated', task_id: taskId, patch: { status: 'completed' }, session_id: sessionId });
