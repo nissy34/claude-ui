@@ -6,6 +6,7 @@ import { MODES } from './chat/Composer.jsx';
 import { useModels } from './models.js';
 import { McpTab, PluginsTab, SkillsTab } from './Customize.jsx';
 import DesktopTab from './DesktopTab.jsx';
+import SignInsTab from './SignIns.jsx';
 import { Button, IconButton, Modal, ModalHead, Segmented, Toggle } from './ui/index.jsx';
 
 const TABS = [
@@ -13,6 +14,7 @@ const TABS = [
   ['chats', 'New chats'],
   ['permissions', 'Permissions'],
   ['mcp', 'MCP servers'],
+  ['signins', 'Sign-ins'],
   ['plugins', 'Plugins'],
   ['skills', 'Skills'],
   ['desktop', 'Claude Desktop'],
@@ -270,6 +272,7 @@ export default function Settings({ projects, activeCwd, onClose, onError, onKeys
           {tab === 'chats' && <Chats prefs={prefs} set={set} />}
           {tab === 'permissions' && <Permissions projects={projects} activeCwd={activeCwd} onError={onError} />}
           {tab === 'mcp' && <McpTab projects={projects} activeCwd={activeCwd} onError={onError} />}
+          {tab === 'signins' && <SignInsTab onError={onError} />}
           {tab === 'plugins' && <PluginsTab onError={onError} />}
           {tab === 'skills' && <SkillsTab projects={projects} activeCwd={activeCwd} onError={onError} />}
           {tab === 'desktop' && <DesktopTab onError={onError} projects={projects} activeCwd={activeCwd} />}
