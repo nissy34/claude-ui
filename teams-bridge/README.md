@@ -144,7 +144,11 @@ Make the workflow once, at make.powerautomate.com > Create > Instant cloud flow 
    - Message: an expression, `concat('cw:', string(body('Post_card_in_a_chat_or_channel_and_wait_for_a_response')?['data']))`. Use your step 2 action's name, with spaces as underscores (often `Post_adaptive_card_and_wait_for_a_response`).
 4. Save, then copy the trigger's URL into `TEAMS_FLOW_URL`.
 
-The bridge finds the chat with the Workflows bot by itself after the first card. If it doesn't, list your chats (`bridge.mjs chats`) and set `TEAMS_FLOW_CHAT_ID`. Each card carries a random secret, and only answers that echo it back count. Requests still appear in your own chat too, where replying keeps working. With `TEAMS_FLOW_URL` set, `TEAMS_PING_URL` isn't needed for requests.
+**In channel mode**, make step 3 **Reply to a message in a channel** instead, so your tap shows up under the question in its thread (and the bridge reads it there):
+   - Post as **Flow bot**. Team: `triggerBody()?['reply']?['team']`. Channel: `triggerBody()?['reply']?['channel']`. Message: `triggerBody()?['reply']?['message']` (each as an expression; pick "Enter custom value" first).
+   - Reply: `concat('cw:', string(body('Post_adaptive_card_and_wait_for_a_response')?['data']))`.
+
+In chat mode, the bridge finds the chat with the Workflows bot by itself after the first card. If it doesn't, list your chats (`bridge.mjs chats`) and set `TEAMS_FLOW_CHAT_ID`. Each card carries a random secret, and only answers that echo it back count. Requests still appear in your own chat too, where replying keeps working. With `TEAMS_FLOW_URL` set, `TEAMS_PING_URL` isn't needed for requests.
 
 If a request is answered somewhere else first, its workflow card keeps its buttons. Tapping one then just says it was already answered.
 

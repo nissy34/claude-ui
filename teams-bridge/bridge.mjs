@@ -579,7 +579,9 @@ async function teamsLoop() {
           if (seen.has(m.id) || st.sent[m.id]) continue;
           st.seen.push(m.id);
           save();
-          if (m.from?.user?.id && me && m.from.user.id !== me.id) continue; // only you
+          // In channel mode the workflow may answer as a reply in the request's thread.
+          if (chan && !m.from?.user && cfg.flowUrl && (await flowReply(m))) continue;
+          if (!m.from?.user || (me && m.from.user.id !== me.id)) continue; // only you
           try {
             await here.run({ root: chan ? m.root || m.id : null, msgId: m.id, msgRoot: m.root || null }, () => handle(m));
           } catch (e) {
@@ -607,7 +609,12 @@ async function sendFlow(item) {
   const card = flowCard(item, nonce, cfg);
   if (!card) return false;
   try {
-    const res = await fetch(cfg.flowUrl, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ type: 'message', attachments: [{ contentType: 'application/vnd.microsoft.card.adaptive', contentUrl: null, content: card }] }) });
+    const res = await fetch(cfg.flowUrl, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({
+        type: 'message',
+        attachments: [{ contentType: 'application/vnd.microsoft.card.adaptive', contentUrl: null, content: card }],
+        // Where the workflow can post the answer: as a reply in the request's channel thread.
+        ...(chan ? { reply: { team: chan.team, channel: chan.channel, message: st.items[item.id]?.thread || null } } : {}),
+      }) });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     st.nonces[nonce] = { id: item.id, at: Date.now() };
     save();
@@ -645,8 +652,24 @@ function parseFlow(text) {
   }
 }
 
+/** A "cw:{…}" line the workflow posted with what you tapped. True when it was one. */
+async function flowReply(m) {
+  const d = parseFlow(plain(m.body?.content));
+  if (!d) return false;
+  // Only answers that carry the secret of a card the bridge posted count.
+  const n = st.nonces[d.cw];
+  if (!n) return true;
+  delete st.nonces[d.cw];
+  save();
+  const it = st.items[n.id];
+  const text = it ? flowAnswer(it.item || {}, d) : null;
+  if (text) await here.run({ root: it.thread || null, msgId: null, msgRoot: null }, () => answer(n.id, text, null));
+  return true;
+}
+
 async function flowLoop() {
-  if (!cfg.flowUrl) return;
+  // In channel mode the workflow replies in the request's thread, which the bridge reads anyway.
+  if (!cfg.flowUrl || chan) return;
   for (;;) {
     try {
       const id = await flowChat();
@@ -659,14 +682,7 @@ async function flowLoop() {
           if (seen.has(m.id)) continue;
           st.flowSeen.push(m.id);
           save();
-          const d = parseFlow(plain(m.body?.content));
-          // Only answers that carry the secret of a card the bridge posted count.
-          const n = d && st.nonces[d.cw];
-          if (!n) continue;
-          delete st.nonces[d.cw];
-          const it = st.items[n.id];
-          const text = it ? flowAnswer(it.item || {}, d) : null;
-          if (text) await answer(n.id, text, null);
+          await flowReply(m);
         }
         st.flowSeen = st.flowSeen.slice(-200);
       }

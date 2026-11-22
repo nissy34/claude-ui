@@ -70,6 +70,7 @@ const flowMsgs = []; // the chat with the Workflows bot
 const chan = []; // channel threads: { ...message, replies: [] }
 const flowCards = []; // cards posted to the workflow's webhook
 const pings = []; // phone pings
+const flowRaw = []; // whole workflow webhook payloads
 const reactions = [];
 const edits = [];
 let tokenCalls = 0;
@@ -93,6 +94,7 @@ const graph = http.createServer((req, res) => {
       return json(res, 202, {});
     }
     if (p === '/flow') {
+      flowRaw.push(JSON.parse(data));
       flowCards.push(JSON.parse(data).attachments[0].content);
       return json(res, 202, {});
     }
@@ -406,7 +408,7 @@ async function main() {
     await gone;
     const dir2 = path.join(tmp, 'teams'); // the same state as in chat mode: switching must start fresh
     bridge = spawn(process.execPath, [path.join(root, 'teams-bridge', 'bridge.mjs')], {
-      env: { ...env, CLAUDE_UI_URL: base, CW_BRIDGE_TOKEN_FILE: tokenFile, TEAMS_DATA_DIR: dir2, TEAMS_CLIENT_ID: 'client', TEAMS_TENANT_ID: 'tenant', TEAMS_GRAPH_URL: `http://127.0.0.1:${gport}/v1.0`, TEAMS_LOGIN_URL: `http://127.0.0.1:${gport}`, TEAMS_POLL_SECONDS: '2', TEAMS_AWAY_MINUTES: '0', TEAMS_CHANNEL: 'Eng / Claude', TEAMS_PING_URL: `http://127.0.0.1:${gport}/ping` },
+      env: { ...env, CLAUDE_UI_URL: base, CW_BRIDGE_TOKEN_FILE: tokenFile, TEAMS_DATA_DIR: dir2, TEAMS_CLIENT_ID: 'client', TEAMS_TENANT_ID: 'tenant', TEAMS_GRAPH_URL: `http://127.0.0.1:${gport}/v1.0`, TEAMS_LOGIN_URL: `http://127.0.0.1:${gport}`, TEAMS_POLL_SECONDS: '2', TEAMS_AWAY_MINUTES: '0', TEAMS_CHANNEL: 'Eng / Claude', TEAMS_PING_URL: `http://127.0.0.1:${gport}/ping`, TEAMS_FLOW_URL: `http://127.0.0.1:${gport}/flow` },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     bridge.stdout.on('data', (d) => bridgeLog.push(String(d)));
@@ -425,12 +427,17 @@ async function main() {
     await until(() => thread().replies.some((m) => /make docs/.test(txt(m)) && /Wants to use Bash/.test(txt(m))), 15_000, 'request in the thread');
     check(thread().replies.some((m) => /Started/.test(txt(m))), 'the new chat is confirmed in the same thread');
     check(true, "the chat's request is posted in its thread");
-    const pg = await until(() => pings.find((c) => JSON.stringify(c).includes('make docs')), 10_000, 'ping');
-    const req = thread().replies.find((m) => /Wants to use Bash/.test(txt(m)));
-    check(pg.actions?.[0]?.url === req.webUrl, 'the phone ping links to the request in Teams', pg.actions);
     chanSay('yes', t1);
     await until(() => thread().replies.some((m) => /finished/.test(txt(m)) && /answer: allowed/.test(txt(m))), 15_000, 'finished in thread');
     check(true, 'yes in the thread answers it, and the result comes back in the same thread');
+    // Buttons: the workflow answers as a reply in the request's thread.
+    chanSay('@@ask Bash {"command":"make site"}', t1);
+    const wf = await until(() => flowRaw.find((x) => JSON.stringify(x).includes('make site')), 15_000, 'workflow card for the thread');
+    check(wf.reply?.message === t1 && wf.reply.team === 'T1' && wf.reply.channel === 'C2', 'the workflow is told which thread to reply in', wf.reply);
+    const yes2 = wf.attachments[0].content.actions.find((a) => a.title === 'Yes');
+    thread().replies.push({ id: `w${++n}`, messageType: 'message', createdDateTime: new Date(Date.now() + n).toISOString(), from: { application: { displayName: 'Workflows' } }, body: { contentType: 'html', content: `<p>cw:${JSON.stringify(yes2.data).replace(/"/g, '&quot;')}</p>` } });
+    await until(async () => !(await api('/api/bridge/attention', { headers: { authorization: `Bearer ${token}` } })).items.some((i) => i.detail === 'make site'), 15_000, 'make site answered');
+    check(true, "the workflow's reply in the thread answers the request");
     chanSay('now the readme<br>@@say continued in the thread', t1);
     await until(() => thread().replies.some((m) => /continued in the thread/.test(txt(m))), 15_000, 'follow-up in thread');
     check(true, 'other text in the thread goes to that chat');
@@ -445,6 +452,8 @@ async function main() {
     chanSay('/project demo: hello from the channel');
     const pt = await until(() => chan.find((m) => m.bot && m.subject === 'Demo'), 20_000, 'project thread');
     check(/<b>Demo<\/b>/.test(pt.body.content) || pt.attachments.length, "the coordinator's reply starts a thread named after the project");
+    const pg = await until(() => pings.find((c) => c.body?.[0]?.text === 'Demo'), 10_000, 'ping');
+    check(pg.actions?.[0]?.url === pt.webUrl, 'the phone ping links to the post in Teams', pg.actions);
   }
 
 }
