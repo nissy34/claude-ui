@@ -616,7 +616,18 @@ async function teamsLoop() {
 async function sendFlow(item) {
   if (!cfg.flowUrl) return false;
   const nonce = crypto.randomBytes(12).toString('base64url');
-  const card = flowCard(item, nonce, cfg);
+  const it = st.items[item.id];
+  const sent = it?.msg && st.sent[it.msg];
+  const graphBase = 'https://graph.microsoft.com/v1.0';
+  const reply = sent
+    ? {
+        msgId: it.msg,
+        preview: plain(sent.html).replace(/\s+/g, ' ').trim(),
+        user: me ? { id: me.id, displayName: me.displayName, userIdentityType: 'aadUser' } : null,
+        url: chan ? `${graphBase}/teams/${chan.team}/channels/${chan.channel}/messages/${it.thread || it.msg}/replies` : `${graphBase}/chats/${encodeURIComponent(cfg.chatId)}/messages`,
+      }
+    : null;
+  const card = flowCard(item, nonce, cfg, reply);
   if (!card) return false;
   try {
     const res = await fetch(cfg.flowUrl, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({
@@ -688,7 +699,9 @@ async function flowReply(m) {
 }
 
 async function flowLoop() {
-  if (!cfg.flowUrl) return;
+  // Only for older workflows that post "cw:" lines or "✅" cards in the Workflows chat. Workflows that
+  // send the button's quote reply (Send a Microsoft Graph HTTP request) need no extra reading.
+  if (!cfg.flowUrl || !cfg.flowChatId) return;
   for (;;) {
     try {
       const id = await flowChat();

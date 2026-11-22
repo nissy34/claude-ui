@@ -130,7 +130,7 @@ TEAMS_CHANNEL="My team / Claude"
 
 ### Buttons (optional, a Teams workflow)
 
-Cards the bridge posts itself can't have working buttons (that needs a registered bot). A Power Automate workflow can: the bridge sends each request to the workflow (an outbound HTTPS call), the workflow shows it as a card with buttons in your chat with the Workflows bot and waits, then posts a small "✅ Yes" card back into that chat, where the bridge reads it. The buttons come from the request: Yes / Always / No and a reason box for tool approvals, the options and a text box for questions, one button per option for decisions, Sign in / Done / Cancel for sign-ins. Because the Workflows bot posts the card, your phone also rings.
+Cards the bridge posts itself can't have working buttons (that needs a registered bot). A Power Automate workflow can: the bridge sends each request to the workflow (an outbound HTTPS call), the workflow shows it as a card with buttons in your chat with the Workflows bot and waits, then posts your answer as a quote reply to the request, as you, where the bridge reads it like any reply. The buttons come from the request: Yes / Always / No for tool approvals and plans, one button per option for a question or a decision, Sign in / Done / Cancel for sign-ins. Because the Workflows bot posts the card, your phone also rings.
 
 Make the workflow once, at make.powerautomate.com > Create > Instant cloud flow > skip:
 
@@ -139,14 +139,17 @@ Make the workflow once, at make.powerautomate.com > Create > Instant cloud flow 
    - Post as **Flow bot**, Post in **Chat with Flow bot**, Recipient: you.
    - Message: an expression, `string(triggerBody()?['attachments']?[0]?['content'])`.
    - Update message: `✓ Sent`. Should update card: **Yes**.
-3. Action **Post card in a chat or channel** (the "✅ Yes" confirmation):
-   - Post as **Flow bot**, Post in **Chat with Flow bot**, Recipient: you.
-   - Adaptive Card: an expression, `replace(body('Post_adaptive_card_and_wait_for_a_response')?['data']?['done'], 'CWDATA', base64(string(body('Post_adaptive_card_and_wait_for_a_response')?['data'])))`. Use your step 2 action's name, with spaces as underscores.
+3. Action **Send a Microsoft Graph HTTP request** (Microsoft Teams). It posts your answer as you, as a quote reply to the request:
+   - URI: an expression, `body('Post_adaptive_card_and_wait_for_a_response')?['data']?['url']`
+   - Method: **POST**
+   - Body: an expression, `json(body('Post_adaptive_card_and_wait_for_a_response')?['data']?['post'])`
+   - Content-Type: `application/json`
+   Use your step 2 action's name, with spaces as underscores.
 4. Save, then copy the trigger's URL into `TEAMS_FLOW_URL`.
 
-The confirmation card shows what you tapped; what the bridge needs rides hidden inside it. The request's thread (or chat) then gets a quote reply with your answer. The bridge finds the chat with the Workflows bot by itself after the first card. If it doesn't, list your chats (`bridge.mjs chats`) and set `TEAMS_FLOW_CHAT_ID`. Each card carries a random secret, and only answers that echo it back count. Requests still appear in your own chat too, where replying keeps working. With `TEAMS_FLOW_URL` set, `TEAMS_PING_URL` isn't needed for requests.
+Each button carries a ready quote reply ("yes", "no", "2"…) to the request's message, so after a tap your answer shows up as a quote reply under the question, written by you, and the bridge reads it like any reply. A reason for No, or several questions at once, you answer by replying in the thread yourself. The request is still posted in its thread (or your chat) as before, so typing a reply keeps working. With `TEAMS_FLOW_URL` set, `TEAMS_PING_URL` isn't needed for requests.
 
-If a request is answered somewhere else first, its workflow card keeps its buttons. Tapping one then just says it was already answered.
+If a request is answered somewhere else first, its workflow card keeps its buttons. A tap then just gets "already answered".
 
 ## Staying signed in
 
@@ -173,7 +176,6 @@ If your company has a **sign-in frequency** policy (for example "sign in again e
 | `TEAMS_POLL_SECONDS` | `5` | how often to read the chat (minimum 2) |
 | `TEAMS_PING_URL` | | Workflows webhook for phone notifications |
 | `TEAMS_FLOW_URL` | | workflow webhook for cards with buttons (see Buttons) |
-| `TEAMS_FLOW_CHAT_ID` | found by itself | your chat with the Workflows bot |
 | `CLAUDE_UI_URL` | `http://127.0.0.1:8787` | |
 | `CW_BRIDGE_TOKEN` / `CW_BRIDGE_TOKEN_FILE` | `~/.claude-web/bridge-token` | |
 | `TEAMS_DATA_DIR` | `~/.claude-web/teams-bridge` | state and tokens |

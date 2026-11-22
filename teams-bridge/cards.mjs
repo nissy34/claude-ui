@@ -114,7 +114,7 @@ export function postCard(ev, { uiUrl } = {}) {
  * Each button sends back { cw: nonce, a, n? } plus the inputs; the workflow posts that back as a
  * "cw:{…}" message, which the bridge reads. Null when there is nothing to tap.
  */
-export function flowCard(item, nonce, { allowPermissions = true, uiUrl } = {}) {
+export function flowCard(item, nonce, { allowPermissions = true, uiUrl } = {}, reply = null) {
   const base = askCard(item, 0, { allowPermissions, uiUrl });
   if (!base) return null;
   const body = base.body.slice(0, -1); // everything but the "reply to this message" hint
@@ -123,20 +123,39 @@ export function flowCard(item, nonce, { allowPermissions = true, uiUrl } = {}) {
   // tapped, base64, in place of CWDATA, in a hidden line the bridge reads. Nobody sees JSON.
   const about = clip(item.kind === 'question' ? item.questions?.[0]?.question : item.kind === 'decision' ? item.question : item.kind === 'permission' ? `${item.tool}${item.detail ? `: ${item.detail}` : ''}` : item.kind === 'plan' ? 'The plan' : item.server || '', 160);
   const done = (say) => JSON.stringify({ type: 'AdaptiveCard', $schema: 'http://adaptivecards.io/schemas/adaptive-card.json', version: '1.4', body: [T(`✅ ${say}`, { weight: 'Bolder' }), ...(about ? [T(about, { size: 'Small', isSubtle: true, spacing: 'None' })] : []), { type: 'TextBlock', text: 'cw64:CWDATA', isVisible: false }] });
-  const submit = (title, data, style) => ({ type: 'Action.Submit', title, data: { cw: nonce, say: data.say || title, done: done(data.say || title), ...data }, ...(style ? { style } : {}) });
+  // `reply` (when the bridge knows where the request was posted): each button also carries a ready
+  // quote reply to that message (`url` + `post`), which the workflow sends as you through "Send a
+  // Microsoft Graph HTTP request". The bridge then reads it like a reply you typed.
+  const quote = (text) =>
+    JSON.stringify({
+      body: { contentType: 'html', content: `<attachment id="${reply.msgId}"></attachment>${text}` },
+      attachments: [{ id: reply.msgId, contentType: 'messageReference', contentUrl: null, content: JSON.stringify({ messageId: reply.msgId, messagePreview: clip(reply.preview, 120), messageSender: { user: reply.user || null } }) }],
+    });
+  const submit = (title, data, style) => {
+    const words = { yes: 'yes', always: 'always', no: 'no', choice: String(data.n) }[data.a];
+    return { type: 'Action.Submit', title, data: { cw: nonce, say: data.say || title, done: done(data.say || title), ...(reply && words ? { url: reply.url, post: quote(words) } : {}), ...data }, ...(style ? { style } : {}) };
+  };
   const actions = [];
   switch (item.kind) {
     case 'permission':
     case 'plan':
       if (!allowPermissions) return null;
-      body.push({ type: 'Input.Text', id: 'text', isMultiline: true, placeholder: item.kind === 'plan' ? 'What to change (with No)' : 'Reason (with No)', spacing: 'Medium' });
+      // With quote replies, a reason is a reply you type in the thread.
+      if (!reply) body.push({ type: 'Input.Text', id: 'text', isMultiline: true, placeholder: item.kind === 'plan' ? 'What to change (with No)' : 'Reason (with No)', spacing: 'Medium' });
       actions.push(submit('Yes', { a: 'yes' }, 'positive'));
       if (item.kind === 'permission' && item.canAlways) actions.push(submit('Always', { a: 'always' }));
       actions.push(submit('No', { a: 'no' }, 'destructive'));
       break;
     case 'question': {
-      // Replace the read-only option lists with inputs.
       const qs = item.questions || [];
+      if (qs.length === 1 && !qs[0].multiSelect && (qs[0].options || []).length) {
+        // One question: a button per option (the options stay listed above with their descriptions).
+        qs[0].options.slice(0, 6).forEach((o, i) => actions.push(submit(clip(o.label, 40), { a: 'choice', n: i + 1, q0: String(i + 1) })));
+        break;
+      }
+      // Several questions or several picks: answered by a reply in the thread when buttons send quote replies.
+      if (reply) return null;
+      // Otherwise inputs and Send.
       const head = body.slice(0, 2);
       body.length = 0;
       body.push(...head);

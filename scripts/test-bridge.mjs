@@ -379,7 +379,8 @@ async function main() {
   say('/new demo: @@ask Bash {"command":"npm run build"}');
   const fc = await until(() => flowCards.find((c) => JSON.stringify(c).includes('npm run build')), 15_000, 'workflow card');
   const yes = fc.actions.find((a) => a.title === 'Yes');
-  check(yes?.type === 'Action.Submit' && fc.actions.some((a) => a.title === 'No') && fc.body.some((b) => b.type === 'Input.Text'), 'the workflow card has Yes / No buttons and a reason box', fc.actions);
+  check(yes?.type === 'Action.Submit' && fc.actions.some((a) => a.title === 'No'), 'the workflow card has Yes / No buttons');
+  check(yes.data.url?.endsWith('/chats/48%3Anotes/messages') && /<attachment id=/.test(JSON.parse(yes.data.post).body.content) && JSON.parse(yes.data.post).attachments[0].contentType === 'messageReference', 'each button carries a ready quote reply to the request');
   flowSay({ cw: 'forged', a: 'yes' });
   await sleep(3000);
   check(!findBot(/finished:[\s\S]*npm run build|answer: allowed \{\}[\s\S]*build/), 'an answer without the card secret is ignored');
@@ -390,10 +391,18 @@ async function main() {
   check(true, 'tapping Yes in the workflow card allows it');
   say(`/new demo: @@ask AskUserQuestion {"questions":[{"question":"Size?","options":[{"label":"S"},{"label":"M"},{"label":"L"}]}]}`);
   const qc = await until(() => flowCards.find((c) => JSON.stringify(c).includes('Size?')), 15_000, 'question workflow card');
-  check(qc.body.some((b) => b.type === 'Input.ChoiceSet' && b.choices.length === 3), 'a question becomes a choice list');
-  flowSay({ ...qc.actions[0].data, q0: '3', o0: '' });
+  check(['S', 'M', 'L'].every((l) => qc.actions.some((a) => a.title === l)), 'a question gets a button per option');
+  flowSay(qc.actions.find((a) => a.title === 'L').data);
   await until(() => findBot(/answer: allowed \{\\*"Size\?\\*":\\*"L\\*"\}/), 15_000, 'question answered L');
-  check(true, 'picking an option and Send answers the question');
+  check(true, 'tapping an option answers the question');
+  // The workflow sends the button's quote reply as you (Send a Microsoft Graph HTTP request).
+  say('/new demo: @@ask Bash {"command":"npm run lint"}');
+  const lc = await until(() => flowCards.find((c) => JSON.stringify(c).includes('npm run lint')), 15_000, 'lint card');
+  const lyes = lc.actions.find((a) => a.title === 'Yes').data;
+  await fetch(`http://127.0.0.1:${gport}${new URL(lyes.url).pathname}`, { method: 'POST', headers: { authorization: 'Bearer at-flow', 'content-type': 'application/json' }, body: lyes.post });
+  chat.at(-1).bot = false; // it's you writing, not the bridge
+  await until(async () => !(await api('/api/bridge/attention', { headers: { authorization: `Bearer ${token}` } })).items.some((i) => i.detail === 'npm run lint'), 15_000, 'lint answered');
+  check(true, "the workflow's quote reply (sent as you) answers it like a reply you typed");
 
   console.log('A tenant that refuses cards gets formatted text');
   refuseCards = true;
@@ -450,6 +459,13 @@ async function main() {
     check(true, 'tapping No answers the request (with the reason)');
     const q2 = await until(() => thread().replies.find((m) => (m.attachments || []).some((a) => a.contentType === 'messageReference') && /✓ denied/.test(m.body.content)), 10_000, 'quote reply');
     check(q2, 'the thread gets a quote reply to the question with the answer');
+    chanSay('@@ask Bash {"command":"make site3"}', t1);
+    const wf3 = await until(() => flowRaw.find((x) => JSON.stringify(x).includes('make site3')), 15_000, 'workflow card 3');
+    const y3 = wf3.attachments[0].content.actions.find((a) => a.title === 'Yes').data;
+    check(new URL(y3.url).pathname === `/v1.0/teams/T1/channels/C2/messages/${t1}/replies`, "the button's quote reply goes into the request's thread", y3.url);
+    await fetch(`http://127.0.0.1:${gport}${new URL(y3.url).pathname}`, { method: 'POST', headers: { authorization: 'Bearer at-flow', 'content-type': 'application/json' }, body: y3.post });
+    await until(async () => !(await api('/api/bridge/attention', { headers: { authorization: `Bearer ${token}` } })).items.some((i) => i.detail === 'make site3'), 15_000, 'make site3 answered');
+    check(true, 'and answers it, like a quote reply you typed');
     chanSay('now the readme<br>@@say continued in the thread', t1);
     await until(() => thread().replies.some((m) => /continued in the thread/.test(txt(m))), 15_000, 'follow-up in thread');
     check(true, 'other text in the thread goes to that chat');
