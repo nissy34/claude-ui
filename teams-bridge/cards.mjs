@@ -118,7 +118,8 @@ export function flowCard(item, nonce, { allowPermissions = true, uiUrl } = {}) {
   const base = askCard(item, 0, { allowPermissions, uiUrl });
   if (!base) return null;
   const body = base.body.slice(0, -1); // everything but the "reply to this message" hint
-  const submit = (title, data, style) => ({ type: 'Action.Submit', title, data: { cw: nonce, ...data }, ...(style ? { style } : {}) });
+  // `say` is what the workflow's reply shows in the thread ("✅ Yes"); the bridge reads the rest.
+  const submit = (title, data, style) => ({ type: 'Action.Submit', title, data: { cw: nonce, say: title, ...data }, ...(style ? { style } : {}) });
   const actions = [];
   switch (item.kind) {
     case 'permission':
@@ -140,7 +141,7 @@ export function flowCard(item, nonce, { allowPermissions = true, uiUrl } = {}) {
         body.push({ type: 'Input.ChoiceSet', id: `q${i}`, style: 'expanded', isMultiSelect: !!q.multiSelect, choices: (q.options || []).map((o, j) => ({ title: o.description ? `${o.label} · ${o.description}`.slice(0, 200) : o.label, value: String(j + 1) })) });
         body.push({ type: 'Input.Text', id: `o${i}`, placeholder: 'Or your own words', spacing: 'Small' });
       });
-      actions.push(submit('Send', { a: 'answer' }, 'positive'));
+      actions.push(submit('Send', { a: 'answer', say: 'Answered' }, 'positive'));
       break;
     }
     case 'decision':
