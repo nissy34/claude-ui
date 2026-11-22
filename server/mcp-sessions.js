@@ -60,7 +60,8 @@ const TOOLS = [
   {
     name: 'read_session',
     description:
-      'Get a session\'s status (idle, busy, waiting for permission) and its latest reply. Set wait=true to block until it finishes its current turn (up to timeout_seconds, default 300).',
+      'Get a chat session\'s status (idle, busy, waiting for permission) and its latest reply. Set wait=true to block until it finishes its current turn (up to timeout_seconds, default 300). ' +
+      'Only for chats of this web UI (ids from start_session or list_sessions). Subagents you started with your Agent/Task tool and background shells are not sessions: their results come back to you by themselves; message a subagent with SendMessage and stop one with TaskStop.',
     inputSchema: {
       type: 'object',
       properties: { id: { type: 'string' }, wait: { type: 'boolean' }, timeout_seconds: { type: 'number' } },

@@ -20,9 +20,11 @@ try {
   cookie = lr.headers.get('set-cookie').split(';')[0];
   const b = (await api('/api/sessions', { kind: 'chat', cwd: 'demo', name: 'Soak' })).session;
   const short = b.id.slice(0, 8);
-  const lines = [`@@call sessions__list_sessions {}`, `@@call sessions__list_sessions {"all":true}`, `@@call sessions__send_to_session ${JSON.stringify({ id: short, message: 'hello by prefix' })}`, `@@call sessions__send_to_session ${JSON.stringify({ id: 'Soak', message: 'hello by name' })}`];
+  const lines = [`@@call sessions__list_sessions {}`, `@@call sessions__list_sessions {"all":true}`, `@@call sessions__send_to_session ${JSON.stringify({ id: short, message: 'hello by prefix' })}`, `@@call sessions__send_to_session ${JSON.stringify({ id: 'Soak', message: 'hello by name' })}`,
+    // Ids that are not chats: a running background subagent of this chat, a finished one (agent-like id), and junk.
+    '@@bgtask 20000 #a7f18f83a2845f75e', '@@call sessions__read_session {"id":"a7f18f83a2845f75e"}', '@@call sessions__read_session {"id":"a0123456789abcdef"}', '@@call sessions__send_to_session {"id":"zzz-nope","message":"hi"}'];
   await api('/api/sessions', { kind: 'chat', cwd: 'demo', name: 'Caller', prompt: lines.join('\n') });
-  for (let i = 0; i < 60; i++) { await sleep(250); const l = fs.existsSync(env.FAKE_CLAUDE_LOG) ? fs.readFileSync(env.FAKE_CLAUDE_LOG, 'utf8') : ''; if ((l.match(/"call":"sessions__send_to_session"/g) || []).length >= 2) break; }
+  for (let i = 0; i < 60; i++) { await sleep(250); const l = fs.existsSync(env.FAKE_CLAUDE_LOG) ? fs.readFileSync(env.FAKE_CLAUDE_LOG, 'utf8') : ''; if ((l.match(/"call":"sessions__send_to_session"/g) || []).length >= 3) break; }
   await sleep(1500);
   const log = fs.readFileSync(env.FAKE_CLAUDE_LOG, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
   const calls = log.filter((x) => x.call);
@@ -36,5 +38,10 @@ try {
   check(sends[1] && /Delivered|Queued/.test(sends[1].result) && !/Error/.test(sends[1].result), 'send_to_session accepts a chat name', sends[1]);
   const soak = log.filter((x) => x.prompt && !x.prompt.includes('@@call')).map((x) => x.prompt).join('\n');
   check(soak.includes('hello by prefix') && soak.includes('hello by name'), 'the target chat receives both messages', soak.slice(0, 300));
+  const reads = calls.filter((x) => x.call === 'sessions__read_session');
+  check(reads[0] && !/Error/.test(reads[0].result) && /background agent of this chat/.test(reads[0].result) && /running/.test(reads[0].result), 'read_session on a background subagent id returns its status', reads[0]);
+  check(reads[1] && /looks like a background subagent id/.test(reads[1].result) && reads[1].result.includes(b.id), 'an agent-like id that is gone says so and lists the chats', reads[1]);
+  check(sends[2] && /Error/.test(sends[2].result) && reads[1] && sends[2].result.includes(b.id) && sends[2].result.includes('"Soak"'), 'a junk id lists the chats on this server in the error', sends[2]);
+  if (process.env.VERBOSE) for (const x of [...reads, sends[2]]) console.log(x?.result);
   process.exitCode = fails ? 1 : 0;
 } finally { srv.kill(); }

@@ -114,6 +114,47 @@ function findSession(ref) {
   return hits[0] || null;
 }
 
+// A background task (shell, subagent, monitor, workflow) of any chat, by its task id. Models often
+// pass these to the sessions tools because they look like session ids.
+function findTask(ref) {
+  const id = String(ref ?? '').trim();
+  if (!id) return null;
+  for (const s of store.sessions.values()) {
+    const t = typeof s.taskMap === 'function' ? s.taskMap().get(id) : null;
+    if (t) return { owner: s, task: s.tasksSummary().find((x) => x.id === id) || { id, kind: t.kind, status: t.status, description: t.description } };
+  }
+  return null;
+}
+
+// The error for an id that is not a chat, written so the model can act on it without another call:
+// what the id looks like it is, and the chats it most likely meant.
+function missingSessionError(ref, callerId, { extra = '' } = {}) {
+  const id = String(ref ?? '').trim();
+  const hit = findTask(id);
+  if (hit) {
+    const mine = hit.owner.id === callerId;
+    const what = hit.task.kind === 'agent' ? 'background subagent' : `background ${hit.task.kind || 'task'}`;
+    const how = mine
+      ? hit.task.kind === 'agent'
+        ? 'Its result arrives in this chat by itself when it finishes, so there is no need to poll it.'
+        : 'Read its output with your own background task tools, not the sessions tools.'
+      : `To ask about it, message the chat that owns it: send_to_session with id "${hit.owner.id}".`;
+    return new Error(`"${id}" is not a chat: it is a ${what} of ${mine ? 'this chat' : `chat "${hit.owner.meta.name}" (session id ${hit.owner.id})`}${hit.task.description ? ` ("${hit.task.description}")` : ''}, status ${hit.task.status}. ${how}`);
+  }
+  // Claude Code agent ids are "a" + 16 hex characters; this one may have finished and been dropped.
+  const agentLike = /^a[0-9a-f]{16}$/i.test(id);
+  const chats = [...store.sessions.values()]
+    .filter((s) => s.meta.kind === 'chat' && s.id !== callerId)
+    .sort((a, b) => (b.meta.lastActivity || 0) - (a.meta.lastActivity || 0))
+    .slice(0, 8)
+    .map((s) => `- ${s.id} "${s.meta.name}" (${s.state || 'idle'})`);
+  return new Error(
+    `No chat session with id "${id}" on this server.${agentLike ? ' It looks like a background subagent id from your own Agent tool, not a chat: its result comes back to you by itself when it finishes.' : ''}${extra}` +
+      (chats.length ? ` Chats on this server, most recently active first:\n${chats.join('\n')}` : ' There are no other chats on this server.') +
+      '\nA chat on another machine cannot be reached.'
+  );
+}
+
 function sessionSummary(s) {
   const j = s.toJSON();
   return { id: j.id, name: j.name, cwd: j.cwd, kind: j.kind, state: j.state || j.status, parentId: j.parentId || null, worktree: j.worktree || null, model: j.model || 'default', effort: j.effort || 'default', permissionMode: j.permissionMode || 'default' };
@@ -163,7 +204,7 @@ app.post(
     }
     const s = findSession(id);
     if (!s || s.meta.kind !== 'chat') {
-      throw new Error(`No chat session with id "${id}" on this server.${parentId ? ' To reach the chat that started this one, use id "parent".' : ''} list_sessions with all=true shows every chat here (a chat on another machine can't be reached).`);
+      throw missingSessionError(id, sender?.id, { extra: parentId ? ' To reach the chat that started this one, use id "parent".' : '' });
     }
     if (s === sender) throw new Error('That is this session. To reach the chat that started this one, use id "parent".');
     const text = String(req.body?.message || '');
@@ -225,7 +266,7 @@ app.post(
   '/internal/sessions/:id/options',
   wrap(async (req, res) => {
     const s = findSession(req.params.id);
-    if (!s || s.meta.kind !== 'chat') throw new Error(`No chat session with id "${req.params.id}". list_sessions with all=true shows every chat.`);
+    if (!s || s.meta.kind !== 'chat') throw missingSessionError(req.params.id, req.headers['x-cw-session']);
     const { model, effort, permissionMode } = req.body || {};
     if (model == null && effort == null && permissionMode == null) throw new Error('Give model, effort or permission_mode');
     const done = await s.setOptions({ model, effort, permissionMode });
@@ -238,7 +279,7 @@ app.post(
   '/internal/sessions/:id/control/:action',
   wrap(async (req, res) => {
     const s = findSession(req.params.id);
-    if (!s) throw new Error(`No session with id "${req.params.id}". list_sessions with all=true shows every chat.`);
+    if (!s) throw missingSessionError(req.params.id, req.headers['x-cw-session']);
     const caller = store.get(req.headers['x-cw-session']);
     if (s === caller && req.params.action === 'stop') throw new Error('That is this session.');
     res.json({ ...(await controlSession(store, s, req.params.action, req.body || {}, caller ? `chat "${caller.meta.name}"` : 'another chat')), session: sessionSummary(s) });
@@ -249,7 +290,20 @@ app.get(
   '/internal/sessions/:id',
   wrap(async (req, res) => {
     const s = findSession(req.params.id);
-    if (!s || s.meta.kind !== 'chat') throw new Error(`No chat session with id "${req.params.id}". list_sessions with all=true shows every chat.`);
+    if (!s || s.meta.kind !== 'chat') {
+      // A background task id (a subagent or shell of some chat): answer with its status instead of failing.
+      const hit = !s && findTask(req.params.id);
+      if (hit) {
+        const mine = hit.owner.id === req.headers['x-cw-session'];
+        const out = hit.task.canOutput ? await hit.owner.taskOutput(hit.task.id).catch(() => null) : null;
+        return res.json({
+          note: `This id is not a chat: it is a background ${hit.task.kind || 'task'} of ${mine ? 'this chat' : `chat "${hit.owner.meta.name}" (session id ${hit.owner.id})`}.${mine && hit.task.kind === 'agent' ? ' Its result arrives in this chat by itself when it finishes, so there is no need to poll it.' : ''}`,
+          task: hit.task,
+          ...(out?.output ? { outputTail: out.output.slice(-4000) } : {}),
+        });
+      }
+      throw missingSessionError(req.params.id, req.headers['x-cw-session']);
+    }
     if (req.query.wait === '1') {
       const until = Date.now() + Math.min(Number(req.query.timeout) || 300, 1800) * 1000;
       // Stop early when the session is blocked on a question to the caller: nobody else will answer it.
