@@ -4,8 +4,10 @@ import fs from 'node:fs';
 import crypto from 'node:crypto';
 
 const SCOPES = 'offline_access User.Read Chat.ReadWrite';
-// Channel mode also reads and posts channel messages (ChannelMessage.Read.All needs admin consent).
-export const CHANNEL_SCOPES = `${SCOPES} ChannelMessage.Send ChannelMessage.Read.All Team.ReadBasic.All Channel.ReadBasic.All`;
+// Channel mode needs ChannelMessage.Send / Read.All, Team.ReadBasic.All, Channel.ReadBasic.All (and
+// optionally ChannelMessage.ReadWrite). ".default" asks for whatever the app registration has been
+// granted, so a permission added later is picked up at the next token refresh.
+export const CHANNEL_SCOPES = 'offline_access https://graph.microsoft.com/.default';
 
 export class Graph {
   /**
