@@ -13,6 +13,7 @@ import crypto from 'node:crypto';
 import { config } from './config.js';
 import { homeConfigPath } from './claude-admin.js';
 import { McpAdmin } from './mcp-admin.js';
+import { gatewayMode } from './gateway.js';
 
 const WINDOW = 5 * 60_000; // Claude refreshes when the access token expires within this window
 const LEAD = 4 * 60_000; // so we wake up this long before expiry, safely inside the window
@@ -66,7 +67,15 @@ export function serverFolders(home = readJson(homeConfigPath()) || {}, root = co
 export function describeStore(store, now = Date.now()) {
   const rows = [];
   const c = store?.claudeAiOauth;
-  if (process.env.CLAUDE_CODE_OAUTH_TOKEN) {
+  const gw = gatewayMode();
+  if (gw) {
+    let host = '';
+    try {
+      host = new URL(gw.baseUrl).host;
+    } catch {}
+    const where = gw.source === 'ui' ? 'Settings > Account' : gw.source === 'env' ? "the server's environment" : '~/.claude/settings.json';
+    rows.push({ id: 'claude', kind: 'claude', name: 'Claude Code', host, state: 'gateway', note: `Uses the company AI gateway with your key (set in ${where}). Nothing to refresh here; a Claude login is not used.` });
+  } else if (process.env.CLAUDE_CODE_OAUTH_TOKEN) {
     rows.push({ id: 'claude', kind: 'claude', name: 'Claude Code', state: 'long-lived', note: 'Uses a long-lived token (CLAUDE_CODE_OAUTH_TOKEN). Nothing to refresh.' });
   } else if (c) {
     const hasRefresh = !!c.refreshToken;

@@ -11,7 +11,8 @@
 import crypto from 'node:crypto';
 import readline from 'node:readline';
 import { spawn } from 'node:child_process';
-import { config, PRIVATE_ENV } from './config.js';
+import { config } from './config.js';
+import { claudeEnv } from './gateway.js';
 import { resolveCommand } from './launch.js';
 import { withOpener } from './opener.js';
 
@@ -213,8 +214,7 @@ export class McpAdmin {
 
   ensureProcess() {
     if (this.proc) return;
-    const env = withOpener({ ...process.env });
-    for (const k of PRIVATE_ENV) delete env[k];
+    const env = withOpener(claudeEnv());
     const args = ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--permission-prompt-tool', 'stdio', ...config.claudeArgs];
     let proc;
     try {

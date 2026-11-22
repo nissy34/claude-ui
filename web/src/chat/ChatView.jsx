@@ -22,6 +22,7 @@ import { Button, IconButton, Menu, Modal, ModalHead, useDismiss } from '../ui/in
 import { promptDialog } from '../ui/dialogs.jsx';
 import { deleteChat } from './deleteChat.js';
 import { copyText } from '../ui/clipboard.js';
+import { useGatewayMode } from '../Gateway.jsx';
 
 const AUTH_RE = /oauth|authenticat|\/login|not logged in|invalid api key|credentials/i;
 
@@ -798,6 +799,7 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
       onError(e);
     }
   };
+  const gateway = useGatewayMode();
   const relogin = () => onCreate({ cwd: meta.cwd, kind: 'claude', name: 'Log in to Claude', login: true });
 
   const project = meta.noFolder ? 'No folder' : (meta.project || meta.cwd)?.split(/[\\/]/).filter(Boolean).pop();
@@ -868,7 +870,7 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
                     </button>
                     <button onClick={archive}>{meta.archived ? 'Unarchive' : 'Archive'}</button>
                     {meta.live && <button onClick={() => (setMenu(false), send({ t: 'stop' }))}>Stop Claude process</button>}
-                    <button onClick={() => (setMenu(false), relogin())}>Log in to Claude again</button>
+                    {!gateway && <button onClick={() => (setMenu(false), relogin())}>Log in to Claude again</button>}
                     <div className="sep" />
                     <button className="danger" onClick={remove}>
                       Delete chat
@@ -970,12 +972,26 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
               {authProblem && !busy && (
                 <div className="perm">
                   <div className="perm-title">
-                    <b>Claude is logged out on the server.</b> Open a terminal session, type <code>/login</code>, finish the sign-in, then come back and send your message again.
+                    {gateway ? (
+                      <>
+                        <b>The AI gateway refused the request.</b> Your key may have expired or reached its monthly limit, or this server can't reach the gateway (VPN). Paste a new key in Settings, Account, then send your message again.
+                      </>
+                    ) : (
+                      <>
+                        <b>Claude is logged out on the server.</b> Open a terminal session, type <code>/login</code>, finish the sign-in, then come back and send your message again.
+                      </>
+                    )}
                   </div>
                   <div className="perm-actions">
-                    <Button variant="primary" onClick={relogin}>
-                      Log in again
-                    </Button>
+                    {gateway ? (
+                      <Button variant="primary" onClick={() => window.dispatchEvent(new CustomEvent('cw-open-settings', { detail: 'account' }))}>
+                        Open Settings
+                      </Button>
+                    ) : (
+                      <Button variant="primary" onClick={relogin}>
+                        Log in again
+                      </Button>
+                    )}
                   </div>
                 </div>
               )}

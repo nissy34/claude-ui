@@ -3,12 +3,12 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
-import { config, PRIVATE_ENV } from './config.js';
+import { config } from './config.js';
+import { claudeEnv } from './gateway.js';
 import { resolveCommand } from './launch.js';
 
 function runClaude(args, cwd, timeout = 30_000, input) {
-  const env = { ...process.env };
-  for (const k of PRIVATE_ENV) delete env[k];
+  const env = claudeEnv();
   const cmd = resolveCommand(config.claudeBin, args);
   return new Promise((resolve) => {
     const child = execFile(cmd.file, cmd.args, { cwd: cwd || process.cwd(), env, timeout, windowsHide: true, maxBuffer: 4 << 20 }, (err, stdout, stderr) => {

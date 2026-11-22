@@ -265,6 +265,14 @@ Desktop on another computer needs the server to listen on your network (`CW_HOST
 
 Talk to your agents from Microsoft Teams: permission prompts, questions and project decision cards show up in your Teams chat with yourself, and you answer by replying. You can also message a project's coordinator or start a chat in a folder from Teams. It is a separate small service (`teams-bridge/`) that only makes outbound calls (Microsoft Graph polling), so it works on a server with no inbound access. Setup and commands: [teams-bridge/README.md](teams-bridge/README.md).
 
+## Company AI gateway (Bifrost)
+
+To bill Claude to a company gateway instead of a Claude login, open **Settings > Account > AI gateway**, enter the gateway address (for Bifrost `https://bifrost.ai.synamedia.com/anthropic`) and your personal key (on a laptop: `bifrost-auth-macos get-key` or `bifrost-auth-linux get-key`), press **Test connection**, then turn **Use the AI gateway** on.
+
+Every claude process the server starts (chats, project threads, terminals, the Assistant, chat titles, model list) then gets `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN` and `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1`, and loses `CLAUDE_CODE_USE_BEDROCK`, `AWS_BEARER_TOKEN_BEDROCK`, `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN` and the `ANTHROPIC_*MODEL` pins from the server's own environment. The model picker shows the gateway's models ("From gateway"). Turning it off goes back to the Claude login, which is never touched. The key is kept in `~/.claude-web/gateway.json` (mode 600) and is never sent back to the browser.
+
+`~/.claude/settings.json` "env" wins over the environment the server passes, so Settings warns when it still sets `CLAUDE_CODE_USE_BEDROCK`, `AWS_*`, `ANTHROPIC_MODEL` or another gateway, and can remove them (keeping `settings.json.before-gateway`). Setting the three variables in `.env` or in `settings.json` by hand also works; Settings then shows the gateway as set up outside the UI.
+
 ## Configuration
 
 All settings are environment variables; see [`.env.example`](.env.example).

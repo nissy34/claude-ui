@@ -19,6 +19,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { config } from './config.js';
+import { gatewayMode } from './gateway.js';
 import { changedFiles, createWorktree, isGitRepo, removeWorktree, worktreeMerged } from './git.js';
 import { prStatus } from './pr-status.js';
 import { rawUrl } from './artifacts.js';
@@ -1440,7 +1441,11 @@ export class Project {
       const sent = wake && [...this.events].reverse().find((e) => e.type === 'wake.sent' && e.body.wake === wake);
       if (sent) this.append({ type: 'queue.restored', body: { session: sid, events: sent.body.events, reason: 'signed out' } });
     }
-    if (!this.state.paused?.auth) this.append({ type: 'project.paused', body: { auth: true, reason: `Claude is logged out on the server (${clipText(String(text || ''), 160)}). Log in again, then press Resume; your messages are kept.` } });
+    const why = clipText(String(text || ''), 160);
+    const reason = gatewayMode()
+      ? `The AI gateway refused the request (${why}). Your key may have expired or hit its monthly limit: update it in Settings > Account, then press Resume; your messages are kept.`
+      : `Claude is logged out on the server (${why}). Log in again, then press Resume; your messages are kept.`;
+    if (!this.state.paused?.auth) this.append({ type: 'project.paused', body: { auth: true, reason } });
   }
 
   /** A turn died with the process: retry once, then tell the coordinator. */

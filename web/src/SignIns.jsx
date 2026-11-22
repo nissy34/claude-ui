@@ -10,8 +10,9 @@ const LABEL = {
   'signed-out': 'Needs sign-in',
   ending: 'Login ends soon',
   'long-lived': 'Long-lived token',
+  gateway: 'Gateway key',
 };
-const DOT = { ok: 'on', 'long-lived': 'on', expired: 'busy', 'no-expiry': 'off', 'no-refresh': 'busy', ending: 'busy', 'signed-out': 'err' };
+const DOT = { ok: 'on', 'long-lived': 'on', gateway: 'on', expired: 'busy', 'no-expiry': 'off', 'no-refresh': 'busy', ending: 'busy', 'signed-out': 'err' };
 
 function when(ts) {
   if (!ts) return '';
@@ -77,7 +78,7 @@ export default function SignInsTab({ onError }) {
             <span className={`dot ${DOT[r.state] || 'off'}`} />
             <div className="item-main">
               <div className="item-title">
-                {r.name} <span className="tag">{r.kind === 'claude' ? 'Claude login' : r.host || 'MCP'}</span> <span className="tag">{LABEL[r.state] || r.state}</span>
+                {r.name} <span className="tag">{r.kind === 'claude' ? (r.state === 'gateway' ? r.host || 'AI gateway' : 'Claude login') : r.host || 'MCP'}</span> <span className="tag">{LABEL[r.state] || r.state}</span>
               </div>
               <div className="item-sub full">{detail(r, s.enabled)}</div>
               {r.last && (

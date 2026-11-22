@@ -8,6 +8,7 @@ import { McpTab, PluginsTab, SkillsTab } from './Customize.jsx';
 import DesktopTab from './DesktopTab.jsx';
 import TeamsTab from './TeamsTab.jsx';
 import SignInsTab from './SignIns.jsx';
+import { GatewaySettings } from './Gateway.jsx';
 import { Button, IconButton, Modal, ModalHead, Segmented, Toggle } from './ui/index.jsx';
 
 const TABS = [
@@ -200,21 +201,40 @@ function TextTab({ url, note }) {
   );
 }
 
-function Account() {
+function Account({ onError }) {
   const [s, setS] = useState(null);
-  useEffect(() => {
+  const [gw, setGw] = useState(null);
+  const load = () =>
     api('/api/claude/status')
       .then(setS)
       .catch((e) => setS({ error: e.message }));
+  useEffect(() => {
+    load();
   }, []);
-  if (!s) return <div className="muted">Checking…</div>;
-  if (s.error) return <div className="muted">{s.error}</div>;
-  const a = s.auth || {};
+  // After a gateway change, ask Claude Code again how it signs in.
+  const onChange = (r) => {
+    if (gw && (gw.active !== r.active || gw.mode?.baseUrl !== r.mode?.baseUrl)) load();
+    setGw(r);
+  };
+  const a = s?.auth || {};
   const fields = Object.entries(a).filter(([, v]) => v != null && typeof v !== 'object');
   return (
     <>
-      <p className="muted set-note">The Claude Code login on the server. Use "Log in again" in a chat's menu to change it.</p>
-      {a.raw ? (
+      <h4 className="set-h" style={{ marginTop: 0 }}>
+        AI gateway
+      </h4>
+      <GatewaySettings onError={onError} onChange={onChange} />
+      <h4 className="set-h">How Claude Code signs in</h4>
+      <p className="muted set-note">
+        {gw?.mode
+          ? 'Claude Code uses the gateway key, so a Claude login on the server is not needed. This is what Claude Code reports:'
+          : 'The Claude Code login on the server. Use "Log in again" in a chat\'s menu to change it.'}
+      </p>
+      {!s ? (
+        <div className="muted">Checking…</div>
+      ) : s.error ? (
+        <div className="muted">{s.error}</div>
+      ) : a.raw ? (
         <pre className="set-pre">{a.raw}</pre>
       ) : (
         <div className="kv">
@@ -279,7 +299,7 @@ export default function Settings({ projects, activeCwd, onClose, onError, onKeys
           {tab === 'skills' && <SkillsTab projects={projects} activeCwd={activeCwd} onError={onError} />}
           {tab === 'desktop' && <DesktopTab onError={onError} projects={projects} activeCwd={activeCwd} />}
           {tab === 'teams' && <TeamsTab onError={onError} />}
-          {tab === 'account' && <Account />}
+          {tab === 'account' && <Account onError={onError} />}
           {tab === 'about' && <About />}
         </div>
       </div>

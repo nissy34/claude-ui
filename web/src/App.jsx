@@ -58,6 +58,12 @@ export default function App() {
   }, []);
   const [dialog, setDialog] = useState(null); // {type:'new'} | {type:'history', path} | {type:'settings'} | {type:'keys'}
   const [toast, setToast] = useState('');
+  // "Open Settings" buttons elsewhere (e.g. a chat's gateway error): detail = tab id.
+  useEffect(() => {
+    const open = (e) => setDialog({ type: 'settings', tab: e.detail || undefined });
+    window.addEventListener('cw-open-settings', open);
+    return () => window.removeEventListener('cw-open-settings', open);
+  }, []);
   const [newKey, setNewKey] = useState(0); // bumps to focus the New chat composer
   const eventsRef = useRef(null);
 

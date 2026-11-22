@@ -3,7 +3,8 @@
 import fs from 'node:fs';
 import readline from 'node:readline';
 import { spawn } from 'node:child_process';
-import { config, PRIVATE_ENV } from './config.js';
+import { config } from './config.js';
+import { claudeEnv } from './gateway.js';
 import { resolveCommand } from './launch.js';
 import { transcriptPath } from './chat.js';
 
@@ -20,8 +21,7 @@ export function sideChat(session, question, history, { onDelta, onDone }) {
     `(Side question from the user, asked in a side panel. It is not part of the main task: answer it directly and briefly from the conversation so far, reading files only if needed. Don't change anything and don't continue the main work.)` +
     (prior ? `\n\nEarlier side questions:\n${prior}` : '') +
     `\n\n${question}`;
-  const env = { ...process.env };
-  for (const k of PRIVATE_ENV) delete env[k];
+  const env = claudeEnv();
   const cmd = resolveCommand(config.claudeBin, args);
   const p = spawn(cmd.file, cmd.args, { cwd: m.cwd, env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
   let text = '';

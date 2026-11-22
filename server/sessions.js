@@ -2,7 +2,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { createRequire } from 'node:module';
-import { config, PRIVATE_ENV } from './config.js';
+import { config } from './config.js';
+import { claudeEnv } from './gateway.js';
 import { sessionExtras } from './environments.js';
 import { ChatSession, claudeProjectDir, transcriptPath } from './chat.js';
 
@@ -33,8 +34,7 @@ function transcriptExists(cwd, id) {
 }
 
 function childEnv(sid, meta) {
-  const env = { ...process.env, ...sessionExtras(meta).env, TERM: 'xterm-256color', COLORTERM: 'truecolor' };
-  for (const k of PRIVATE_ENV) delete env[k];
+  const env = { ...claudeEnv(sessionExtras(meta).env), TERM: 'xterm-256color', COLORTERM: 'truecolor' };
   return withOpener(env, sid);
 }
 

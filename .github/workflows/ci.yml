@@ -37,6 +37,8 @@ jobs:
         run: npm test
       - name: Teams bridge end to end (fake CLI, fake Graph)
         run: npm run test:bridge
+      - name: AI gateway mode (fake CLI, fake gateway)
+        run: npm run test:gateway
 
   ui:
     name: UI smoke test (headless Chrome)

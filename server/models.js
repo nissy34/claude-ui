@@ -1,7 +1,8 @@
 // The models this account can use, as the CLI reports them (initialize control request: the
 // same list the SDK's supportedModels() returns). Cached, refreshed by chats as they start.
 import { spawn } from 'node:child_process';
-import { config, PRIVATE_ENV } from './config.js';
+import { config } from './config.js';
+import { claudeEnv, onGatewayChange } from './gateway.js';
 import { resolveCommand } from './launch.js';
 
 let cache = null;
@@ -21,8 +22,9 @@ export function setModels(list) {
 
 function fetchFromCli() {
   return new Promise((resolve) => {
-    const env = { ...process.env };
-    for (const k of PRIVATE_ENV) delete env[k];
+    // In gateway mode (CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY) the CLI adds the gateway's
+    // Claude models to this list, marked "From gateway".
+    const env = claudeEnv();
     const cmd = resolveCommand(config.claudeBin, [...config.claudeArgs, '-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose']);
     let p;
     try {
@@ -55,6 +57,12 @@ function fetchFromCli() {
     p.stdin.write(JSON.stringify({ type: 'control_request', request_id: 'models', request: { subtype: 'initialize' } }) + '\n');
   });
 }
+
+// Switching the gateway on or off changes what the account can use.
+onGatewayChange(() => {
+  cache = null;
+  cachedAt = 0;
+});
 
 export async function getModels() {
   if (cache && Date.now() - cachedAt < 30 * 60_000) return cache;
