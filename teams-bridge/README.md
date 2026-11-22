@@ -81,7 +81,7 @@ docker compose --profile teams up -d --build
 
 Without Docker: `node teams-bridge/bridge.mjs` (Node 20+, no dependencies).
 
-The first time, the bridge asks you to sign in, and the web UI says so. Open **`/bridge-signin`** on your Claude UI address (for example `http://bamba:8787/bridge-signin`):
+The first time, the bridge asks you to sign in, and the web UI says so. Open **Settings > Teams** in Claude UI:
 
 1. Press **Sign in to Microsoft** and sign in with your work account, in any browser where you can (your work computer is fine).
 2. The browser ends on `http://localhost/?code=…` with a "can't be reached" error. That's expected.
@@ -113,7 +113,7 @@ Messages the bridge posts appear as written by you, so Teams doesn't notify you 
 
 The bridge keeps its Microsoft sign-in itself: it refreshes the access token before it runs out, and every refresh rolls the refresh token forward, so it stays signed in as long as it runs. Tokens are kept in `~/.claude-web/teams-bridge/token.json` (mode 600).
 
-If your company has a **sign-in frequency** policy (for example "sign in again every 7 days"), no refresh can get past it. When that happens the web UI tells you, and you sign in again on `/bridge-signin`.
+If your company has a **sign-in frequency** policy (for example "sign in again every 7 days"), no refresh can get past it. When that happens the web UI tells you, and you sign in again in Settings > Teams.
 
 ## Settings
 
@@ -149,7 +149,7 @@ All under `/api/bridge`, `Authorization: Bearer <bridge token>`, requests with a
 - `GET /events?after=<seq>&wait=<seconds>` → `{ seq, lastSeen, events }`, long-poll. Events: `ask`, `resolved`, `post` (coordinator), `turn` (finished chat started from the bridge), `notify`.
 - `POST /answer` `{ id, text?, choice?, behavior?: allow|always|deny|accept|decline, answers? }`.
 - `POST /act` `{ action: project_send|new_chat|send|stop|status|folders, ... }`.
-- `POST /status` `{ state, message, code?, url? }`: the bridge's own state, shown on `/bridge-signin` and as a notice in the web UI.
-- `GET /signin-reply?wait=<seconds>` → `{ url }`: the address pasted on `/bridge-signin`, handed over once.
+- `POST /status` `{ state, message, code?, url? }`: the bridge's own state, shown in Settings > Teams and as a notice in the web UI.
+- `GET /signin-reply?wait=<seconds>` → `{ url }`: the address pasted in Settings > Teams, handed over once.
 
 Test: `npm run test:bridge` (fake CLI and a fake Graph server).

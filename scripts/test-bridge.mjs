@@ -176,8 +176,8 @@ async function main() {
   const link = new URL(signin.url);
   challenge = link.searchParams.get('code_challenge');
   check(link.pathname.endsWith('/tenant/oauth2/v2.0/authorize') && link.searchParams.get('redirect_uri') === 'http://localhost' && link.searchParams.get('code_challenge_method') === 'S256' && /Chat\.ReadWrite/.test(link.searchParams.get('scope')), 'a PKCE sign-in link with the localhost redirect', signin.url);
-  const page = await fetch(`${base}/bridge-signin`, { headers: { cookie } });
-  check(page.ok && /Finish sign-in/.test(await page.text()), 'the web UI has a sign-in page');
+  const bs = await api('/api/bridge-status');
+  check(bs.enabled && bs.token === token, 'Settings > Teams gets the state and the bridge token');
   check((await api('/api/bridge-signin', { method: 'POST', body: { url: 'hello' }, allowError: true })).status === 400, 'a pasted non-address is refused');
   await api('/api/bridge-signin', { method: 'POST', body: { url: `http://localhost/?code=good-code&state=wrong` } });
   await until(async () => (await api('/api/bridge-status')).status?.state === 'signin-error', 10_000, 'state mismatch error');

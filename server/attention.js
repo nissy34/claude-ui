@@ -391,7 +391,7 @@ export function createAttention({ store, engine, resolveDir, listProjects, deskt
       onStatus?.(bridgeStatus);
       res.json({ ok: true });
     });
-    // Browser sign-in for the bridge: the address you paste on /bridge-signin waits here for the bridge.
+    // Browser sign-in for the bridge: the address you paste in Settings > Teams waits here for the bridge.
     app.get('/api/bridge/signin-reply', (req, res) => {
       const take = () => {
         const url = signinReply;
@@ -444,7 +444,7 @@ export function createAttention({ store, engine, resolveDir, listProjects, deskt
       lastSeen = Date.now();
     },
     status: () => bridgeStatus,
-    /** From the web UI's /bridge-signin page (cookie-authenticated). */
+    /** From Settings > Teams in the web UI (cookie-authenticated). */
     signinReply(url) {
       signinReply = String(url || '').trim().slice(0, 4000);
       for (const w of [...signinWaiters]) w();

@@ -424,13 +424,12 @@ const attention = createAttention({
   // Sign-in codes and expiry from the Teams bridge pop up in every open UI.
   onStatus: (b) => {
     if (b.state === 'signin') emitUi({ t: 'error', error: `Teams bridge: sign in to Microsoft. Open ${b.url || 'https://microsoft.com/devicelogin'} and enter the code ${b.code}.` });
-    else if (b.state === 'signin-browser') emitUi({ t: 'error', error: 'Teams bridge: sign in to Microsoft. Open /bridge-signin on this server to finish.' });
+    else if (b.state === 'signin-browser') emitUi({ t: 'error', error: 'Teams bridge: sign in to Microsoft in Settings > Teams.' });
     else if (b.state === 'expired') emitUi({ t: 'error', error: `Teams bridge: ${b.message} It will ask for a new sign-in code.` });
   },
 });
-app.get('/api/bridge-status', (req, res) => (isAuthed(req) ? res.json({ status: attention.status() }) : res.status(401).json({ error: 'Not logged in' })));
-// Browser sign-in for the Teams bridge: a page with the Microsoft link and a box for the address the browser ends on.
-app.get('/bridge-signin', (req, res) => (isAuthed(req) ? res.set('Cache-Control', 'no-store').sendFile(path.join(path.dirname(fileURLToPath(import.meta.url)), 'bridge-signin.html')) : res.redirect('/')));
+app.get('/api/bridge-status', (req, res) => (isAuthed(req) ? res.json({ status: attention.status(), enabled: !!config.bridgeApi, token: config.bridgeApi ? getBridgeToken() : null }) : res.status(401).json({ error: 'Not logged in' })));
+// Browser sign-in for the Teams bridge (Settings > Teams): the address the browser ended on, for the bridge.
 app.post('/api/bridge-signin', (req, res) => {
   if (!isAuthed(req)) return res.status(401).json({ error: 'Not logged in' });
   if (!originOk(req)) return res.status(403).json({ error: 'Bad origin' });
@@ -557,7 +556,7 @@ app.get('/api/config', (req, res) => {
 // ---------- Claude Desktop handoff MCP + shared notes ----------
 app.get('/api/desktop-mcp', (req, res) => {
   if (!config.desktopMcp) return res.json({ enabled: false });
-  res.json({ enabled: true, token: getMcpToken(), bridgeToken: config.bridgeApi ? getBridgeToken() : null, fromEnv: !!process.env.CW_MCP_TOKEN, host: config.host, port: config.port, hostname: config.inDocker ? '' : os.hostname(), publicUrl: config.publicUrl, inDocker: config.inDocker });
+  res.json({ enabled: true, token: getMcpToken(), fromEnv: !!process.env.CW_MCP_TOKEN, host: config.host, port: config.port, hostname: config.inDocker ? '' : os.hostname(), publicUrl: config.publicUrl, inDocker: config.inDocker });
 });
 app.post(
   '/api/desktop-mcp/token',

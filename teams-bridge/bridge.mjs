@@ -73,7 +73,7 @@ async function ui(method, p, body) {
 
 let authNoticeKey = '';
 async function reportAuth(info) {
-  log(`[auth] ${info.message}${info.url && info.state === 'signin-browser' ? `\n  ${info.url}\n  Paste the address the browser ends on in the web UI (/bridge-signin), or run: node teams-bridge/bridge.mjs login` : ''}`);
+  log(`[auth] ${info.message}${info.url && info.state === 'signin-browser' ? `\n  ${info.url}\n  Paste the address the browser ends on in the web UI (Settings > Teams), or run: node teams-bridge/bridge.mjs login` : ''}`);
   // Show sign-in steps in the web UI too, so nobody has to read container logs.
   const key = `${info.state}:${info.code || ''}:${info.url || ''}:${info.state === 'signin-error' ? info.message : ''}`;
   if (key === authNoticeKey) return;
