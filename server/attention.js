@@ -372,8 +372,14 @@ export function createAttention({ store, engine, resolveDir, listProjects, deskt
       s.meta.assistant = true;
       s.meta.customName = true;
       s.meta.pinned = true;
+      s.meta.modeSet = true;
       store.save();
       store.changed?.();
+    } else if (!s.meta.modeSet) {
+      // Made before chats started in Auto mode: switch it once.
+      s.meta.modeSet = true;
+      if (!s.meta.permissionMode && config.defaultMode !== 'default') s.meta.permissionMode = config.defaultMode;
+      store.save();
     }
     return s;
   }

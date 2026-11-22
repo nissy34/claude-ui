@@ -51,11 +51,11 @@ const where = (x) => {
 };
 
 export const TAG = '<b>Claude</b> ›';
-const how = (code, words) => `<br><i>Reply to this message with ${words}, or start with #${code}.</i>`;
+const how = (code, words) => `<br><i>Reply to this message with ${words}.</i>`;
 
 /** The message for something waiting on you. `code` is the short number you can reply with. */
 export function askHtml(item, code, { allowPermissions = true } = {}) {
-  const head = `${TAG} <b>#${code}</b> · ${where(item)}`;
+  const head = `${TAG} ${where(item)}`;
   switch (item.kind) {
     case 'question': {
       const qs = item.questions || [];
@@ -101,7 +101,7 @@ export const HELP = [
   `${TAG} Here's what I understand:`,
   '• Just write what you want: the Assistant works out what you mean ("tell the Claude UI project to add dark mode", "yes to the npm one", "what\'s going on?").',
   '• Reply to one of my messages to answer it or to continue that conversation.',
-  '• <b>#3 yes</b> answers request #3. <b>/waiting</b> lists what is waiting on you.',
+  '• <b>/waiting</b> posts again everything waiting on you.',
   '• <b>/project &lt;name&gt;: &lt;message&gt;</b> sends to a project coordinator.',
   '• <b>/new &lt;folder&gt;: &lt;task&gt;</b> starts a new chat in a folder. <b>/folders</b> lists folders.',
   '• <b>/to &lt;project or chat&gt;</b> switches who plain text goes to.',

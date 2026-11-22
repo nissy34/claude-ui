@@ -119,7 +119,7 @@ app.post(
       cwd: wt ? wt.path : dir,
       kind: 'chat',
       name: name ? String(name).slice(0, 80) : undefined,
-      permissionMode: permissionMode || parent?.meta.permissionMode,
+      permissionMode: permissionMode || (parent ? parent.meta.permissionMode || 'default' : undefined),
       model: model && model !== 'default' ? model : model === 'default' ? undefined : parent?.meta.model,
       effort: effort || parent?.meta.effort,
     });
@@ -848,7 +848,7 @@ app.post(
     const src = getSession(req);
     if (src.meta.kind !== 'chat') throw new Error('Only chats can be forked');
     const m = src.meta;
-    const t = store.create({ cwd: m.cwd, kind: 'chat', name: `${m.name} (fork)`.slice(0, 80), model: m.model, permissionMode: m.permissionMode, effort: m.effort });
+    const t = store.create({ cwd: m.cwd, kind: 'chat', name: `${m.name} (fork)`.slice(0, 80), model: m.model, permissionMode: m.permissionMode || 'default', effort: m.effort });
     t.meta.project = m.project || m.cwd;
     if (m.worktree) t.meta.worktree = m.worktree;
     if (m.worktrees) t.meta.worktrees = m.worktrees;

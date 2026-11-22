@@ -11,18 +11,18 @@ Talk to your agents from a Microsoft Teams chat. The bridge runs next to Claude 
 
 ## What it does
 
-**Things waiting on you show up in the chat as cards** (Adaptive Cards: a title, the command or options laid out, an "Open in web UI" link when `CW_PUBLIC_URL` or `TEAMS_UI_LINK` is set), each with a short number. The cards are read-only, because buttons need a registered Teams bot; you answer by replying. If your tenant doesn't let users post cards, the bridge falls back to formatted text by itself (`TEAMS_CARDS=0` forces text).
+**Things waiting on you show up in the chat as cards** (Adaptive Cards: a title, the command or options laid out, an "Open in web UI" link when `CW_PUBLIC_URL` or `TEAMS_UI_LINK` is set). These cards are read-only, so you answer by replying. For tappable buttons, add the optional workflow (see Buttons). If your tenant doesn't let users post cards, the bridge falls back to formatted text by itself (`TEAMS_CARDS=0` forces text).
 
 | In Claude UI | In Teams | You reply |
 | --- | --- | --- |
-| A permission prompt | `#3 · my-chat wants to use Bash: npm test` | `yes`, `always`, or `no` plus a reason |
+| A permission prompt | `my-chat wants to use Bash: npm test` | `yes`, `always`, or `no` plus a reason |
 | AskUserQuestion | The question with numbered options | a number, your own words, one line per question |
 | A project decision card | The options, the recommended one marked | a number |
 | A plan (ExitPlanMode) | The plan | `yes`, or `no` plus what to change |
 | An MCP sign-in link | The link | `done` after you sign in, `no` to cancel |
 | A coordinator post, a finished chat started from Teams, `notify_user` | The text | reply to continue that conversation |
 
-Answer by **replying to the message** (swipe it on the phone, or hover and Reply), or by writing `#3 yes`. A bare `yes` or `2` answers the one open request when there is only one. Whichever side answers first wins: answer in the web UI and the Teams message is marked "Answered in the web UI".
+Answer by **replying to the message** (swipe it on the phone, or hover and Reply). A bare `yes` or `2` answers the one open request when there is only one. Whichever side answers first wins: answer in the web UI and the Teams message is marked "Answered in the web UI".
 
 MCP sign-in **forms** (usernames, passwords) never go to Teams; fill those in the web UI.
 
@@ -113,6 +113,26 @@ In a chat with other people, only your own messages are read.
 
 Messages the bridge posts appear as written by you, so Teams doesn't notify you about them. If you want your phone to ring for questions, add a Teams **Workflows** webhook: in Teams, Workflows > "Post to a chat when a webhook request is received", pick "Chat with Flow bot", copy the URL into `TEAMS_PING_URL`. The bridge then also sends a short ping through it for each request and post (an outbound HTTPS call). Reply in your chat with yourself as usual.
 
+### Buttons (optional, a Teams workflow)
+
+Cards the bridge posts itself can't have working buttons (that needs a registered bot). A Power Automate workflow can: the bridge sends each request to the workflow (an outbound HTTPS call), the workflow shows it as a card with buttons in your chat with the Workflows bot and waits, then posts what you tapped back into that chat, where the bridge reads it. The buttons come from the request: Yes / Always / No and a reason box for tool approvals, the options and a text box for questions, one button per option for decisions, Sign in / Done / Cancel for sign-ins. Because the Workflows bot posts the card, your phone also rings.
+
+Make the workflow once, at make.powerautomate.com > Create > Instant cloud flow > skip:
+
+1. Trigger **When a Teams webhook request is received** (Microsoft Teams). Who can trigger: **Anyone** (the URL is the secret).
+2. Action **Post card in a chat or channel and wait for a response** (in some languages: "Post adaptive card and wait for a response"):
+   - Post as **Flow bot**, Post in **Chat with Flow bot**, Recipient: you.
+   - Message: an expression, `string(triggerBody()?['attachments']?[0]?['content'])`.
+   - Update message: `✓ Sent`. Should update card: **Yes**.
+3. Action **Post message in a chat or channel**:
+   - Post as **Flow bot**, Post in **Chat with Flow bot**, Recipient: you.
+   - Message: an expression, `concat('cw:', string(body('Post_card_in_a_chat_or_channel_and_wait_for_a_response')?['data']))`. Use your step 2 action's name, with spaces as underscores.
+4. Save, then copy the trigger's URL into `TEAMS_FLOW_URL`.
+
+The bridge finds the chat with the Workflows bot by itself after the first card. If it doesn't, list your chats (`bridge.mjs chats`) and set `TEAMS_FLOW_CHAT_ID`. Each card carries a random secret, and only answers that echo it back count. Requests still appear in your own chat too, where replying keeps working. With `TEAMS_FLOW_URL` set, `TEAMS_PING_URL` isn't needed for requests.
+
+If a request is answered somewhere else first, its workflow card keeps its buttons. Tapping one then just says it was already answered.
+
 ## Staying signed in
 
 The bridge keeps its Microsoft sign-in itself: it refreshes the access token before it runs out, and every refresh rolls the refresh token forward, so it stays signed in as long as it runs. Tokens are kept in `~/.claude-web/teams-bridge/token.json` (mode 600).
@@ -136,6 +156,8 @@ If your company has a **sign-in frequency** policy (for example "sign in again e
 | `TEAMS_ALLOW_PERMISSIONS` | `1` | `0` = answer questions and decisions only, approve tools in the web UI |
 | `TEAMS_POLL_SECONDS` | `5` | how often to read the chat (minimum 2) |
 | `TEAMS_PING_URL` | | Workflows webhook for phone notifications |
+| `TEAMS_FLOW_URL` | | workflow webhook for cards with buttons (see Buttons) |
+| `TEAMS_FLOW_CHAT_ID` | found by itself | your chat with the Workflows bot |
 | `CLAUDE_UI_URL` | `http://127.0.0.1:8787` | |
 | `CW_BRIDGE_TOKEN` / `CW_BRIDGE_TOKEN_FILE` | `~/.claude-web/bridge-token` | |
 | `TEAMS_DATA_DIR` | `~/.claude-web/teams-bridge` | state and tokens |

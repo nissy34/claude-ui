@@ -279,6 +279,8 @@ class Store {
       if (resume === 'continue') resume = latestTranscript(cwd);
       if (resume) meta.claudeSessionId = resume;
       if (model) meta.model = String(model).slice(0, 100);
+      // No mode given: the server default (CW_DEFAULT_MODE, Auto). 'default' asks before edits.
+      if (permissionMode == null || permissionMode === '') permissionMode = config.defaultMode;
       if (['auto', 'acceptEdits', 'plan', 'bypassPermissions'].includes(permissionMode)) meta.permissionMode = permissionMode;
       if (['low', 'medium', 'high', 'xhigh', 'max'].includes(effort)) meta.effort = effort;
       s = new ChatSession(meta, this);

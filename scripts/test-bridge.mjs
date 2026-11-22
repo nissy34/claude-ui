@@ -65,6 +65,8 @@ async function until(fn, ms = 15_000, label = 'condition') {
 // ---------- fake Graph + login ----------
 const ME = { id: 'user-me', displayName: 'Test Person' };
 const chat = []; // messages, oldest first
+const flowMsgs = []; // the chat with the Workflows bot
+const flowCards = []; // cards posted to the workflow's webhook
 const reactions = [];
 const edits = [];
 let tokenCalls = 0;
@@ -83,6 +85,10 @@ const graph = http.createServer((req, res) => {
     const url = new URL(req.url, 'http://x');
     const p = decodeURIComponent(url.pathname);
     // Device code sign-in is blocked, as in many company tenants: the bridge falls back to the browser.
+    if (p === '/flow') {
+      flowCards.push(JSON.parse(data).attachments[0].content);
+      return json(res, 202, {});
+    }
     if (p.endsWith('/oauth2/v2.0/devicecode')) return json(res, 400, { error: 'invalid_request', error_description: 'AADSTS50199: device code flow is blocked by policy' });
     if (p.endsWith('/oauth2/v2.0/token')) {
       const f = new URLSearchParams(data);
@@ -102,6 +108,7 @@ const graph = http.createServer((req, res) => {
     if (p === '/v1.0/me') return json(res, 200, ME);
     let m;
     if ((m = /^\/v1\.0\/chats\/([^/]+)\/messages$/.exec(p))) {
+      if (req.method === 'GET' && m[1] === 'flow-chat') return json(res, 200, { value: [...flowMsgs].reverse() });
       if (req.method === 'GET') return json(res, 200, { value: [...chat].reverse().slice(0, Number(url.searchParams.get('$top')) || 20) });
       const b = JSON.parse(data);
       if (refuseCards && b.attachments?.length) return json(res, 403, { error: { message: 'cards not allowed' } });
@@ -166,6 +173,7 @@ async function main() {
   check((await api('/api/bridge/attention', { headers: { authorization: `Bearer ${token}`, origin: 'http://evil' }, allowError: true })).status === 403, 'a browser page: refused');
   const first = (await api('/api/sessions')).sessions.find((x) => x.name === 'Assistant');
   check(first?.pinned, 'the Assistant chat exists and is pinned from the start', first);
+  check(first?.permissionMode === 'auto', 'the Assistant starts in Auto mode', first);
   const empty = await api('/api/bridge/attention', { headers: { authorization: `Bearer ${token}` } });
   check(Array.isArray(empty.items) && empty.items.length === 0, 'nothing is waiting at start');
 
@@ -198,7 +206,7 @@ async function main() {
 
   console.log('/new starts a chat; a permission prompt reaches Teams; a reply answers it');
   say('/new demo: @@ask Bash {"command":"ls -la"}');
-  const perm = await until(() => findBot(/#1<\/b>[\s\S]*Bash[\s\S]*ls -la/), 15_000, 'permission message');
+  const perm = await until(() => findBot(/Bash[\s\S]*ls -la[\s\S]*Reply to this message/), 15_000, 'permission message');
   check(/Reply to this message/.test(perm.body.content), 'the prompt says how to answer');
   check(findBot(/Started <b>/), 'the bridge confirms the new chat');
   const answerMsg = say('yes', perm.id);
@@ -213,7 +221,7 @@ async function main() {
 
   console.log('Plain text goes to the same chat; #code answers a question');
   say('@@ask AskUserQuestion {"questions":[{"question":"Colour?","header":"Colour","multiSelect":false,"options":[{"label":"Red","description":"warm"},{"label":"Blue","description":"cool"}]}]}');
-  const q = await until(() => findBot(/#2<\/b>[\s\S]*Colour\?[\s\S]*2\. Blue/), 15_000, 'question message');
+  const q = await until(() => findBot(/Colour\?[\s\S]*2\. Blue[\s\S]*Reply to this message/), 15_000, 'question message');
   check(q, 'the question shows numbered options');
   say('#2 2');
   await until(() => findBot(/answer: allowed \{"Colour\?":"Blue"\}/), 15_000, 'question answered with Blue');
@@ -221,7 +229,7 @@ async function main() {
 
   console.log('A bare "no" with one open request denies it, with the reason');
   say('@@ask Write {"file_path":"/tmp/x","content":"hi"}');
-  await until(() => findBot(/#3<\/b>[\s\S]*Write/), 15_000, 'write prompt');
+  await until(() => findBot(/Write[\s\S]*Reply to this message/), 15_000, 'write prompt');
   await sleep(2500); // let the bridge see #3 as open
   say('no not now');
   await until(() => findBot(/answer: denied: The user denied this from Teams: not now/), 15_000, 'denied with reason');
@@ -229,7 +237,7 @@ async function main() {
 
   console.log('Answered in the web UI: the Teams message says so');
   say('@@ask Bash {"command":"rm -rf build"}');
-  const p4 = await until(() => findBot(/#4<\/b>[\s\S]*rm -rf build/), 15_000, 'prompt 4');
+  const p4 = await until(() => findBot(/rm -rf build[\s\S]*Reply to this message/), 15_000, 'prompt 4');
   const ui = await api(`/api/bridge/attention`, { headers: { authorization: `Bearer ${token}` } });
   const item = ui.items.find((i) => i.id.startsWith('perm:'));
   check(item?.kind === 'permission' && item.tool === 'Bash' && item.detail === 'rm -rf build', 'the attention list has the prompt', ui.items);
@@ -242,7 +250,7 @@ async function main() {
   check(true, 'the Teams prompt shows "Answered in the web UI"');
   ws.close();
   say('#4 yes');
-  await until(() => findBot(/#4 was already answered/), 10_000, 'already answered note');
+  await until(() => findBot(/That one was already answered/), 10_000, 'already answered note');
   check(true, 'a late reply is told it was already answered');
 
   console.log('notify_user reaches Teams');
@@ -259,12 +267,11 @@ async function main() {
   await api(`/api/cprojects/${project.id}/threads`, { method: 'POST', body: { title: 'Thread C', brief: call('request_decision', { question: 'Pick a colour', options: [{ label: 'Red' }, { label: 'Blue' }], recommended: 1 }) } });
   const dec = await until(() => findBot(/needs a decision[\s\S]*Pick a colour[\s\S]*2\. <b>Blue<\/b> \(recommended\)/), 20_000, 'decision message');
   check(dec, 'the decision shows its options and the recommendation');
-  const code = /#(\d+)<\/b>/.exec(dec.body.content)[1];
   say('2', dec.id);
   const d = await until(async () => (await api(`/api/cprojects/${project.id}`)).project.decisions.find((x) => x.answer), 15_000, 'decision answered');
   check(d.answer.choice === 1 && d.answer.by?.kind === 'user', 'the decision is answered as you', d.answer);
   await until(() => /Answered: Blue/.test(chat.find((m) => m.id === dec.id).body.content), 10_000, 'decision marked');
-  check(true, `decision #${code} is marked answered`);
+  check(true, 'the decision is marked answered');
 
   console.log('Commands');
   say('/status');
@@ -285,7 +292,7 @@ async function main() {
   await new Promise((r) => bridge.once('exit', r));
   const count = botMsgs().length;
   bridge = spawn(process.execPath, [path.join(root, 'teams-bridge', 'bridge.mjs')], {
-    env: { ...env, CLAUDE_UI_URL: base, CW_BRIDGE_TOKEN_FILE: tokenFile, TEAMS_DATA_DIR: path.join(tmp, 'teams'), TEAMS_CLIENT_ID: 'client', TEAMS_TENANT_ID: 'tenant', TEAMS_GRAPH_URL: `http://127.0.0.1:${gport}/v1.0`, TEAMS_LOGIN_URL: `http://127.0.0.1:${gport}`, TEAMS_POLL_SECONDS: '2', TEAMS_AWAY_MINUTES: '0', TEAMS_UI_LINK: 'http://bamba:8787' },
+    env: { ...env, CLAUDE_UI_URL: base, CW_BRIDGE_TOKEN_FILE: tokenFile, TEAMS_DATA_DIR: path.join(tmp, 'teams'), TEAMS_CLIENT_ID: 'client', TEAMS_TENANT_ID: 'tenant', TEAMS_GRAPH_URL: `http://127.0.0.1:${gport}/v1.0`, TEAMS_LOGIN_URL: `http://127.0.0.1:${gport}`, TEAMS_POLL_SECONDS: '2', TEAMS_AWAY_MINUTES: '0', TEAMS_UI_LINK: 'http://bamba:8787', TEAMS_FLOW_URL: `http://127.0.0.1:${gport}/flow`, TEAMS_FLOW_CHAT_ID: 'flow-chat' },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   bridge.stderr.on('data', (d) => process.stderr.write(`[bridge] ${d}`));
@@ -318,6 +325,27 @@ async function main() {
   check(true, 'the Assistant answers a request when the user clearly said so');
   await until(() => findBot(/Done, npm test is running\./), 10_000, 'assistant confirmation');
   check(true, 'and confirms in Teams');
+
+  console.log('Buttons through a Teams workflow');
+  const flowSay = (d) => flowMsgs.push({ id: `f${++n}`, messageType: 'message', createdDateTime: new Date(Date.now() + n).toISOString(), from: { application: { displayName: 'Workflows' } }, body: { contentType: 'html', content: `<p>cw:${JSON.stringify(d).replace(/"/g, '&quot;')}</p>` } });
+  say('/new demo: @@ask Bash {"command":"npm run build"}');
+  const fc = await until(() => flowCards.find((c) => JSON.stringify(c).includes('npm run build')), 15_000, 'workflow card');
+  const yes = fc.actions.find((a) => a.title === 'Yes');
+  check(yes?.type === 'Action.Submit' && fc.actions.some((a) => a.title === 'No') && fc.body.some((b) => b.type === 'Input.Text'), 'the workflow card has Yes / No buttons and a reason box', fc.actions);
+  flowSay({ cw: 'forged', a: 'yes' });
+  await sleep(3000);
+  check(!findBot(/finished:[\s\S]*npm run build|answer: allowed \{\}[\s\S]*build/), 'an answer without the card secret is ignored');
+  const open8 = (await api('/api/bridge/attention', { headers: { authorization: `Bearer ${token}` } })).items.find((i) => i.detail === 'npm run build');
+  check(open8, 'so the request is still open');
+  flowSay({ ...yes.data, text: '' });
+  await until(async () => !(await api('/api/bridge/attention', { headers: { authorization: `Bearer ${token}` } })).items.some((i) => i.detail === 'npm run build'), 15_000, 'answered by the button');
+  check(true, 'tapping Yes in the workflow card allows it');
+  say(`/new demo: @@ask AskUserQuestion {"questions":[{"question":"Size?","options":[{"label":"S"},{"label":"M"},{"label":"L"}]}]}`);
+  const qc = await until(() => flowCards.find((c) => JSON.stringify(c).includes('Size?')), 15_000, 'question workflow card');
+  check(qc.body.some((b) => b.type === 'Input.ChoiceSet' && b.choices.length === 3), 'a question becomes a choice list');
+  flowSay({ ...qc.actions[0].data, q0: '3', o0: '' });
+  await until(() => findBot(/answer: allowed \{\\*"Size\?\\*":\\*"L\\*"\}/), 15_000, 'question answered L');
+  check(true, 'picking an option and Send answers the question');
 
   console.log('A tenant that refuses cards gets formatted text');
   refuseCards = true;

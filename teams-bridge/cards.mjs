@@ -34,7 +34,7 @@ function card(body, url, urlTitle = 'Open in web UI') {
 }
 
 const header = (code, where, title, tone) => [
-  { type: 'TextBlock', text: `#${code} · ${where}`, size: 'Small', isSubtle: true, wrap: true, spacing: 'None' },
+  { type: 'TextBlock', text: where, size: 'Small', isSubtle: true, wrap: true, spacing: 'None' },
   T(title, { weight: 'Bolder', size: 'Medium', spacing: 'Small', ...(tone ? { color: tone } : {}) }),
 ];
 
@@ -53,12 +53,12 @@ export function askCard(item, n, { allowPermissions = true, uiUrl } = {}) {
           ...header(n, where, `Wants to use ${item.tool}`, 'Warning'),
           ...(item.detail ? [code(item.detail)] : []),
           ...(item.reason ? [T(item.reason, { size: 'Small', isSubtle: true })] : []),
-          hint(allowPermissions ? `Reply to this card with yes${item.canAlways ? ', always' : ''} or no (and a reason), or write #${n} yes.` : 'Approving from Teams is off; answer in the web UI.'),
+          hint(allowPermissions ? `Reply to this message with yes${item.canAlways ? ', always' : ''} or no (and a reason).` : 'Approving from Teams is off; answer in the web UI.'),
         ],
         url
       );
     case 'plan':
-      return card([...header(n, where, 'Has a plan and wants to start', 'Accent'), T(clip(item.detail, 1800), { spacing: 'Small' }), hint(allowPermissions ? `Reply yes to start, or no plus what to change (#${n} …).` : 'Approve it in the web UI.')], url);
+      return card([...header(n, where, 'Has a plan and wants to start', 'Accent'), T(clip(item.detail, 1800), { spacing: 'Small' }), hint(allowPermissions ? 'Reply to this message with yes to start, or no plus what to change.' : 'Approve it in the web UI.')], url);
     case 'question': {
       const qs = item.questions || [];
       const body = [...header(n, where, qs.length > 1 ? 'Has questions' : clip(qs[0]?.question, 300), 'Accent')];
@@ -67,7 +67,7 @@ export function askCard(item, n, { allowPermissions = true, uiUrl } = {}) {
         body.push({ type: 'FactSet', spacing: 'Small', facts: (q.options || []).map((o, i) => ({ title: `${i + 1}`, value: o.description ? `**${o.label}** · ${clip(o.description, 140)}` : `**${o.label}**` })) });
         if (q.multiSelect) body.push(T('Pick one or more, comma separated.', { size: 'Small', isSubtle: true, spacing: 'None' }));
       });
-      body.push(hint(qs.length > 1 ? `Reply with one answer per line (a number or your own words), or #${n} …` : `Reply with a number or your own words, or #${n} …`));
+      body.push(hint(qs.length > 1 ? 'Reply to this message with one answer per line (a number or your own words).' : 'Reply to this message with a number or your own words.'));
       return card(body, url);
     }
     case 'decision':
@@ -76,7 +76,7 @@ export function askCard(item, n, { allowPermissions = true, uiUrl } = {}) {
           ...header(n, where, item.question, 'Accent'),
           ...(item.irreversible ? [T('This cannot be undone.', { color: 'Attention', weight: 'Bolder', size: 'Small', spacing: 'Small' })] : []),
           { type: 'FactSet', spacing: 'Small', facts: item.options.map((o, i) => ({ title: `${i + 1}`, value: `**${o.label}**${i === item.recommended ? ' (recommended)' : ''}${o.consequence ? ` · ${clip(o.consequence, 200)}` : ''}` })) },
-          hint(`Reply with a number, or #${n} 2.`),
+          hint('Reply to this message with a number.'),
         ],
         url
       );
@@ -85,7 +85,7 @@ export function askCard(item, n, { allowPermissions = true, uiUrl } = {}) {
         [
           ...header(n, where, `${item.server || 'An MCP server'} needs you to sign in`, 'Warning'),
           T(clip(item.message, 500), { spacing: 'Small' }),
-          hint(item.url ? 'Open the link and sign in, then reply done. Reply no to cancel.' : 'This one is a form: fill it in in the web UI.'),
+          hint(item.url ? 'Open the link and sign in, then reply to this message with done (or no to cancel).' : 'This one is a form: fill it in in the web UI.'),
         ],
         item.url || url,
         item.url ? 'Sign in' : 'Open in web UI'
@@ -107,4 +107,68 @@ export function answeredCard(c, answer, by) {
 export function postCard(ev, { uiUrl } = {}) {
   const title = ev.type === 'post' ? ev.project.name : ev.type === 'turn' ? `${ev.session.name} ${ev.isError ? 'stopped with an error' : 'finished'}` : whereOf(ev);
   return card([T(title, { weight: 'Bolder', color: ev.isError ? 'Attention' : 'Default' }), ...(ev.text ? [T(clip(ev.text, 3000), { spacing: 'Small' })] : [])], link(uiUrl, ev.type === 'post' ? { project: ev.project } : { session: ev.session }));
+}
+
+/**
+ * The same request with buttons, for a Teams workflow ("Post card in a chat and wait for a response").
+ * Each button sends back { cw: nonce, a, n? } plus the inputs; the workflow posts that back as a
+ * "cw:{…}" message, which the bridge reads. Null when there is nothing to tap.
+ */
+export function flowCard(item, nonce, { allowPermissions = true, uiUrl } = {}) {
+  const base = askCard(item, 0, { allowPermissions, uiUrl });
+  if (!base) return null;
+  const body = base.body.slice(0, -1); // everything but the "reply to this message" hint
+  const submit = (title, data, style) => ({ type: 'Action.Submit', title, data: { cw: nonce, ...data }, ...(style ? { style } : {}) });
+  const actions = [];
+  switch (item.kind) {
+    case 'permission':
+    case 'plan':
+      if (!allowPermissions) return null;
+      body.push({ type: 'Input.Text', id: 'text', isMultiline: true, placeholder: item.kind === 'plan' ? 'What to change (with No)' : 'Reason (with No)', spacing: 'Medium' });
+      actions.push(submit('Yes', { a: 'yes' }, 'positive'));
+      if (item.kind === 'permission' && item.canAlways) actions.push(submit('Always', { a: 'always' }));
+      actions.push(submit('No', { a: 'no' }, 'destructive'));
+      break;
+    case 'question': {
+      // Replace the read-only option lists with inputs.
+      const qs = item.questions || [];
+      const head = body.slice(0, 2);
+      body.length = 0;
+      body.push(...head);
+      qs.forEach((q, i) => {
+        if (qs.length > 1) body.push({ type: 'TextBlock', text: `${i + 1}. ${q.question}`, weight: 'Bolder', wrap: true, spacing: 'Medium' });
+        body.push({ type: 'Input.ChoiceSet', id: `q${i}`, style: 'expanded', isMultiSelect: !!q.multiSelect, choices: (q.options || []).map((o, j) => ({ title: o.description ? `${o.label} · ${o.description}`.slice(0, 200) : o.label, value: String(j + 1) })) });
+        body.push({ type: 'Input.Text', id: `o${i}`, placeholder: 'Or your own words', spacing: 'Small' });
+      });
+      actions.push(submit('Send', { a: 'answer' }, 'positive'));
+      break;
+    }
+    case 'decision':
+      item.options.forEach((o, i) => actions.push(submit(o.label.slice(0, 40), { a: 'choice', n: i + 1 }, i === item.recommended ? 'positive' : undefined)));
+      break;
+    case 'signin':
+      if (!item.url) return null;
+      actions.push({ type: 'Action.OpenUrl', title: 'Sign in', url: item.url }, submit('Done', { a: 'yes' }, 'positive'), submit('Cancel', { a: 'no' }));
+      break;
+    default:
+      return null;
+  }
+  const link = base.actions?.find((x) => x.title === 'Open in web UI');
+  if (link) actions.push(link);
+  return { ...base, body, actions };
+}
+
+/** Turn what a workflow card sent back into the words a reply would have used. Null when empty. */
+export function flowAnswer(item, d) {
+  const extra = String(d.text || '').trim();
+  if (d.a === 'yes') return 'yes';
+  if (d.a === 'always') return 'always';
+  if (d.a === 'no') return extra ? `no ${extra}` : 'no';
+  if (d.a === 'choice') return String(Number(d.n) || '');
+  if (d.a === 'answer') {
+    const qs = item.questions || [{}];
+    const lines = qs.map((_, i) => String(d[`o${i}`] || '').trim() || String(d[`q${i}`] || '').trim());
+    return lines.every((l) => !l) ? null : lines.join('\n');
+  }
+  return null;
 }

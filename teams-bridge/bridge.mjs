@@ -10,10 +10,11 @@
 //
 // Settings are environment variables; see teams-bridge/README.md.
 import fs from 'node:fs';
+import crypto from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { Graph } from './graph.mjs';
-import { answeredCard, askCard, postCard } from './cards.mjs';
+import { answeredCard, askCard, flowAnswer, flowCard, postCard } from './cards.mjs';
 import { HELP, TAG, askHtml, esc, md, parseCommand, permissionReply, plain, postHtml, resolvedHtml } from './text.mjs';
 
 const env = process.env;
@@ -35,6 +36,8 @@ const cfg = {
   cards: env.TEAMS_CARDS !== '0',
   uiUrl: env.TEAMS_UI_LINK || env.CW_PUBLIC_URL || '',
   pingUrl: env.TEAMS_PING_URL || '',
+  flowUrl: env.TEAMS_FLOW_URL || '',
+  flowChatId: env.TEAMS_FLOW_CHAT_ID || '',
   graphUrl: env.TEAMS_GRAPH_URL,
   loginUrl: env.TEAMS_LOGIN_URL,
   auth: ['auto', 'device', 'browser'].includes(env.TEAMS_AUTH) ? env.TEAMS_AUTH : 'browser',
@@ -50,7 +53,7 @@ const log = (...a) => console.log(new Date().toISOString(), ...a);
 
 // ---------- state (survives restarts) ----------
 const STATE_FILE = path.join(cfg.dir, 'state.json');
-let st = { sent: {}, items: {}, codes: {}, nextCode: 1, target: null, seen: [], started: false };
+let st = { sent: {}, items: {}, codes: {}, nextCode: 1, target: null, seen: [], started: false, nonces: {}, flowSeen: null, flowChat: '' };
 try {
   st = { ...st, ...JSON.parse(fs.readFileSync(STATE_FILE, 'utf8')) };
 } catch {}
@@ -154,11 +157,12 @@ async function sendAsk(item) {
   if (st.items[item.id]) return;
   const code = st.nextCode++;
   st.codes[code] = item.id;
-  st.items[item.id] = { code, kind: item.kind, open: true, msg: null };
+  st.items[item.id] = { code, kind: item.kind, open: true, msg: null, ...(item.kind === 'question' ? { item: { questions: item.questions } } : {}) };
   const id = await post(askHtml(item, code, cfg), { kind: 'ask', item: item.id }, askCard(item, code, cfg));
   st.items[item.id].msg = id;
   save();
-  await ping(`#${code} needs you`, item.question || item.questions?.[0]?.question || item.detail || item.tool || item.server || '');
+  if (await sendFlow(item)) return; // the workflow's card rings the phone
+  await ping(`${item.session?.name || item.project?.name || 'An agent'} needs you`, item.question || item.questions?.[0]?.question || item.detail || item.tool || item.server || '');
 }
 
 async function onAsk(item) {
@@ -180,7 +184,7 @@ async function onResolved(ev) {
     else await graph.edit(cfg.chatId, it.msg, resolvedHtml(sent.html, ev.answer, ev.by));
   } catch (e) {
     // Editing can be refused (policy, old message). Confirm your own answers with a short line instead.
-    if (ev.by === 'bridge') await post(`${TAG} ✓ #${it.code}: ${esc(ev.answer)}`, { kind: 'note' });
+    if (ev.by === 'bridge') await post(`${TAG} ✓ Answered: ${esc(ev.answer)}`, { kind: 'note' });
   }
 }
 
@@ -244,13 +248,13 @@ async function flushHeld() {
 async function answer(itemId, text, msgId) {
   const it = st.items[itemId];
   if (!it) return post(`${TAG} I don't know that request.`, { kind: 'note' });
-  if (!it.open) return post(`${TAG} #${it.code} was already answered.`, { kind: 'note' });
+  if (!it.open) return post(`${TAG} That one was already answered.`, { kind: 'note' });
   const body = { id: itemId, text };
   if (it.kind === 'permission' || it.kind === 'plan' || it.kind === 'signin') {
-    if (!cfg.allowPermissions && it.kind !== 'signin') return post(`${TAG} Approving from Teams is turned off. Answer #${it.code} in the web UI.`, { kind: 'note' });
+    if (!cfg.allowPermissions && it.kind !== 'signin') return post(`${TAG} Approving from Teams is turned off. Answer it in the web UI.`, { kind: 'note' });
     const r = permissionReply(text);
     if (!r && cfg.assistant) return toAssistant(text, msgId, `[Context] Replying in Teams to request #${it.code} (id ${itemId}).`);
-    if (!r) return post(`${TAG} For #${it.code}, reply <b>yes</b>${it.kind === 'permission' ? ', <b>always</b>' : ''} or <b>no</b>.`, { kind: 'note' });
+    if (!r) return post(`${TAG} Reply <b>yes</b>${it.kind === 'permission' ? ', <b>always</b>' : ''} or <b>no</b>.`, { kind: 'note' });
     if (it.kind === 'signin') body.behavior = r.behavior === 'deny' ? 'decline' : 'accept';
     else Object.assign(body, r);
   } else if (/^(skip|\/skip|no answer)$/i.test(text.trim()) && it.kind === 'question') {
@@ -261,11 +265,11 @@ async function answer(itemId, text, msgId) {
     if (r.already) {
       it.open = false;
       save();
-      return post(`${TAG} #${it.code} was already answered.`, { kind: 'note' });
+      return post(`${TAG} That one was already answered.`, { kind: 'note' });
     }
     if (msgId) await react(msgId);
   } catch (e) {
-    await post(`${TAG} Couldn't answer #${it.code}: ${esc(e.message)}`, { kind: 'note' });
+    await post(`${TAG} Couldn't answer that: ${esc(e.message)}`, { kind: 'note' });
   }
 }
 
@@ -432,6 +436,88 @@ async function teamsLoop() {
   }
 }
 
+// ---------- buttons through a Teams workflow ----------
+// Graph posts as you, so its cards can't have working buttons. A Teams workflow can: the bridge posts
+// the card to the workflow's webhook (outbound), the workflow shows it in your chat with the Workflows
+// bot and waits, and then posts what you tapped back into that chat as "cw:{…}", which the bridge reads.
+async function sendFlow(item) {
+  if (!cfg.flowUrl) return false;
+  const nonce = crypto.randomBytes(12).toString('base64url');
+  const card = flowCard(item, nonce, cfg);
+  if (!card) return false;
+  try {
+    const res = await fetch(cfg.flowUrl, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ type: 'message', attachments: [{ contentType: 'application/vnd.microsoft.card.adaptive', contentUrl: null, content: card }] }) });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    st.nonces[nonce] = { id: item.id, at: Date.now() };
+    save();
+    return true;
+  } catch (e) {
+    log('[flow] posting the card failed:', e.message);
+    return false;
+  }
+}
+
+/** Find the chat with the Workflows bot: TEAMS_FLOW_CHAT_ID, or the 1:1 chat whose last message came from it. */
+async function flowChat() {
+  if (cfg.flowChatId) return cfg.flowChatId;
+  if (st.flowChat) return st.flowChat;
+  const r = await graph.chats();
+  const c = (r.value || []).find((x) => /workflows|power automate|flow/i.test(x.lastMessagePreview?.from?.application?.displayName || ''));
+  if (c) {
+    st.flowChat = c.id;
+    save();
+    log(`[flow] reading answers from chat ${c.id}`);
+  }
+  return st.flowChat;
+}
+
+function parseFlow(text) {
+  const i = text.indexOf('cw:');
+  if (i < 0) return null;
+  const a = text.indexOf('{', i);
+  const b = text.lastIndexOf('}');
+  if (a < 0 || b < a) return null;
+  try {
+    return JSON.parse(text.slice(a, b + 1));
+  } catch {
+    return null;
+  }
+}
+
+async function flowLoop() {
+  if (!cfg.flowUrl) return;
+  for (;;) {
+    try {
+      const id = await flowChat();
+      if (id) {
+        const r = await graph.recent(id, 20);
+        const msgs = (r.value || []).filter((m) => m.messageType === 'message' && !m.deletedDateTime).sort((a, b) => Date.parse(a.createdDateTime) - Date.parse(b.createdDateTime));
+        if (!st.flowSeen) st.flowSeen = msgs.map((m) => m.id); // history
+        const seen = new Set(st.flowSeen);
+        for (const m of msgs) {
+          if (seen.has(m.id)) continue;
+          st.flowSeen.push(m.id);
+          save();
+          const d = parseFlow(plain(m.body?.content));
+          // Only answers that carry the secret of a card the bridge posted count.
+          const n = d && st.nonces[d.cw];
+          if (!n) continue;
+          delete st.nonces[d.cw];
+          const it = st.items[n.id];
+          const text = it ? flowAnswer(it.item || {}, d) : null;
+          if (text) await answer(n.id, text, null);
+        }
+        st.flowSeen = st.flowSeen.slice(-200);
+      }
+      // Forget secrets of cards nobody tapped within a week.
+      for (const [k, v] of Object.entries(st.nonces)) if (Date.now() - v.at > 7 * 86400_000) delete st.nonces[k];
+    } catch (e) {
+      log('[flow]', e.message);
+    }
+    await new Promise((r) => setTimeout(r, cfg.pollMs));
+  }
+}
+
 // ---------- main ----------
 async function main() {
   if (!cfg.clientId) {
@@ -475,7 +561,7 @@ async function main() {
   log(`signed in as ${me.displayName}; chat ${cfg.chatId}; Claude UI ${cfg.ui}`);
   await reportAuth({ state: 'ok', message: `Teams bridge connected as ${me.displayName}.` });
   graph.keepAlive();
-  await Promise.all([uiLoop(), teamsLoop()]);
+  await Promise.all([uiLoop(), teamsLoop(), flowLoop()]);
 }
 
 main().catch((e) => {
