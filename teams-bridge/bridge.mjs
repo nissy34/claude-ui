@@ -470,13 +470,14 @@ async function handle(msg) {
       try {
         const r = await ui('POST', '/api/bridge/act', { action: 'new_chat', folder: c.folder, text: c.text });
         st.target = r.target;
-        await working(msg.id, topicKey(r.target));
         const root = chan && here.getStore()?.root;
         if (root) {
           // This thread is now that chat's: its questions and result come here, and replies go to it.
+          // Set before anything else is awaited, so a question the chat asks at once lands here too.
           st.topics[topicKey(r.target)] = root;
           st.threads[root] = { target: r.target };
         }
+        await working(msg.id, topicKey(r.target));
         save();
         return post(`${TAG} Started <b>${esc(r.target.name)}</b>. I'll tell you when it finishes; plain text now goes there.`, { kind: 'target', target: r.target });
       } catch (e) {
