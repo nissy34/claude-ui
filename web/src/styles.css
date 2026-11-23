@@ -1021,3 +1021,44 @@ body.pane-dragging iframe { pointer-events: none; }
 .set-checks { display: flex; flex-wrap: wrap; gap: var(--sp-2) var(--sp-4); padding: 0 0 var(--sp-3); border-bottom: 1px solid var(--line); }
 .gw-mode .disabled { opacity: .5; }
 .set-checks > .muted { font-size: var(--fs-md); }
+
+/* ---------- PR bar above the composer (chats and project threads) ---------- */
+.prbar { position: relative; display: flex; align-items: center; gap: var(--sp-2); padding: var(--sp-1h) var(--sp-1h) var(--sp-1h) var(--sp-3); border-radius: var(--r-lg); background: var(--panel-2); color: var(--text); font-size: var(--fs-sm); min-width: 0; }
+.prbar-main { display: flex; align-items: center; gap: var(--sp-2); min-width: 0; flex: 1; color: inherit; text-decoration: none; }
+.prbar-main:hover .prbar-num { text-decoration: underline; }
+.prbar-icon { display: inline-flex; color: var(--green); flex: none; }
+.prbar-icon.merged { color: var(--purple); }
+.prbar-icon.closed { color: var(--red); }
+.prbar-icon.draft { color: var(--muted); }
+.prbar-num { color: var(--muted); flex: none; }
+.prbar-branch { font-family: var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; margin-left: var(--sp-2); }
+.prbar-state { flex: none; font-size: var(--fs-xs); padding: 1px var(--sp-2); border-radius: var(--r-full); background: var(--panel); color: var(--muted); }
+.prbar-state.merged { color: var(--purple); }
+.prbar-state.closed { color: var(--red); }
+.prbar-diff { flex: none; font-family: var(--mono); font-size: var(--fs-xs); padding: 2px var(--sp-2); border-radius: var(--r-md); background: var(--panel); }
+.prbar-diff .add { color: var(--green); }
+.prbar-diff .del { color: var(--red); }
+.prbar-ci { flex: none; display: inline-flex; align-items: center; gap: var(--sp-1); border: 0; border-radius: var(--r-md); background: var(--panel); color: var(--text); font-size: var(--fs-xs); padding: 2px var(--sp-2); cursor: pointer; }
+.prbar-ci:hover, .prbar-ci[aria-expanded='true'] { background: var(--line); }
+.prbar-ci .chev { color: var(--muted); }
+.prbar .dot, .prbar-menu .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); flex: none; opacity: .7; }
+.prbar-ci.pass .dot, .prbar-checks li.pass .dot { background: var(--green); opacity: 1; }
+.prbar-ci.fail .dot, .prbar-checks li.fail .dot { background: var(--red); opacity: 1; }
+.prbar-ci.pending .dot, .prbar-checks li.pending .dot { background: var(--warn); opacity: 1; animation: prbar-pulse 1.4s ease-in-out infinite; }
+.prbar-ci.fail { color: var(--red); }
+@keyframes prbar-pulse { 50% { opacity: .35; } }
+.prbar-x { flex: none; border: 0; background: none; color: var(--muted); font-size: 18px; line-height: 1; width: 26px; height: 26px; border-radius: var(--r-md); cursor: pointer; }
+.prbar-x:hover { background: var(--line); color: var(--text); }
+.prbar-menu { position: absolute; right: 0; bottom: calc(100% + 6px); z-index: 30; width: min(360px, calc(100vw - 32px)); max-height: 320px; overflow-y: auto; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-lg); box-shadow: var(--shadow-md, 0 8px 24px rgba(0,0,0,.14)); padding: var(--sp-2); display: flex; flex-direction: column; gap: var(--sp-1h); }
+.prbar-menu-head { display: flex; flex-direction: column; gap: 2px; padding: var(--sp-1) var(--sp-1h) var(--sp-1h); border-bottom: 1px solid var(--line); }
+.prbar-menu-head b { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.prbar-menu-empty, .prbar-menu-err { padding: var(--sp-1) var(--sp-1h); }
+.prbar-menu-err { color: var(--red); font-size: var(--fs-sm); }
+.prbar-checks { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.prbar-checks li { display: flex; align-items: center; gap: var(--sp-2); padding: var(--sp-1) var(--sp-1h); border-radius: var(--r-md); }
+.prbar-checks li:hover { background: var(--panel-2); }
+.prbar-checks li > a, .prbar-checks li > span:nth-child(2) { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); text-decoration: none; }
+.prbar-checks li > a:hover { text-decoration: underline; }
+.prbar-menu-link { font-size: var(--fs-sm); color: var(--accent); text-decoration: none; padding: var(--sp-1h) var(--sp-1h) var(--sp-0); border-top: 1px solid var(--line); }
+.chat-prbar { max-width: 768px; width: calc(100% - 48px); margin: 0 auto var(--sp-1h); }
+@media (max-width: 700px) { .chat-prbar { width: calc(100% - 16px); } .prbar-branch { margin-left: 0; } }

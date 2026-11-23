@@ -14,17 +14,17 @@ const inFlight = new Map();
  * The chat environment's variables for gh (GH_HOST, GH_ENTERPRISE_TOKEN, ...), so it signs in as it does in the chat.
  * `linked` also passes the chat's text, so prStatus lists the PRs the chat linked to (the Details card only).
  */
-export function prOpts(s, { linked = false } = {}) {
+export function prOpts(s, { linked = false, maxLinked } = {}) {
   let env = {};
   try {
     env = sessionExtras(s.meta).env;
   } catch {}
-  return linked ? { env, texts: chatTexts(s.events) } : { env };
+  return linked ? { env, texts: chatTexts(s.events), ...(maxLinked ? { maxLinked } : {}) } : { env };
 }
 
 function brief(pr) {
   if (!pr) return null;
-  return { number: pr.number, state: pr.state, url: pr.url, title: pr.title, fail: pr.summary?.fail || 0, pending: pr.summary?.pending || 0 };
+  return { number: pr.number, state: pr.state, url: pr.url, title: pr.title, head: pr.head, additions: pr.additions, deletions: pr.deletions, fail: pr.summary?.fail || 0, pending: pr.summary?.pending || 0, pass: pr.summary?.pass || 0 };
 }
 
 /** Store a prStatus() result on the session; saves only when something the sidebar shows changed. */

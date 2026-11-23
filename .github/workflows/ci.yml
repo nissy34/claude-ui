@@ -65,6 +65,8 @@ jobs:
         run: CHROMIUM_PATH="$(command -v google-chrome || command -v chromium)" npm run test:ui
         env:
           SCREENSHOT_DIR: ${{ runner.temp }}/ui-shots
+      - name: PR bar and pinned checklist
+        run: CHROMIUM_PATH="$(command -v google-chrome || command -v chromium)" npm run test:pr-bar
       - name: Upload screenshots on failure
         if: failure()
         uses: actions/upload-artifact@v4

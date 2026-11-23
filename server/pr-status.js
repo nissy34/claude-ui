@@ -62,7 +62,7 @@ function shape(j) {
  * PRs the chat linked to, newest first, for chats that work on other branches (e.g. push to a PR's branch).
  * `env` is the chat environment's variables.
  */
-export async function prStatus(cwd, { env, texts } = {}) {
+export async function prStatus(cwd, { env, texts, maxLinked = MAX_LINKED } = {}) {
   let pr = null;
   try {
     pr = shape(await view(cwd, null, env));
@@ -72,7 +72,7 @@ export async function prStatus(cwd, { env, texts } = {}) {
     // Anything else but "no PR for this branch" is shown on the card rather than hidden.
     if (!/no pull requests? found|could not determine|not a git repository|no git remotes/i.test(e.message)) return { available: true, pr: null, error: e.message.split('\n')[0], linked: [] };
   }
-  const linked = texts ? await linkedPrs(cwd, texts, env, pr) : undefined;
+  const linked = texts ? await linkedPrs(cwd, texts, env, pr, maxLinked) : undefined;
   return { available: true, pr, ...(linked ? { linked } : {}) };
 }
 
@@ -93,11 +93,11 @@ export function prLinks(texts, repos) {
   return [...seen.values()];
 }
 
-async function linkedPrs(cwd, texts, env, branchPr) {
+async function linkedPrs(cwd, texts, env, branchPr, max = MAX_LINKED) {
   const repos = new Set((await remoteUrls(cwd)).map(repoKey).filter(Boolean));
   const urls = prLinks(texts, repos)
     .filter((u) => !branchPr || u.toLowerCase() !== String(branchPr.url).toLowerCase())
-    .slice(0, MAX_LINKED);
+    .slice(0, max);
   const prs = await Promise.all(urls.map((u) => view(cwd, u, env).then(shape, () => null)));
   return prs.filter(Boolean);
 }
@@ -108,6 +108,8 @@ export function chatTexts(events = []) {
   for (const e of events.slice(-3000)) {
     if (e.k === 'block' && e.block?.type === 'text') out.push(e.block.text);
     else if (e.k === 'tool_result' && !e.isError) out.push(e.text);
+    // What Claude sent through tools, e.g. a thread's post or a PR it opened with an MCP tool.
+    else if (e.k === 'block' && e.block?.type === 'tool_use' && e.block.input) out.push(JSON.stringify(e.block.input));
   }
   return out;
 }
