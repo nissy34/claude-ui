@@ -2,11 +2,11 @@ import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { api } from '../api.js';
 import { getPrefs, onPrefs } from '../prefs.js';
 import { needsSignIn } from './McpAuth.jsx';
-import { findModel, modelLabel, useModels } from '../models.js';
+import { findModel, useModels } from '../models.js';
+import ModelMenu from './ModelMenu.jsx';
 import { withQuote } from './quote.js';
 import { QuoteMark } from './QuoteReply.jsx';
 import { Button, Menu, useDismiss } from '../ui/index.jsx';
-import { promptDialog } from '../ui/dialogs.jsx';
 import MentionInput from './MentionInput.jsx';
 import { chatToken } from './mentions.jsx';
 
@@ -214,18 +214,6 @@ function UsageButton({ usage }) {
         </Menu>
       )}
     </div>
-  );
-}
-
-function ModelItem({ m, on, onPick }) {
-  return (
-    <button className={on ? 'on' : ''} onClick={onPick}>
-      <span className="check">{on ? '✓' : ''}</span>
-      <span>
-        {m.displayName}
-        {m.description && <span className="desc">{m.description}</span>}
-      </span>
-    </button>
   );
 }
 
@@ -500,7 +488,6 @@ export default function Composer({ sessionId, disabled, busy, onSend, onStop, mo
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, []);
-  const [moreModels, setMoreModels] = useState(false);
   const modelEfforts = findModel(models, model, activeModel)?.efforts;
   const efforts = modelEfforts?.length ? EFFORTS.filter((x) => !x.id || modelEfforts.includes(x.id)) : EFFORTS;
   const pick = (fn) => (v) => {
@@ -700,42 +687,7 @@ export default function Composer({ sessionId, disabled, busy, onSend, onStop, mo
               </Menu>
             )}
           </div>
-          <div className="menu-wrap">
-            <button className="chip" onClick={() => setMenu(menu === 'model' ? null : 'model')} title={activeModel ? `Running ${activeModel}` : 'Model'}>
-              {modelLabel(models, model, activeModel)} <span className="chev">▾</span>
-            </button>
-            {menu === 'model' && (
-              <Menu place="up" className="model-pop">
-                {(models.length ? models.filter((m) => !m.id.startsWith('claude-') || m.id === model) : [{ id: '', displayName: 'Default', description: '' }]).map((m) => (
-                  <ModelItem key={m.id} m={m} on={m.id === (model || '')} onPick={() => pick(onModel)(m.id)} />
-                ))}
-                {models.some((m) => m.id.startsWith('claude-') && m.id !== model) && (
-                  <>
-                    <div className="sep" />
-                    <button onClick={() => setMoreModels(!moreModels)}>
-                      <span className="check" />
-                      More models <span className="chev">{moreModels ? '▴' : '▾'}</span>
-                    </button>
-                    {moreModels &&
-                      models
-                        .filter((m) => m.id.startsWith('claude-') && m.id !== model)
-                        .map((m) => <ModelItem key={m.id} m={m} on={false} onPick={() => pick(onModel)(m.id)} />)}
-                  </>
-                )}
-                <div className="sep" />
-                <button
-                  onClick={async () => {
-                    setMenu(null);
-                    const v = await promptDialog('Model name or alias', model, { ok: 'Use model', placeholder: 'e.g. sonnet or claude-sonnet-5-5' });
-                    if (v != null) onModel(v.trim());
-                  }}
-                >
-                  <span className="check" />
-                  Other model…
-                </button>
-              </Menu>
-            )}
-          </div>
+          <ModelMenu value={model} active={activeModel} onPick={onModel} open={menu === 'model'} onOpen={(o) => setMenu(o ? 'model' : null)} />
           <div className="menu-wrap hide-mobile">
             <button className="chip" onClick={() => setMenu(menu === 'effort' ? null : 'effort')} title="Effort (how hard Claude thinks)">
               {effort ? `${effortInfo?.label} effort` : 'Effort'} <span className="chev">▾</span>

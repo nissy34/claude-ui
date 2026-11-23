@@ -8,6 +8,7 @@ import { DecisionCard, Md, MemoryUpdate } from './ProjectCards.jsx';
 import { ProjectMemory } from './ProjectFiles.jsx';
 import { projectAction } from './useProject.js';
 import { ProjectUsageRing } from './ProjectUsage.jsx';
+import ModelMenu from '../chat/ModelMenu.jsx';
 
 const short = (ts) => {
   const s = (Date.now() - ts) / 1000;
@@ -23,7 +24,6 @@ const plain = (md) =>
     .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
     .replace(/\s+/g, ' ')
     .trim();
-const modelName = (m) => (!m ? 'Default model' : m.length < 10 ? m[0].toUpperCase() + m.slice(1) : m);
 const kb = (n) => (n < 1024 ? `${n} B` : n < 1 << 20 ? `${(n / 1024).toFixed(1)} KB` : `${(n / (1 << 20)).toFixed(1)} MB`);
 
 // ---------------------------------------------------------------- icons
@@ -103,7 +103,7 @@ export function threadLine(t, decisions) {
 export default function ProjectPanel({ project, tab, setTab, threadId, openThread, onSelect, onError, onNewThread, reload, onFullUsage }) {
   const waiting = project.threads.filter((t) => t.status === 'waiting').length;
   if (threadId && project.threads.some((t) => t.id === threadId))
-    return <ThreadPane project={project} threadId={threadId} onBack={() => openThread(null)} onSelect={onSelect} openThread={openThread} onError={onError} onFullUsage={onFullUsage} />;
+    return <ThreadPane project={project} threadId={threadId} onBack={() => openThread(null)} onSelect={onSelect} openThread={openThread} onError={onError} onFullUsage={onFullUsage} reload={reload} />;
   return (
     <div className="pjp">
       <div className="pjp-head">
@@ -283,7 +283,7 @@ function ThreadRow({ t, project, onOpen }) {
 }
 
 // ---------------------------------------------------------------- one thread, in the panel
-function ThreadPane({ project, threadId, onBack, onSelect, openThread, onError, onFullUsage }) {
+function ThreadPane({ project, threadId, onBack, onSelect, openThread, onError, onFullUsage, reload }) {
   const t = project.threads.find((x) => x.id === threadId);
   const [feed, setFeed] = useState(null);
   const [text, setText] = useState('');
@@ -544,9 +544,7 @@ function ThreadPane({ project, threadId, onBack, onSelect, openThread, onError, 
         <div className="pjp-composer-foot">
           <span className="muted small">{t.status === 'working' ? 'Delivered when its current step ends' : t.status === 'resolved' ? 'Sending reopens it' : ''}</span>
           <span className="spacer" />
-          <span className="muted small">
-            {modelName(t.model)} {t.effort ? t.effort[0].toUpperCase() + t.effort.slice(1) : ''}
-          </span>
+          <ThreadModelMenu project={project} t={t} reload={reload} onError={onError} />
           <ProjectUsageRing project={project} context={t.context} currentThread={t.id} onOpenThread={openThread} onFullUsage={onFullUsage} />
           <button className="pjp-send" disabled={!text.trim() || sending} onClick={send} aria-label="Send">
             ↵
@@ -554,6 +552,40 @@ function ThreadPane({ project, threadId, onBack, onSelect, openThread, onError, 
         </div>
       </div>
     </div>
+  );
+}
+
+/** A thread's model: switch it from its next turn, or make the pick the project's default for new threads. */
+function ThreadModelMenu({ project, t, reload, onError }) {
+  const def = project.settings.models.thread.model || '';
+  const picked = t.model || '';
+  const setDefault = (id) => api(`/api/cprojects/${project.id}`, { method: 'PATCH', body: { models: { thread: { model: id } } } }).then(reload).catch(onError);
+  return (
+    <ModelMenu
+      className="pj-model-chip"
+      align="right"
+      value={picked}
+      active={t.context?.model}
+      title="This thread's model"
+      onPick={(id) => projectAction(project.id, t.id, 'model', { model: id }).then(reload).catch(onError)}
+      note={t.status === 'working' ? 'Applies from its next turn; the current step finishes on the model it started with.' : 'Applies from its next turn, in the same conversation.'}
+      footer={(close) =>
+        picked !== def ? (
+          <>
+            <div className="sep" />
+            <button type="button" onClick={() => (close(), setDefault(picked))}>
+              <span className="check" />
+              <span className="menu-label">
+                Use for new threads
+                <span className="desc">New threads in this project start on this model</span>
+              </span>
+            </button>
+          </>
+        ) : (
+          <div className="model-note">The project default for new threads</div>
+        )
+      }
+    />
   );
 }
 

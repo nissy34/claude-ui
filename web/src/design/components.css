@@ -201,3 +201,7 @@ kbd { display: inline-block; font: var(--fs-xs) var(--mono); background: var(--p
 /* confirmDialog / promptDialog (ui/dialogs.jsx) */
 .ask-dialog { max-width: 420px; }
 .ask-text { margin: 0; line-height: 1.5; color: var(--text); white-space: pre-line; }
+.pop.model-pop { min-width: 250px; max-width: 320px; }
+.pop .model-note { padding: var(--sp-1h) var(--sp-2h); font-size: var(--fs-xs); color: var(--muted); line-height: 1.45; }
+.pop .model-note .linklike { font-size: inherit; padding: 0; display: inline; }
+@media (pointer: coarse) { .pop.model-pop button kbd { display: none; } }

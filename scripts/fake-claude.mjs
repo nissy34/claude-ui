@@ -247,8 +247,9 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
   }
   if (m.type === 'control_request') {
     const sub = m.request?.subtype;
-    out({ type: 'control_response', response: { subtype: 'success', request_id: m.request_id, response: sub === 'initialize' ? { commands: [], models: [] } : {} } });
+    out({ type: 'control_response', response: { subtype: 'success', request_id: m.request_id, response: sub === 'initialize' ? { commands: [], models: process.env.FAKE_CLAUDE_MODELS ? JSON.parse(process.env.FAKE_CLAUDE_MODELS) : [] } : {} } });
     if (sub === 'interrupt') queue.length = 0;
+    if (sub === 'set_model') note({ sessionId, setModel: m.request.model });
     return;
   }
   if (m.type === 'user') {
