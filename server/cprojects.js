@@ -19,7 +19,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { config } from './config.js';
-import { gatewayMode, failoverEngaged } from './gateway.js';
+import { gatewayMode, failoverEngaged, oauthTokenMode } from './gateway.js';
 import { changedFiles, createWorktree, isGitRepo, removeWorktree, worktreeMerged } from './git.js';
 import { prStatus } from './pr-status.js';
 import { rawUrl } from './artifacts.js';
@@ -1470,7 +1470,9 @@ export class Project {
     const why = clipText(String(text || ''), 160);
     const reason = gatewayMode()
       ? `The AI gateway refused the request (${why}). Your key may have expired or hit its monthly limit: update it in Settings > Account, then press Resume; your messages are kept.`
-      : `Claude is logged out on the server (${why}). Log in again, then press Resume; your messages are kept.`;
+      : oauthTokenMode()
+        ? `Claude refused the OAuth token (${why}). Run claude setup-token again, paste the new token in Settings > Account, then press Resume; your messages are kept.`
+        : `Claude is logged out on the server (${why}). Log in again, then press Resume; your messages are kept.`;
     if (!this.state.paused?.auth) this.append({ type: 'project.paused', body: { auth: true, reason } });
   }
 

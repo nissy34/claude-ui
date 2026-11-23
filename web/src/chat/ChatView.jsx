@@ -22,7 +22,7 @@ import { Button, IconButton, Menu, Modal, ModalHead, useDismiss } from '../ui/in
 import { promptDialog } from '../ui/dialogs.jsx';
 import { deleteChat } from './deleteChat.js';
 import { copyText } from '../ui/clipboard.js';
-import { useGatewayMode } from '../Gateway.jsx';
+import { useGatewayMode, useOAuthTokenMode } from '../Gateway.jsx';
 
 /** How the running claude process signs in, from its init message. */
 function signedInWith(m) {
@@ -834,6 +834,7 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
     }
   };
   const gateway = useGatewayMode();
+  const oauthToken = useOAuthTokenMode();
   const relogin = () => onCreate({ cwd: meta.cwd, kind: 'claude', name: 'Log in to Claude', login: true });
 
   const project = meta.noFolder ? 'No folder' : (meta.project || meta.cwd)?.split(/[\\/]/).filter(Boolean).pop();
@@ -909,7 +910,7 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
                     </button>
                     <button onClick={archive}>{meta.archived ? 'Unarchive' : 'Archive'}</button>
                     {meta.live && <button onClick={() => (setMenu(false), send({ t: 'stop' }))}>Stop Claude process</button>}
-                    {!gateway && <button onClick={() => (setMenu(false), relogin())}>Log in to Claude again</button>}
+                    {!gateway && !oauthToken && <button onClick={() => (setMenu(false), relogin())}>Log in to Claude again</button>}
                     <div className="sep" />
                     <button className="danger" onClick={remove}>
                       Delete chat
@@ -1015,6 +1016,10 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
                       <>
                         <b>The AI gateway refused the request.</b> Your key may have expired or reached its monthly limit, or this server can't reach the gateway (VPN). Paste a new key in Settings, Account, then send your message again.
                       </>
+                    ) : oauthToken ? (
+                      <>
+                        <b>Claude refused the OAuth token.</b> It may have been revoked or mistyped. Run <code>claude setup-token</code> again and paste the new token in Settings, Account, then send your message again.
+                      </>
                     ) : (
                       <>
                         <b>Claude is logged out on the server.</b> Open a terminal session, type <code>/login</code>, finish the sign-in, then come back and send your message again.
@@ -1022,7 +1027,7 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
                     )}
                   </div>
                   <div className="perm-actions">
-                    {gateway ? (
+                    {gateway || oauthToken ? (
                       <Button variant="primary" onClick={() => window.dispatchEvent(new CustomEvent('cw-open-settings', { detail: 'account' }))}>
                         Open Settings
                       </Button>

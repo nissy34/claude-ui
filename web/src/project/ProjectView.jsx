@@ -7,7 +7,7 @@ import { ProjectSettingsModal } from './ProjectSettings.jsx';
 import { ProjectUsageRing } from './ProjectUsage.jsx';
 import ProjectPanel, { PrChip, StatusIcon } from './ProjectPanel.jsx';
 import { STATUS_LABEL, STATUS_ORDER, useProject } from './useProject.js';
-import { useGatewayMode } from '../Gateway.jsx';
+import { useGatewayMode, useOAuthTokenMode } from '../Gateway.jsx';
 import { ImageLightbox } from '../chat/ToolCard.jsx';
 import { sendableImage } from '../chat/Composer.jsx';
 import './project.css';
@@ -114,7 +114,10 @@ function useNarrow() {
 }
 
 function Banners({ project, reload, onError, onCreate }) {
-  const gateway = useGatewayMode();
+  // With a gateway key or an OAuth token, the fix is in Settings rather than a new /login.
+  const gw = useGatewayMode();
+  const token = useOAuthTokenMode();
+  const gateway = gw || token;
   // Same as the chat view's "Log in again": a terminal session that runs the CLI's /login.
   const relogin = () => onCreate?.({ cwd: project.settings.folders?.[0]?.path, kind: 'claude', name: 'Log in to Claude', login: true });
   return (

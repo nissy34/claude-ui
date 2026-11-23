@@ -9,6 +9,7 @@ import DesktopTab from './DesktopTab.jsx';
 import TeamsTab from './TeamsTab.jsx';
 import SignInsTab from './SignIns.jsx';
 import { GatewaySettings } from './Gateway.jsx';
+import { ClaudeTokenSettings } from './ClaudeToken.jsx';
 import { Button, IconButton, Modal, ModalHead, Segmented, Toggle } from './ui/index.jsx';
 
 const TABS = [
@@ -204,6 +205,7 @@ function TextTab({ url, note }) {
 function Account({ onError }) {
   const [s, setS] = useState(null);
   const [gw, setGw] = useState(null);
+  const [tk, setTk] = useState(null);
   const load = () =>
     api('/api/claude/status')
       .then(setS)
@@ -216,19 +218,27 @@ function Account({ onError }) {
     if (gw && (gw.active !== r.active || gw.mode?.baseUrl !== r.mode?.baseUrl)) load();
     setGw(r);
   };
+  const onToken = (r) => {
+    if (tk && (tk.active !== r.active || tk.tokenHint !== r.tokenHint || tk.use !== r.use)) load();
+    setTk(r);
+  };
   const a = s?.auth || {};
   const fields = Object.entries(a).filter(([, v]) => v != null && typeof v !== 'object');
   return (
     <>
       <h4 className="set-h" style={{ marginTop: 0 }}>
-        AI gateway
+        Claude login
       </h4>
+      <ClaudeTokenSettings onError={onError} onChange={onToken} gateway={gw} />
+      <h4 className="set-h">AI gateway</h4>
       <GatewaySettings onError={onError} onChange={onChange} />
       <h4 className="set-h">How Claude Code signs in</h4>
       <p className="muted set-note">
         {gw?.mode
           ? 'Claude Code uses the gateway key, so a Claude login on the server is not needed. This is what Claude Code reports:'
-          : 'The Claude Code login on the server. Use "Log in again" in a chat\'s menu to change it.'}
+          : tk?.mode
+            ? 'Claude Code uses the OAuth token, so the Claude login on the server is not used. This is what Claude Code reports:'
+            : 'The Claude Code login on the server. Use "Log in again" in a chat\'s menu to change it.'}
       </p>
       {!s ? (
         <div className="muted">Checking…</div>

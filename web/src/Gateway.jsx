@@ -2,30 +2,43 @@ import React, { useEffect, useState } from 'react';
 import { api } from './api.js';
 import { Button, Checkbox, Input, Pill, Segmented } from './ui/index.jsx';
 
-// Whether Claude runs through a company AI gateway (any source), fetched once per page load.
+// How chats sign in, fetched once per page load: whether Claude runs through a company AI gateway
+// (any source), and whether it uses a Claude OAuth token instead of the server's Claude login.
 let mode;
+let login;
 let inflight;
 const subs = new Set();
 function loadMode() {
   inflight ||= api('/api/gateway')
-    .then((s) => setMode(s.mode || null))
+    .then(setSignIn)
     .catch(() => (inflight = null));
   return inflight;
 }
-function setMode(m) {
-  mode = m;
-  for (const fn of subs) fn(m);
+/** Takes a /api/gateway answer (or a /api/claude-token one, which has only the login part). */
+export function setSignIn(s) {
+  if ('baseUrl' in s) mode = s.mode || null;
+  login = ('login' in s ? s.login : s.mode) || null;
+  for (const fn of subs) fn();
+}
+function useSignIn(pick) {
+  const [v, setV] = useState(() => pick() ?? null);
+  useEffect(() => {
+    const fn = () => setV(pick() ?? null);
+    subs.add(fn);
+    if (mode === undefined) loadMode();
+    return () => subs.delete(fn);
+  }, []);
+  return v;
 }
 
 /** { source, baseUrl } when chats use a gateway key instead of a Claude login, else null. */
 export function useGatewayMode() {
-  const [m, setM] = useState(mode ?? null);
-  useEffect(() => {
-    subs.add(setM);
-    if (mode === undefined) loadMode();
-    return () => subs.delete(setM);
-  }, []);
-  return m;
+  return useSignIn(() => mode);
+}
+
+/** { source } when chats sign in with a Claude OAuth token (claude setup-token), else null. */
+export function useOAuthTokenMode() {
+  return useSignIn(() => login);
 }
 
 /** Settings > Account: the gateway address and personal key (the key is never shown again). */
@@ -39,7 +52,7 @@ export function GatewaySettings({ onError, onChange }) {
   const take = (r) => {
     setS(r);
     setUrl(r.baseUrl || '');
-    setMode(r.mode || null);
+    setSignIn(r);
     onChange?.(r);
   };
   useEffect(() => {

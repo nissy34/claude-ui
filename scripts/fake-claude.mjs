@@ -42,6 +42,14 @@ note({ argv });
 // FAKE_CLAUDE_LOG_ENV=K1,K2: also log those variables as this process got them (gateway tests).
 if (process.env.FAKE_CLAUDE_LOG_ENV) note({ argv, env: Object.fromEntries(process.env.FAKE_CLAUDE_LOG_ENV.split(',').map((k) => [k, process.env[k] ?? null])) });
 
+// One-shot `-p "<prompt>" --output-format json` (the OAuth token test): one result, like the real CLI.
+// The token in FAKE_CLAUDE_GOOD_TOKEN works; any other gets the real CLI's 401 answer.
+if (arg('--output-format') === 'json') {
+  const good = !!process.env.CLAUDE_CODE_OAUTH_TOKEN && process.env.CLAUDE_CODE_OAUTH_TOKEN === process.env.FAKE_CLAUDE_GOOD_TOKEN;
+  out(good ? { type: 'result', subtype: 'success', is_error: false, result: 'OK', session_id: sessionId } : { type: 'result', subtype: 'success', is_error: true, api_error_status: 401, result: 'Not logged in · Please run /login', session_id: sessionId });
+  process.exit(0);
+}
+
 // ---- MCP clients ----
 const servers = {};
 let mcpCfg = {};

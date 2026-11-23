@@ -4,7 +4,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { config } from './config.js';
-import { claudeEnv } from './gateway.js';
+import os from 'node:os';
+import { claudeEnv, tokenTestEnv } from './gateway.js';
 import { resolveCommand } from './launch.js';
 
 function runClaude(args, cwd, timeout = 30_000, input) {
@@ -25,6 +26,31 @@ export async function authStatus() {
   } catch {
     return { raw: r.out || r.err };
   }
+}
+
+/**
+ * Try a Claude OAuth token (the one typed in Settings, or the saved one) with one tiny request
+ * through the real CLI: the cheapest model, no tools, no MCP servers, nothing saved.
+ */
+export async function testOAuthToken(token) {
+  const { env, settings } = tokenTestEnv(token);
+  const args = [...config.claudeArgs, '-p', 'Reply with the single word OK.', '--model', 'haiku', '--output-format', 'json', '--tools', '', '--strict-mcp-config', '--no-session-persistence', '--settings', JSON.stringify({ apiKeyHelper: '', env: settings })];
+  const cmd = resolveCommand(config.claudeBin, args);
+  const r = await new Promise((resolve) => {
+    execFile(cmd.file, cmd.args, { cwd: os.tmpdir(), env, timeout: 90_000, windowsHide: true, maxBuffer: 4 << 20 }, (err, stdout, stderr) => {
+      resolve({ out: String(stdout || '').trim(), err: String(stderr || (err && err.message) || '').trim() });
+    });
+  });
+  let j = null;
+  try {
+    j = JSON.parse(r.out.split('\n').filter(Boolean).pop() || '');
+  } catch {}
+  if (!j) return { ok: false, error: `Claude Code did not answer: ${(r.err || r.out || 'no output').slice(0, 300)}` };
+  if (!j.is_error) return { ok: true };
+  const status = j.api_error_status;
+  if (status === 401 || status === 403) return { ok: false, error: `Claude refused the token (HTTP ${status}). It may be mistyped or revoked. Run claude setup-token again and paste the new one.` };
+  if (status === 429) return { ok: true, note: 'The token works, but its subscription has reached a usage limit right now.' };
+  return { ok: false, error: String(j.result || `Claude answered with an error${status ? ` (HTTP ${status})` : ''}.`).slice(0, 300) };
 }
 
 export async function mcpList(cwd) {
