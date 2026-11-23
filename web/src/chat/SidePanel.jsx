@@ -10,11 +10,10 @@ import { confirmDialog } from '../ui/dialogs.jsx';
 import { useResizable } from '../ui/resizable.jsx';
 import { copyText } from '../ui/clipboard.js';
 
-// The branch's pull request with CI checks, like Desktop's PR status in the Changes card.
+// The branch's pull request with CI checks, like Desktop's PR status in the Changes card, plus the
+// repository's PRs the chat linked to (chats that push to another branch, e.g. an existing PR's).
 export function PrCard({ sessionId, refreshKey, onPrompt, busy, onError }) {
   const [st, setSt] = useState(null);
-  const [open, setOpen] = useState(false);
-  const [merging, setMerging] = useState(false);
   const load = () =>
     api(`/api/sessions/${sessionId}/pr`)
       .then(setSt)
@@ -22,7 +21,7 @@ export function PrCard({ sessionId, refreshKey, onPrompt, busy, onError }) {
   useEffect(() => {
     load();
   }, [sessionId, refreshKey]); // eslint-disable-line react-hooks/exhaustive-deps
-  const pending = st?.pr?.summary?.pending > 0;
+  const pending = [st?.pr, ...(st?.linked || [])].some((p) => p?.summary?.pending > 0);
   useEffect(() => {
     if (!pending) return;
     const t = setInterval(load, 20_000);
@@ -30,19 +29,28 @@ export function PrCard({ sessionId, refreshKey, onPrompt, busy, onError }) {
   }, [pending]); // eslint-disable-line react-hooks/exhaustive-deps
   if (!st) return null;
   if (!st.available) return <div className="pr-card card muted pr-note">{st.reason}</div>;
-  const pr = st.pr;
-  if (!pr) return null;
-  const { pass, fail, pending: pend } = pr.summary;
-  const merge = async () => {
+  // gh answered with something unexpected: say so instead of showing nothing.
+  if (st.error) return <div className="pr-card card muted pr-note" title={st.error}>Couldn't check for a pull request: {st.error}</div>;
+  const merge = async (pr) => {
     if (!(await confirmDialog(`Turn on auto-merge (squash) for PR #${pr.number}? GitHub merges it once checks and reviews pass.`, { ok: 'Turn on' }))) return;
-    setMerging(true);
     try {
       setSt(await api(`/api/sessions/${sessionId}/pr/merge-when-ready`, { method: 'POST', body: { number: pr.number } }));
     } catch (e) {
       onError?.(e);
-    } finally {
-      setMerging(false);
     }
+  };
+  const all = [st.pr, ...(st.linked || [])].filter(Boolean);
+  return all.map((pr) => <PrView key={pr.url} pr={pr} linked={pr !== st.pr} onRefresh={load} onMerge={merge} onPrompt={onPrompt} busy={busy} />);
+}
+
+function PrView({ pr, linked, onRefresh, onMerge, onPrompt, busy }) {
+  const [open, setOpen] = useState(false);
+  const [merging, setMerging] = useState(false);
+  const { pass, fail, pending: pend } = pr.summary;
+  const merge = async () => {
+    setMerging(true);
+    await onMerge(pr);
+    setMerging(false);
   };
   return (
     <div className="pr-card card">
@@ -51,10 +59,11 @@ export function PrCard({ sessionId, refreshKey, onPrompt, busy, onError }) {
         <a href={pr.url} target="_blank" rel="noreferrer" className="pr-title" title={pr.title}>
           #{pr.number} {pr.title}
         </a>
-        <IconButton title="Refresh" onClick={load}>
+        <IconButton title="Refresh" onClick={onRefresh}>
           ↻
         </IconButton>
       </div>
+      {linked && <div className="pr-meta muted">Linked in this chat · {pr.head}</div>}
       {pr.checks.length > 0 && (
         <button className="pr-checks" onClick={() => setOpen(!open)}>
           {fail > 0 && <span className="ck fail">✕ {fail} failing</span>}

@@ -35,7 +35,7 @@ import { getModels } from './models.js';
 import { applyGitIdentity, gitIdentityStatus, setGitIdentity, onCoauthorChange } from './git-identity.js';
 import { sideChat } from './side-chat.js';
 import { prStatus, mergeWhenReady } from './pr-status.js';
-import { rememberPr, startPrSweep } from './pr-cache.js';
+import { rememberPr, startPrSweep, prOpts } from './pr-cache.js';
 import * as schedules from './schedules.js';
 import * as notes from './notes.js';
 import { controlSession } from './session-control.js';
@@ -1082,7 +1082,7 @@ app.get(
   '/api/sessions/:id/pr',
   wrap(async (req, res) => {
     const s = getSession(req);
-    const st = await prStatus(s.meta.cwd);
+    const st = await prStatus(s.meta.cwd, prOpts(s, { linked: true }));
     rememberPr(s, st, store);
     res.json(st);
   })
@@ -1091,7 +1091,7 @@ app.post(
   '/api/sessions/:id/pr/merge-when-ready',
   wrap(async (req, res) => {
     const s = getSession(req);
-    const st = await mergeWhenReady(s.meta.cwd, parseInt(req.body?.number, 10));
+    const st = await mergeWhenReady(s.meta.cwd, parseInt(req.body?.number, 10), prOpts(s, { linked: true }));
     rememberPr(s, st, store);
     res.json(st);
   })
