@@ -32,7 +32,7 @@ import { McpAdmin, onSignedIn, stopAllAdmins } from './mcp-admin.js';
 import { tokenKeeper } from './token-keeper.js';
 import { gatewayStatus, setGateway, gatewayModels, fixSettingsConflicts, importFromSettings, onGatewayChange, endFailover, startFailoverTimer, tokenStatus, setToken } from './gateway.js';
 import { getModels } from './models.js';
-import { applyGitIdentity, gitIdentityStatus, setGitIdentity } from './git-identity.js';
+import { applyGitIdentity, gitIdentityStatus, setGitIdentity, onCoauthorChange } from './git-identity.js';
 import { sideChat } from './side-chat.js';
 import { prStatus, mergeWhenReady } from './pr-status.js';
 import { rememberPr, startPrSweep } from './pr-cache.js';
@@ -1272,6 +1272,10 @@ app.post(
 // Git name/email for commits made in chats (server/git-identity.js). Applies at once, no restart.
 app.get('/api/git-identity', wrap(async (req, res) => res.json(gitIdentityStatus())));
 app.put('/api/git-identity', wrap(async (req, res) => res.json(setGitIdentity(req.body || {}))));
+// The co-author switch is passed at launch (--settings attribution): restart chats like a sign-in change.
+onCoauthorChange(() => {
+  for (const s of store.sessions.values()) if (s.meta.kind === 'chat' && s.running) s.restartForEnv?.();
+});
 app.post('/api/gateway/fix-settings', wrap(async (req, res) => res.json({ ...fixSettingsConflicts(), status: gatewayStatus() })));
 app.get('/api/claude/status', wrap(async (req, res) => res.json({ auth: await authStatus(), gateway: gatewayStatus(), version: await cliVersion(), dataDir: config.dataDir, projectsRoot: config.projectsRoot, node: process.version, platform: process.platform })));
 app.get('/api/claude/mcp', wrap(async (req, res) => res.json(await mcpList(req.query.cwd ? resolveDir(req.query.cwd) : config.projectsRoot))));

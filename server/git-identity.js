@@ -41,9 +41,9 @@ function hasGit() {
 function load() {
   try {
     const j = JSON.parse(fs.readFileSync(FILE, 'utf8'));
-    return { name: typeof j.name === 'string' ? j.name : '', email: typeof j.email === 'string' ? j.email : '' };
+    return { name: typeof j.name === 'string' ? j.name : '', email: typeof j.email === 'string' ? j.email : '', coauthor: j.coauthor !== false };
   } catch {
-    return { name: '', email: '' };
+    return { name: '', email: '', coauthor: true };
   }
 }
 
@@ -111,13 +111,20 @@ export function gitIdentityStatus() {
     host,
     default: def,
     effective: { name: pick('name'), email: pick('email') },
+    coauthor: saved.coauthor,
     hostPath: ORIGINAL_GLOBAL || '~/.gitconfig',
   };
 }
 
-export function setGitIdentity({ name, email }) {
+export function setGitIdentity(body) {
   const clean = (v, max) => String(v ?? '').replace(/[\r\n\0]/g, ' ').trim().slice(0, max);
-  const next = { name: clean(name, 200), email: clean(email, 254) };
+  const cur = load();
+  const next = {
+    name: body.name === undefined ? cur.name : clean(body.name, 200),
+    email: body.email === undefined ? cur.email : clean(body.email, 254),
+    coauthor: body.coauthor === undefined ? cur.coauthor : body.coauthor !== false,
+  };
+  const coauthorChanged = next.coauthor !== cur.coauthor;
   if (next.email && !/^[^\s@<>]+@[^\s@<>]+$/.test(next.email)) {
     const e = new Error('That does not look like an email address.');
     e.status = 400;
@@ -131,5 +138,48 @@ export function setGitIdentity({ name, email }) {
   const tmp = FILE + '.tmp';
   fs.writeFileSync(tmp, JSON.stringify(next, null, 2) + '\n', { mode: 0o600 });
   fs.renameSync(tmp, FILE);
+  if (coauthorChanged) for (const fn of coauthorListeners) fn();
   return applyGitIdentity() || gitIdentityStatus();
+}
+
+// ---------- Co-Authored-By: Claude <model> ----------
+// Claude Code adds "Co-Authored-By: Claude <model>" to commits itself, but leaves it out when a
+// settings file turns attribution off, and writes just "Claude Code" for model ids it doesn't know
+// (common behind an AI gateway). With the switch on (the default), every chat is started with an
+// explicit attribution.commit naming its model, which wins over settings.json; off writes none.
+
+const coauthorListeners = new Set();
+/** Called when the co-author switch changes (chats restart to pick it up). */
+export function onCoauthorChange(fn) {
+  coauthorListeners.add(fn);
+  return () => coauthorListeners.delete(fn);
+}
+
+const FAMILIES = ['opus', 'sonnet', 'haiku', 'fable'];
+const cap = (w) => w[0].toUpperCase() + w.slice(1);
+/** "claude-opus-4-5-20251101", "anthropic/claude-opus-4-5", "us.anthropic.claude-3-5-sonnet-v2" -> "Opus 4.5". */
+export function modelDisplayName(id) {
+  const s = String(id || '').toLowerCase().replace(/\[.*\]$/, '');
+  const i = s.lastIndexOf('claude-');
+  if (i < 0) return '';
+  const rest = s.slice(i + 7);
+  // New style: claude-<family>-<major>[-<minor>][-<date>]
+  let m = rest.match(new RegExp(`^(${FAMILIES.join('|')})-(\\d+)(?:-(\\d{1,2}))?(?=$|[-@:_.])`));
+  if (m) return `${cap(m[1])} ${m[2]}${m[3] ? '.' + m[3] : ''}`;
+  // Old style: claude-<major>[-<minor>]-<family>
+  m = rest.match(new RegExp(`^(\\d+)(?:-(\\d{1,2}))?-(${FAMILIES.join('|')})(?=$|[-@:_.])`));
+  if (m) return `${cap(m[3])} ${m[1]}${m[2] ? '.' + m[2] : ''}`;
+  return '';
+}
+
+/** The commit attribution for a chat on `modelId`: { commit } for --settings attribution, or null to leave it to Claude Code. */
+export function coauthorAttribution(modelId) {
+  const { coauthor } = load();
+  if (!coauthor) return { commit: '' };
+  const name = modelDisplayName(modelId);
+  return { commit: `Co-Authored-By: Claude${name ? ' ' + name : ''} <noreply@anthropic.com>` };
+}
+
+export function coauthorEnabled() {
+  return load().coauthor;
 }

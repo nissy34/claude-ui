@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { api } from './api.js';
-import { Button, Input, Pill } from './ui/index.jsx';
+import { Button, Input, Pill, Toggle } from './ui/index.jsx';
 
 const SOURCE = { settings: 'Saved here', host: 'From the server', default: 'Default' };
 
@@ -79,6 +79,21 @@ export function GitIdentitySettings({ onError }) {
         {saved && !dirty && <span className="muted">Saved.</span>}
       </div>
       <p className="muted set-note">Leave a field empty to use the server's {s.hostPath}{s.host?.name || s.host?.email ? '' : ' (nothing set there now)'}.</p>
+      <div className="set-row">
+        <div className="set-label">
+          <div>Credit Claude as co-author</div>
+          <div className="desc">
+            {s.coauthor ? (
+              <>
+                Commits end with a line like <code>Co-Authored-By: Claude Opus 4.5 &lt;noreply@anthropic.com&gt;</code>, naming the chat's model. This wins over a settings file that turns it off.
+              </>
+            ) : (
+              'Commits have no Co-Authored-By line for Claude.'
+            )}
+          </div>
+        </div>
+        <Toggle value={s.coauthor} onChange={(v) => save({ coauthor: v })} />
+      </div>
     </>
   );
 }

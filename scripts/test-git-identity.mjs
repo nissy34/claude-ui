@@ -121,6 +121,35 @@ async function main() {
   await api(`/api/cprojects/${project.id}/messages`, { method: 'POST', body: { text: 'hello' } });
   const hit = await until(() => (fs.existsSync(log) ? fs.readFileSync(log, 'utf8').trim().split('\n').map((l) => JSON.parse(l)).filter((x) => x.env).pop() : null), 10_000, 'a claude process');
   check(hit.env.GIT_CONFIG_GLOBAL === GITCONFIG, 'claude processes get GIT_CONFIG_GLOBAL', hit.env);
+  const attr = (x) => {
+    const i = x.argv.lastIndexOf('--settings');
+    try {
+      return JSON.parse(x.argv[i + 1]).attribution;
+    } catch {
+      return undefined;
+    }
+  };
+  check(/^Co-Authored-By: Claude( [A-Z]\w+ [\d.]+)? <noreply@anthropic\.com>$/.test(attr(hit)?.commit || ''), 'chats get an explicit Co-Authored-By: Claude <model> attribution', attr(hit));
+
+  console.log('Co-author line');
+  const { modelDisplayName } = await import('../server/git-identity.js');
+  for (const [id, want] of [
+    ['claude-opus-4-5-20251101', 'Opus 4.5'],
+    ['anthropic/claude-opus-4-5', 'Opus 4.5'],
+    ['us.anthropic.claude-3-5-sonnet-20241022-v2:0', 'Sonnet 3.5'],
+    ['claude-opus-5-5[1m]', 'Opus 5.5'],
+    ['claude-haiku-4-5', 'Haiku 4.5'],
+    ['gateway-model', ''],
+  ])
+    check(modelDisplayName(id) === want, `model name: ${id} -> "${want}"`, modelDisplayName(id));
+  const lines = fs.readFileSync(log, 'utf8').trim().split('\n').length;
+  let r0 = await api('/api/git-identity', { method: 'PUT', body: { coauthor: false } });
+  check(r0.j.coauthor === false, 'the switch can be turned off', r0.j);
+  await api(`/api/cprojects/${project.id}/messages`, { method: 'POST', body: { text: 'again' } });
+  const off = await until(() => fs.readFileSync(log, 'utf8').trim().split('\n').slice(lines).map((l) => JSON.parse(l)).filter((x) => x.env).pop(), 15_000, 'a restarted claude process');
+  check(attr(off)?.commit === '', 'off: chats restart and get an empty attribution (no line, whatever settings.json says)', attr(off));
+  r0 = await api('/api/git-identity', { method: 'PUT', body: { coauthor: true } });
+  check(r0.j.coauthor === true, 'and back on', r0.j);
 
   console.log('Saved in Settings');
   let r = await api('/api/git-identity', { method: 'PUT', body: { name: 'x', email: 'not an email' } });
