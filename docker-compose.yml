@@ -50,7 +50,8 @@ services:
       - ${HOME}/.claude-web:${HOME}/.claude-web
       # Your projects, at the same path as on the host.
       - ${CW_PROJECTS_ROOT:-${HOME}/projects}:${CW_PROJECTS_ROOT:-${HOME}/projects}
-      # Git name and email for commits Claude makes.
+      # Your git settings (read only). The name and email for commits can also be set in
+      # Settings > Account > Git identity, which wins over this file.
       - type: bind
         source: ${HOME}/.gitconfig
         target: ${HOME}/.gitconfig
