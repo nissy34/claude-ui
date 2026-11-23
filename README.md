@@ -266,6 +266,12 @@ Desktop on another computer needs the server to listen on your network (`CW_HOST
 
 Talk to your agents from Microsoft Teams: permission prompts, questions and project decision cards show up in your Teams chat with yourself, and you answer by replying. You can also message a project's coordinator or start a chat in a folder from Teams. It is a separate small service (`teams-bridge/`) that only makes outbound calls (Microsoft Graph polling), so it works on a server with no inbound access. Setup and commands: [teams-bridge/README.md](teams-bridge/README.md).
 
+## Claude OAuth token
+
+Instead of the interactive Claude login on the server, chats can sign in with a long-lived OAuth token. Run `claude setup-token` on any computer where you are signed in to Claude, then paste the token (`sk-ant-oat01-…`) in **Settings > Account > Claude login**, press **Test token**, and pick **Sign in with: OAuth token**. It uses the same subscription, needs no browser on the server and lasts a year.
+
+Every claude process the server starts then gets `CLAUDE_CODE_OAUTH_TOKEN`, and loses what Claude Code would pick over it (API keys, Bedrock/Vertex/Foundry, another base URL, an `apiKeyHelper`), also through `--settings` so `~/.claude/settings.json` can't override it. **Claude login** goes back to the server's own login, even if `.env` or settings.json set a token. The AI gateway below still wins when it is set to **Always** or is standing in as a fallback. The token is kept in `~/.claude-web/claude-token.json` (mode 600) and is never sent back to the browser.
+
 ## Company AI gateway
 
 To send Claude's requests through an Anthropic-compatible company gateway with a personal key, open **Settings > Account > AI gateway**, enter the gateway address (usually ending in `/anthropic`) and your key, press **Test connection**, and pick **Use the gateway**:

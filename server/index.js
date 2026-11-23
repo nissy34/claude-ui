@@ -30,7 +30,7 @@ import { listArtifacts, publishArtifact, rawHandler, rawUrl, writtenPaths } from
 import * as admin from './claude-admin.js';
 import { McpAdmin, onSignedIn, stopAllAdmins } from './mcp-admin.js';
 import { tokenKeeper } from './token-keeper.js';
-import { gatewayStatus, setGateway, gatewayModels, fixSettingsConflicts, importFromSettings, onGatewayChange, endFailover, startFailoverTimer } from './gateway.js';
+import { gatewayStatus, setGateway, gatewayModels, fixSettingsConflicts, importFromSettings, onGatewayChange, endFailover, startFailoverTimer, tokenStatus, setToken } from './gateway.js';
 import { getModels } from './models.js';
 import { sideChat } from './side-chat.js';
 import { prStatus, mergeWhenReady } from './pr-status.js';
@@ -1241,6 +1241,26 @@ onGatewayChange(() => {
   for (const s of store.sessions.values()) if (s.meta.kind === 'chat' && s.running) s.restartForEnv?.();
   for (const a of McpAdmin.all()) if (a.proc && !a.oauthWaiting() && !a.elicits?.size) a.stop();
 });
+// Claude OAuth token from `claude setup-token` (server/gateway.js). Write-only like the gateway key;
+// a change restarts chats through the same onGatewayChange listeners.
+app.get('/api/claude-token', wrap(async (req, res) => res.json(tokenStatus())));
+app.put(
+  '/api/claude-token',
+  wrap(async (req, res) => {
+    const b = req.body || {};
+    res.json(setToken({ use: b.use === undefined ? undefined : b.use, token: b.token === undefined ? undefined : b.token }));
+  })
+);
+app.post(
+  '/api/claude-token/test',
+  wrap(async (req, res) => {
+    try {
+      res.json(await admin.testOAuthToken(req.body?.token || undefined));
+    } catch (e) {
+      res.json({ ok: false, error: e.message });
+    }
+  })
+);
 app.post('/api/gateway/fix-settings', wrap(async (req, res) => res.json({ ...fixSettingsConflicts(), status: gatewayStatus() })));
 app.get('/api/claude/status', wrap(async (req, res) => res.json({ auth: await authStatus(), gateway: gatewayStatus(), version: await cliVersion(), dataDir: config.dataDir, projectsRoot: config.projectsRoot, node: process.version, platform: process.platform })));
 app.get('/api/claude/mcp', wrap(async (req, res) => res.json(await mcpList(req.query.cwd ? resolveDir(req.query.cwd) : config.projectsRoot))));

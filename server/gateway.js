@@ -151,7 +151,7 @@ function switchedOff() {
  * switch here is used: from then on the switch decides (see gatewaySettingsEnv).
  */
 function externalGateway() {
-  if (switchedOff()) return null;
+  if (switchedOff() || loadTok().use) return null;
   if (process.env.ANTHROPIC_BASE_URL && process.env.ANTHROPIC_AUTH_TOKEN) return { source: 'env', baseUrl: process.env.ANTHROPIC_BASE_URL };
   const e = settingsEnv();
   if (e.ANTHROPIC_BASE_URL && e.ANTHROPIC_AUTH_TOKEN) return { source: 'settings', baseUrl: e.ANTHROPIC_BASE_URL };
@@ -259,6 +259,8 @@ export function gatewayStatus() {
     apiKeyHelper: !!readSettings()?.apiKeyHelper,
     // A gateway written into settings.json by hand (ignored by chats here once the switch is used).
     settingsGateway: !!(settingsEnv().ANTHROPIC_BASE_URL && settingsEnv().ANTHROPIC_AUTH_TOKEN),
+    // A Claude OAuth token in use instead of the server's Claude login (see tokenStatus).
+    login: oauthTokenMode(),
   };
 }
 
@@ -290,6 +292,125 @@ export function setGateway({ enabled, baseUrl, token, discovery, failover }) {
   return gatewayStatus();
 }
 
+// ---- Claude OAuth token: sign in with a token from `claude setup-token` ----
+// The long-lived token (CLAUDE_CODE_OAUTH_TOKEN) is billed to the Claude subscription it was made
+// with, like the interactive login, but needs no browser and doesn't expire for a year. Kept in
+// the data folder (claude-token.json, mode 0600) and never sent back to the browser.
+//
+// `use` is the choice in Settings > Account: 'token' (this token), 'login' (the server's own Claude
+// login, even if .env or settings.json set a token) or '' (never chosen: the environment as it is).
+// The gateway, when in use (Always, or standing in as fallback), still wins over both.
+const TOKEN_FILE = () => path.join(config.dataDir, 'claude-token.json');
+
+// Claude Code picks any of these over CLAUDE_CODE_OAUTH_TOKEN (cloud providers, API keys, another
+// endpoint), so they are removed while the token is in use.
+const TOKEN_OVERRIDES = ['CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_USE_FOUNDRY', 'AWS_BEARER_TOKEN_BEDROCK', 'ANTHROPIC_API_KEY', ...GATEWAY_ENV];
+
+let tokCached;
+function loadTok() {
+  if (tokCached !== undefined) return tokCached;
+  try {
+    const j = JSON.parse(fs.readFileSync(TOKEN_FILE(), 'utf8'));
+    tokCached = { use: ['token', 'login'].includes(j.use) ? j.use : '', token: String(j.token || '') };
+  } catch {
+    tokCached = { use: '', token: '' };
+  }
+  return tokCached;
+}
+
+function saveTok(t) {
+  fs.mkdirSync(config.dataDir, { recursive: true });
+  const tmp = TOKEN_FILE() + '.tmp';
+  fs.writeFileSync(tmp, JSON.stringify({ use: t.use, token: t.token }, null, 2), { mode: 0o600 });
+  fs.renameSync(tmp, TOKEN_FILE());
+  try {
+    fs.chmodSync(TOKEN_FILE(), 0o600);
+  } catch {}
+  tokCached = { use: t.use, token: t.token };
+  for (const fn of listeners) {
+    try {
+      fn();
+    } catch {}
+  }
+}
+
+/** Chats sign in with the saved token right now (chosen, saved, and no gateway in front of it). */
+export function oauthTokenActive() {
+  const t = loadTok();
+  return t.use === 'token' && !!t.token && !gatewayActive();
+}
+
+/** { source: 'ui' | 'env' | 'settings' } when chats sign in with an OAuth token, else null. */
+export function oauthTokenMode() {
+  if (oauthTokenActive()) return { source: 'ui', hint: hint(loadTok().token) };
+  if (loadTok().use || gatewayMode()) return null;
+  if (settingsEnv().CLAUDE_CODE_OAUTH_TOKEN) return { source: 'settings' };
+  if (process.env.CLAUDE_CODE_OAUTH_TOKEN) return { source: 'env' };
+  return null;
+}
+
+/** What Settings shows about the token. Never includes the token itself. */
+export function tokenStatus() {
+  const t = loadTok();
+  return {
+    use: t.use,
+    hasToken: !!t.token,
+    tokenHint: hint(t.token),
+    active: oauthTokenActive(),
+    mode: oauthTokenMode(),
+    // Chosen, but the gateway answers instead (Always, or standing in while a limit is reached).
+    gateway: t.use === 'token' && !!t.token && gatewayActive() ? (failoverEngaged() ? 'failover' : 'always') : '',
+    // Set outside the UI: applies until a choice is made here.
+    envToken: !!process.env.CLAUDE_CODE_OAUTH_TOKEN,
+    settingsToken: !!settingsEnv().CLAUDE_CODE_OAUTH_TOKEN,
+    // Also picked over the token by Claude Code; chats here turn it off while the token is in use.
+    apiKeyHelper: !!readSettings()?.apiKeyHelper,
+    settingsPath: settingsFile(),
+  };
+}
+
+/** Normalise a pasted token, or throw a readable error. */
+export function cleanToken(token) {
+  const t = String(token || '').trim();
+  if (!t) throw new Error('Paste the token first.');
+  if (/\s/.test(t)) throw new Error('The token has spaces in it. Paste only the token.');
+  if (t.startsWith('sk-ant-api')) throw new Error('That is an API key, not an OAuth token. Run claude setup-token to make a token.');
+  if (!t.startsWith('sk-ant-')) throw new Error('That does not look like a Claude token (they start with sk-ant-oat). Run claude setup-token and paste what it prints.');
+  return t;
+}
+
+/** Update the choice. token: undefined keeps the saved token, '' removes it. */
+export function setToken({ use, token }) {
+  const t = { ...loadTok() };
+  if (token !== undefined) t.token = token === '' ? '' : cleanToken(token);
+  if (use !== undefined) {
+    if (!['token', 'login'].includes(use)) throw new Error('Unknown sign-in choice');
+    t.use = use;
+  }
+  if (!t.token && t.use === 'token') {
+    if (token === '') t.use = 'login';
+    else throw new Error('Paste a token first.');
+  }
+  saveTok(t);
+  return tokenStatus();
+}
+
+/**
+ * Environment and --settings env for trying a token (saved or just typed) with the real CLI,
+ * whatever the gateway is set to.
+ */
+export function tokenTestEnv(token) {
+  const tok = token ? cleanToken(token) : loadTok().token;
+  if (!tok) throw new Error('Paste a token first.');
+  const env = { ...process.env };
+  for (const k of PRIVATE_ENV) delete env[k];
+  for (const k of [...TOKEN_OVERRIDES, 'ANTHROPIC_AUTH_TOKEN']) delete env[k];
+  env.CLAUDE_CODE_OAUTH_TOKEN = tok;
+  const settings = Object.fromEntries([...TOKEN_OVERRIDES, 'ANTHROPIC_AUTH_TOKEN'].map((k) => [k, '']));
+  if (settingsEnv().CLAUDE_CODE_OAUTH_TOKEN) settings.CLAUDE_CODE_OAUTH_TOKEN = tok;
+  return { env, settings };
+}
+
 /**
  * Apply gateway mode to the environment of a claude (or shell) process this server starts.
  * `env` is already the merged environment; `extra` is what the user set for this chat's
@@ -299,6 +420,11 @@ export function applyGateway(env, extra = {}) {
   for (const k of PRIVATE_ENV) delete env[k];
   if (!gatewayActive()) {
     if (switchedOff()) for (const k of GATEWAY_ENV) if (!(k in extra)) delete env[k];
+    const t = loadTok();
+    if (oauthTokenActive()) {
+      for (const k of TOKEN_OVERRIDES) delete env[k];
+      env.CLAUDE_CODE_OAUTH_TOKEN = t.token;
+    } else if (t.use === 'login') delete env.CLAUDE_CODE_OAUTH_TOKEN;
     return env;
   }
   const c = load();
@@ -327,14 +453,24 @@ export function gatewaySettingsEnv() {
     if (settingsEnv().ANTHROPIC_AUTH_TOKEN) out.ANTHROPIC_AUTH_TOKEN = c.token;
     return out;
   }
-  if (switchedOff()) return Object.fromEntries([...GATEWAY_ENV, 'CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_USE_FOUNDRY'].map((k) => [k, '']));
-  return null;
+  let out = null;
+  if (switchedOff()) out = Object.fromEntries([...GATEWAY_ENV, 'CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_USE_FOUNDRY'].map((k) => [k, '']));
+  const t = loadTok();
+  if (oauthTokenActive()) {
+    // Everything Claude Code would pick over the token is blanked. The token itself only goes in
+    // the arguments when a settings.json has a token of its own to override.
+    out = { ...out, ...Object.fromEntries(TOKEN_OVERRIDES.map((k) => [k, ''])) };
+    if (settingsEnv().CLAUDE_CODE_OAUTH_TOKEN) out.CLAUDE_CODE_OAUTH_TOKEN = t.token;
+  } else if (t.use === 'login') out = { ...out, CLAUDE_CODE_OAUTH_TOKEN: '' };
+  return out;
 }
 
 /** Add gatewaySettingsEnv() to a claude session's arguments (merged into a --settings already there). */
 export function withGatewayArgs(args) {
   const genv = gatewaySettingsEnv();
   if (!genv) return args;
+  // An apiKeyHelper in any settings file also beats the OAuth token; an empty one turns it off.
+  const more = oauthTokenActive() ? { apiKeyHelper: '' } : {};
   const out = [...args];
   const i = out.lastIndexOf('--settings');
   if (i >= 0 && i + 1 < out.length) {
@@ -343,11 +479,11 @@ export function withGatewayArgs(args) {
       s = JSON.parse(out[i + 1]);
     } catch {}
     if (s && typeof s === 'object') {
-      out[i + 1] = JSON.stringify({ ...s, env: { ...(s.env || {}), ...genv } });
+      out[i + 1] = JSON.stringify({ ...s, ...more, env: { ...(s.env || {}), ...genv } });
       return out;
     }
   }
-  out.push('--settings', JSON.stringify({ env: genv }));
+  out.push('--settings', JSON.stringify({ ...more, env: genv }));
   return out;
 }
 
