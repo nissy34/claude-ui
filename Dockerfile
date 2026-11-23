@@ -4,7 +4,11 @@
 
 FROM node:22-bookworm-slim AS node
 
-FROM ubuntu:24.04 AS build
+# Layers are ordered so a code change only redoes the last steps: everything
+# that depends on package-lock.json (npm installs, the built-in browser) comes
+# before the app's source is copied in. Keep it that way when adding steps.
+
+FROM ubuntu:24.04 AS toolchain
 COPY --from=node /usr/local/ /usr/local/
 # Build tools for node-pty (Terminal and Shell sessions).
 RUN apt-get update \
@@ -12,9 +16,16 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY package.json package-lock.json ./
+
+# Runtime dependencies only. Rebuilt only when package*.json change.
+FROM toolchain AS deps
+RUN npm ci --omit=dev --no-audit --no-fund
+
+# The web app, built with the dev dependencies (vite etc.).
+FROM toolchain AS build
 RUN npm ci --no-audit --no-fund
 COPY . .
-RUN npx vite build && npm prune --omit=dev
+RUN npx vite build
 
 FROM ubuntu:24.04
 # Pin a version (e.g. 2.1.0) for reproducible builds; rebuild to update.
@@ -60,7 +71,10 @@ RUN npm install -g --no-audit --no-fund @anthropic-ai/claude-code@${CLAUDE_CODE_
  && npm cache clean --force
 
 WORKDIR /app
-COPY --from=build /app /app
+# Dependencies before source: this layer and the browser install below stay
+# cached until package-lock.json changes.
+COPY --from=deps /app/package.json /app/package-lock.json ./
+COPY --from=deps /app/node_modules ./node_modules
 
 # The built-in browser lives in the image at /ms-playwright and is handed to
 # claude-ui alone as CW_BROWSER_PATH. PLAYWRIGHT_BROWSERS_PATH is set only for
@@ -79,6 +93,11 @@ RUN if [ "$WITH_BROWSER" = 1 ]; then \
     && touch /etc/claude-ui.env
 
 COPY docker/entrypoint.sh /usr/local/bin/claude-ui-entrypoint
+
+# The app itself, last. A code change only redoes these two copies (and the
+# vite build in the build stage).
+COPY . .
+COPY --from=build /app/dist ./dist
 
 # The CLI can't update itself inside the image (rebuild instead).
 ENV DISABLE_AUTOUPDATER=1 \
