@@ -2060,7 +2060,7 @@ export class ProjectEngine {
    */
   checkPr(p, sid, delay = 0) {
     const t = p.state.threads[sid];
-    if (!t || !t.branch || this.ghMissingUntil > Date.now()) return;
+    if (!t || this.ghMissingUntil > Date.now()) return;
     clearTimeout((this.prTimers ||= new Map()).get(sid));
     const timer = setTimeout(() => this.pollPr(p, sid).catch(() => {}), delay);
     timer.unref?.();
@@ -2072,16 +2072,18 @@ export class ProjectEngine {
     const s = this.store.get(sid);
     if (!t || !s || !fs.existsSync(s.meta.cwd)) return;
     (this.prPolled ||= new Map()).set(sid, Date.now());
-    const r = await prStatus(s.meta.cwd, prOpts(s));
+    // Also the newest PR the thread linked to, for threads that work on another branch (e.g. push to a PR's branch).
+    const r = await prStatus(s.meta.cwd, prOpts(s, { linked: true, maxLinked: 1 }));
     if (!r.available) {
       this.ghMissingUntil = Date.now() + 3600_000; // no gh, or not signed in: try again in an hour
       return;
     }
-    const pr = r.pr;
+    const own = r.pr && !(r.pr.head && t.branch && r.pr.head !== t.branch) ? r.pr : null; // not a PR for some other branch
+    const pr = own || r.linked?.[0] || null;
     if (!pr && !t.pr) return;
-    if (pr && pr.head && t.branch && pr.head !== t.branch) return; // a PR for some other branch
+    if (!pr && r.error) return; // gh hiccup: keep the bar
     const before = t.pr;
-    const slim = pr && { number: pr.number, url: pr.url, title: pr.title, state: pr.state, review: pr.review, autoMerge: pr.autoMerge, head: pr.head, additions: pr.additions, deletions: pr.deletions, summary: pr.summary, failing: pr.checks.filter((c) => c.state === 'fail').map((c) => c.name).slice(0, 10) };
+    const slim = pr && { linked: !own || undefined, number: pr.number, url: pr.url, title: pr.title, state: pr.state, review: pr.review, autoMerge: pr.autoMerge, head: pr.head, additions: pr.additions, deletions: pr.deletions, summary: pr.summary, failing: pr.checks.filter((c) => c.state === 'fail').map((c) => c.name).slice(0, 10) };
     if (JSON.stringify(slim) === JSON.stringify(before)) return;
     // Only the size or branch changed (a new push): update the PR bar without a chat row.
     const core = (x) => x && JSON.stringify({ ...x, head: 0, additions: 0, deletions: 0 });

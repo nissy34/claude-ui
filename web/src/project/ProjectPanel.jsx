@@ -8,6 +8,7 @@ import { DecisionCard, Md, MemoryUpdate } from './ProjectCards.jsx';
 import { ProjectMemory } from './ProjectFiles.jsx';
 import { projectAction } from './useProject.js';
 import { ProjectUsageRing } from './ProjectUsage.jsx';
+import PrBar from '../chat/PrBar.jsx';
 
 const short = (ts) => {
   const s = (Date.now() - ts) / 1000;
@@ -328,7 +329,6 @@ function ThreadPane({ project, threadId, onBack, onSelect, openThread, onError, 
     if (v && Number(v) > 0) act('remind', { minutes: Number(v) });
   };
   const decisions = Object.fromEntries(project.decisions.map((d) => [d.id, d]));
-  const lastChecklist = feed ? [...feed].reverse().find((e) => e.type === 'checklist.updated')?.id : null;
   const threadTitle = (id) => project.threads.find((x) => x.id === id)?.title;
   // Previous / next in the order the Threads list shows (most recent activity first).
   const order = [...project.threads].sort((a, b) => (b.lastActivity || 0) - (a.lastActivity || 0)).map((x) => x.id);
@@ -410,16 +410,7 @@ function ThreadPane({ project, threadId, onBack, onSelect, openThread, onError, 
                 </div>
               );
             case 'checklist.updated':
-              return e.id === lastChecklist ? (
-                <div key={e.id} className="pjp-cl">
-                  {(t.checklist?.steps || b.steps || []).map((s, i) => (
-                    <div key={i} className={`pjp-cl-step ${s.status}`}>
-                      <span className="mk">{s.status === 'completed' ? '✓' : s.status === 'in_progress' ? '' : ''}</span>
-                      {s.step}
-                    </div>
-                  ))}
-                </div>
-              ) : null;
+              return null; // pinned above the composer
             case 'thread.post':
               return (
                 <div key={e.id} className="pjp-msg">
@@ -510,24 +501,18 @@ function ThreadPane({ project, threadId, onBack, onSelect, openThread, onError, 
           </div>
         )}
       </div>
-      {t.pr?.url && (
-        <a className={`pjp-prbar ${t.pr.state === 'MERGED' ? 'merged' : t.pr.state === 'CLOSED' ? 'closed' : 'open'}`} href={t.pr.url} target="_blank" rel="noreferrer">
-          <PrIcon merged={t.pr.state === 'MERGED'} /> <b>#{t.pr.number}</b> <span className="mono pjp-prbar-branch">{t.pr.head || t.branch}</span>
-          {t.pr.additions != null && (
-            <span className="pjp-diffstat">
-              <span className="add">+{t.pr.additions}</span> <span className="del">−{t.pr.deletions}</span>
-            </span>
-          )}
-          <span className="spacer" />
-          {t.pr.summary && t.pr.summary.pass + t.pr.summary.fail + t.pr.summary.pending > 0 && !t.pr.summary.fail && <span className="muted small">{t.pr.summary.pending ? `${t.pr.summary.pending} checks running · ` : 'Checks pass · '}</span>}
-          {t.pr.state === 'MERGED' ? 'Merged' : t.pr.state === 'CLOSED' ? 'Closed' : t.pr.summary?.fail ? `${t.pr.summary.fail} failing` : t.pr.review === 'APPROVED' ? 'Approved' : 'Open'}
-        </a>
-      )}
-      {!t.pr?.url && t.branch && (
-        <div className="pjp-prbar none">
-          <span className="mono">⎇ {t.branch}</span>
-        </div>
-      )}
+      <div className="pjp-dock">
+        <PinnedChecklist key={threadId} checklist={t.checklist} />
+        {t.pr?.url ? (
+          <PrBar pr={t.pr} sessionId={threadId} fallbackBranch={t.branch} />
+        ) : (
+          t.branch && (
+            <div className="pjp-prbar none">
+              <span className="mono">⎇ {t.branch}</span>
+            </div>
+          )
+        )}
+      </div>
       <div className="pjp-composer">
         <textarea
           rows={1}
@@ -553,6 +538,45 @@ function ThreadPane({ project, threadId, onBack, onSelect, openThread, onError, 
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+/** The thread's checklist, pinned above the composer; folds to one line, and starts folded once every step is done. */
+function PinnedChecklist({ checklist }) {
+  const steps = checklist?.steps || [];
+  const done = steps.filter((x) => x.status === 'completed').length;
+  const allDone = steps.length > 0 && done === steps.length;
+  const [open, setOpen] = useState(!allDone);
+  const was = useRef(allDone);
+  useEffect(() => {
+    if (allDone !== was.current) setOpen(!allDone); // fold when it finishes, unfold when new steps arrive
+    was.current = allDone;
+  }, [allDone]);
+  if (!steps.length) return null;
+  const current = steps.find((x) => x.status === 'in_progress');
+  return (
+    <div className={`pjp-cl pinned ${open ? 'open' : 'closed'}`}>
+      <button className="pjp-cl-head" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
+        <span className="pjp-cl-title">{open ? checklist.title || 'Checklist' : current?.step || checklist.title || (allDone ? 'All steps done' : 'Checklist')}</span>
+        <span className="pjp-cl-count">
+          {done}/{steps.length}
+        </span>
+        <span className="pjp-cl-bar">
+          <span style={{ width: `${(100 * done) / steps.length}%` }} />
+        </span>
+        <span className="chev">{open ? '▾' : '▸'}</span>
+      </button>
+      {open && (
+        <div className="pjp-cl-steps">
+          {steps.map((x, i) => (
+            <div key={i} className={`pjp-cl-step ${x.status}`}>
+              <span className="mk">{x.status === 'completed' ? '✓' : ''}</span>
+              {x.step}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

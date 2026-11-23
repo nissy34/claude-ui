@@ -20,7 +20,8 @@
     "test:token": "node scripts/test-oauth-token.mjs",
     "test:sessions": "node scripts/test-sessions.mjs",
     "test:git-identity": "node scripts/test-git-identity.mjs",
-    "test:pr": "node scripts/test-pr-status.mjs"
+    "test:pr": "node scripts/test-pr-status.mjs",
+    "test:pr-bar": "node scripts/test-pr-bar.mjs"
   },
   "engines": {
     "node": ">=20.6"

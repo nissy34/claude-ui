@@ -17,6 +17,7 @@ import SessionRail from './SessionRail.jsx';
 import { isLive as taskLive, BackgroundPill } from './BackgroundTasks.jsx';
 import { ChatCtx } from './ctx.js';
 import SideChat from './SideChat.jsx';
+import PrBar from './PrBar.jsx';
 import TerminalView from '../TerminalView.jsx';
 import { Button, IconButton, Menu, Modal, ModalHead, useDismiss } from '../ui/index.jsx';
 import { promptDialog } from '../ui/dialogs.jsx';
@@ -620,6 +621,28 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
   const pendingPerms = items.filter((i) => i.type === 'tool' && i.perm && !i.perm.done).length + items.filter((i) => (i.type === 'perm' || i.type === 'elicit') && !i.done).length;
   const busy = state === 'busy' || state === 'waiting';
   const liveTasks = useMemo(() => tasks.filter(taskLive), [tasks]);
+  // The PR this chat works on (its branch's, else the newest it linked to), pinned above the composer.
+  // Looked up when the chat opens and after each turn; meta.pr (the sidebar's copy) shows until then.
+  const [prLive, setPrLive] = useState(undefined);
+  const hasFolder = !!meta.cwd && !meta.noFolder && (meta.kind || 'chat') === 'chat';
+  useEffect(() => setPrLive(undefined), [session.id]);
+  useEffect(() => {
+    if (busy || !hasFolder) return;
+    let live = true;
+    const timer = setTimeout(() => {
+      api(`/api/sessions/${session.id}/pr`)
+        .then((r) => {
+          if (!live || !r.available || r.error) return;
+          setPrLive(r.pr || (r.linked?.[0] ? { ...r.linked[0], linked: true } : null));
+        })
+        .catch(() => {});
+    }, 1200);
+    return () => {
+      live = false;
+      clearTimeout(timer);
+    };
+  }, [session.id, busy, hasFolder]);
+  const barPr = prLive !== undefined ? prLive : meta.pr;
   // Resume shows on an exit error only while it is the latest thing in the chat.
   const lastResumable = busy ? -1 : rows.findLastIndex((r) => ['error', 'user', 'text', 'tool', 'group'].includes(r.type));
   // Rows added after the chat opened always show; only the history above them is held back.
@@ -1125,6 +1148,11 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
             />
           )}
           <McpSignInBar sessionId={session.id} flows={oauth} onError={onError} />
+          {barPr?.url && (
+            <div className="chat-prbar">
+              <PrBar pr={barPr} sessionId={session.id} fallbackBranch={meta.worktree?.branch} />
+            </div>
+          )}
           <Composer
             sessionId={session.id}
             initialDraft={meta.draft}

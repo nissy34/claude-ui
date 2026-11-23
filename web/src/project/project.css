@@ -421,3 +421,17 @@
 .pj-mem-diff .del { background: var(--diff-del); color: var(--red); }
 .pj-mem-diff .gap { color: var(--muted); }
 .pj-mem-ts { font-size: var(--fs-xs); color: var(--muted); margin-top: 2px; }
+
+/* Checklist and PR bar pinned above the thread composer. */
+.pjp-dock { flex: none; display: flex; flex-direction: column; gap: var(--sp-1h); margin: 0 var(--sp-4) var(--sp-2); }
+.pjp-dock:empty { display: none; }
+.pjp-dock .pjp-prbar { margin: 0; }
+.pjp-cl.pinned { padding: var(--sp-1h) var(--sp-3) var(--sp-2); gap: var(--sp-1); }
+.pjp-cl.pinned.closed { padding-bottom: var(--sp-1h); }
+.pjp-cl-head { display: flex; align-items: center; gap: var(--sp-2); width: 100%; background: none; border: 0; padding: var(--sp-0) 0; color: var(--muted); font-size: var(--fs-sm); text-align: left; cursor: pointer; }
+.pjp-cl-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pjp-cl.closed .pjp-cl-title { color: var(--text); }
+.pjp-cl-count { flex: none; font-variant-numeric: tabular-nums; }
+.pjp-cl-bar { flex: none; width: 72px; height: 4px; border-radius: var(--r-full); background: var(--line); overflow: hidden; }
+.pjp-cl-bar > span { display: block; height: 100%; background: var(--accent); transition: width .3s; }
+.pjp-cl-steps { display: flex; flex-direction: column; gap: var(--sp-1h); max-height: 30vh; overflow-y: auto; padding-top: var(--sp-1); }
