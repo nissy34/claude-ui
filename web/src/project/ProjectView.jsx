@@ -8,6 +8,7 @@ import { ProjectUsageRing } from './ProjectUsage.jsx';
 import ProjectPanel, { PrChip, StatusIcon } from './ProjectPanel.jsx';
 import { STATUS_LABEL, STATUS_ORDER, useProject } from './useProject.js';
 import { useGatewayMode } from '../Gateway.jsx';
+import { ImageLightbox } from '../chat/ToolCard.jsx';
 import './project.css';
 
 export default function ProjectView({ projectId, tab: initialTab, thread: initialThread, onSelect, onCreate, onMenu, onError, onDeleted, projects }) {
@@ -152,6 +153,25 @@ function ProjectChat({ project, openThread, onError, onFullUsage }) {
     }
   });
   const [sending, setSending] = useState(false);
+  const [pasted, setPasted] = useState([]); // {key, url, abs?} pictures pasted into the box
+  const pasteImages = (files) => {
+    for (const f of files) {
+      const key = Math.random();
+      const url = URL.createObjectURL(f);
+      setPasted((l) => [...l, { key, url }]);
+      const ext = (f.type.split('/')[1] || 'png').replace('jpeg', 'jpg').replace(/[^\w]/g, '');
+      const name = `pasted-${new Date().toISOString().replace(/[:.]/g, '-')}-${Math.floor(key * 1e4)}.${ext}`;
+      new Promise((res, rej) => {
+        const r = new FileReader();
+        r.onload = () => res(String(r.result).split(',')[1]);
+        r.onerror = rej;
+        r.readAsDataURL(f);
+      })
+        .then((data) => api(`/api/cprojects/${project.id}/library`, { method: 'POST', body: { name, data } }))
+        .then((j) => setPasted((l) => l.map((x) => (x.key === key ? { ...x, abs: j.abs } : x))))
+        .catch((e) => (setPasted((l) => l.filter((x) => x.key !== key)), onError(e)));
+    }
+  };
   // "Ask Claude" elsewhere on the page (the Custom view tab) puts a draft here.
   useEffect(() => {
     const on = (e) => {
@@ -174,13 +194,16 @@ function ProjectChat({ project, openThread, onError, onFullUsage }) {
       localStorage.setItem(`cw.pj.draft.${project.id}`, v);
     } catch {}
   };
+  const uploading = pasted.some((p) => !p.abs);
   const send = async () => {
-    const t = text.trim();
-    if (!t || sending) return;
+    const ready = pasted.filter((p) => p.abs);
+    const t = text.trim() + (ready.length ? `${text.trim() ? '\n\n' : ''}Attached images:\n${ready.map((p) => `- ${p.abs}`).join('\n')}` : '');
+    if (!t || sending || uploading) return;
     setSending(true);
     try {
       await api(`/api/cprojects/${project.id}/messages`, { method: 'POST', body: { text: t } });
       saveDraft('');
+      setPasted([]);
       stick.current = true;
     } catch (e) {
       onError(e);
@@ -229,11 +252,36 @@ function ProjectChat({ project, openThread, onError, onFullUsage }) {
       </div>
       <div className="pj-composer2">
         <div className="pj-composer-box">
+          {pasted.length > 0 && (
+            <div className="thumbs pj-thumbs">
+              {pasted.map((p) => (
+                <div key={p.key} className={`thumb ${p.abs ? '' : 'uploading'}`}>
+                  <img src={p.url} alt="Pasted image" />
+                  <button onClick={() => setPasted((l) => l.filter((x) => x !== p))} aria-label="Remove">
+                    ✕
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
           <textarea
             rows={1}
             value={text}
             placeholder="Ask Claude a question or start a task…"
             onChange={(e) => saveDraft(e.target.value)}
+            onPaste={(e) => {
+              const imgs = [...(e.clipboardData?.files || [])].filter((f) => f.type.startsWith('image/'));
+              if (!imgs.length) return;
+              e.preventDefault();
+              pasteImages(imgs);
+            }}
+            onDragOver={(e) => e.dataTransfer?.types?.includes('Files') && e.preventDefault()}
+            onDrop={(e) => {
+              const imgs = [...(e.dataTransfer?.files || [])].filter((f) => f.type.startsWith('image/'));
+              if (!imgs.length) return;
+              e.preventDefault();
+              pasteImages(imgs);
+            }}
             onKeyDown={(e) => {
               if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing && !matchMedia('(pointer: coarse)').matches) {
                 e.preventDefault();
@@ -241,7 +289,7 @@ function ProjectChat({ project, openThread, onError, onFullUsage }) {
               }
             }}
           />
-          <button className="pjp-send" onClick={send} disabled={!text.trim() || sending} aria-label="Send">
+          <button className="pjp-send" onClick={send} disabled={(!text.trim() && !pasted.length) || sending || uploading} aria-label="Send">
             ↵
           </button>
         </div>
@@ -322,17 +370,47 @@ function AboutLabel({ ids, threads, onSelect }) {
   );
 }
 
+// Pictures pasted in the project chat are saved to the library; the message ends with their paths
+// (so Claude, and the threads it passes the message to, can open them) and shows them as thumbnails.
+const ATTACHED_IMAGES = /\n*Attached images:\n((?:- .+(?:\n|$))+)$/;
+function splitImages(text) {
+  const m = ATTACHED_IMAGES.exec(text || '');
+  if (!m) return [text, []];
+  const rels = m[1].trim().split('\n').map((l) => l.replace(/^- /, '')).map((p) => p.slice(p.lastIndexOf('/library/') + '/library/'.length));
+  return [text.slice(0, m.index), rels];
+}
+
+function PastedImages({ project, rels }) {
+  const [big, setBig] = useState(null);
+  const href = (p) => `/api/cprojects/${project.id}/library/file?path=${encodeURIComponent(p)}`;
+  return (
+    <div className="sent-images">
+      {rels.map((p) => (
+        <button key={p} type="button" className="sent-image" title="Click to enlarge" onClick={() => setBig(href(p))}>
+          <img src={href(p)} alt={p.split('/').pop()} loading="lazy" />
+        </button>
+      ))}
+      {big && <ImageLightbox src={big} alt="Pasted image" onClose={() => setBig(null)} />}
+    </div>
+  );
+}
+
 function FeedItem({ e, project, threads, decisions, onSelect, onError }) {
   const b = e.body || {};
   switch (e.type) {
-    case 'user.message':
+    case 'user.message': {
+      const [body, imgs] = splitImages(b.text);
       return (
         <div className="msg user">
           {e.from?.kind === 'desktop' && <div className="from-label">From Claude Desktop</div>}
-          <div className="bubble">{b.text}</div>
+          <div className="bubble">
+            {imgs.length > 0 && <PastedImages project={project} rels={imgs} />}
+            {body}
+          </div>
           <Reactions list={project.reactions[e.id]} />
         </div>
       );
+    }
     case 'chat.post':
       return (
         <div className="msg assistant pj-post">

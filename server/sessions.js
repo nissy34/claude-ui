@@ -302,6 +302,8 @@ class Store {
     if (!s) return false;
     this.sessions.delete(id);
     s.dispose();
+    // Files and pictures sent in the chat go with it.
+    if (/^[0-9a-f-]{36}$/.test(id)) fs.rmSync(path.join(config.dataDir, 'uploads', id), { recursive: true, force: true });
     this.save();
     return true;
   }

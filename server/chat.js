@@ -14,7 +14,7 @@ import { config } from './config.js';
 import { claudeEnv } from './gateway.js';
 import { resolveCommand } from './launch.js';
 import { withOpener } from './opener.js';
-import { toolResultParts } from './tool-images.js';
+import { toolResultParts, saveChatImage, loadChatImage } from './tool-images.js';
 import { elicitationEvent, elicitationResponse, mcpAuthMethods, slimServers } from './mcp-admin.js';
 import { allowRuleFor, withAllowRules } from './allow-rules.js';
 
@@ -113,7 +113,7 @@ function promptText(content) {
 }
 
 /** Convert a Claude Code transcript (.jsonl) into chat events, so resumed conversations show their history. */
-export function eventsFromTranscript(file) {
+export function eventsFromTranscript(file, saveImages = () => []) {
   const events = [];
   let lines;
   try {
@@ -147,7 +147,8 @@ export function eventsFromTranscript(file) {
           let from;
           const fm = /^\[(Question|Reply|Message) from (\w+) session "(.*?)" \(session id ([\w-]+)\)[^\]\n]*\]\n\n/.exec(t);
           if (fm) (from = { kind: fm[1] === 'Message' ? undefined : fm[1].toLowerCase(), role: fm[2], name: fm[3], id: fm[4] }), (t = t.slice(fm[0].length));
-          events.push({ k: 'user', text: t, ts, ...(from ? { from } : {}) });
+          const images = Array.isArray(c) ? saveImages(c.filter((x) => x.type === 'image' && x.source?.type === 'base64').map((x) => x.source)) : [];
+          events.push({ k: 'user', text: t, ts, ...(images.length ? { images } : {}), ...(from ? { from } : {}) });
         }
       }
     } else if (o.type === 'assistant' && o.message?.content) {
@@ -159,7 +160,14 @@ export function eventsFromTranscript(file) {
   return events;
 }
 
+// Pictures sent with a message are saved once (by content hash) and the chat log keeps their URLs.
+const loadImages = (urls) => (Array.isArray(urls) ? urls.map(loadChatImage).filter(Boolean) : []);
+
 export class ChatSession {
+  saveImages(images) {
+    return Array.isArray(images) ? images.map((i) => i && saveChatImage(this.id, i.media_type, i.data)).filter(Boolean) : [];
+  }
+
   constructor(meta, store) {
     this.meta = meta;
     this.store = store;
@@ -221,7 +229,7 @@ export class ChatSession {
   // Rebuild the chat from Claude's transcript (after the conversation continued in the terminal UI).
   resync() {
     const file = transcriptPath(this.meta.cwd, this.meta.claudeSessionId);
-    const evs = eventsFromTranscript(file);
+    const evs = eventsFromTranscript(file, (imgs) => this.saveImages(imgs));
     if (!evs.length) return;
     evs.push({ k: 'notice', text: 'Synced with the terminal session', ts: Date.now() });
     fs.writeFileSync(this.logFile, evs.map((e) => JSON.stringify(e)).join('\n') + '\n');
@@ -231,7 +239,7 @@ export class ChatSession {
 
   seedFromTranscript() {
     const file = transcriptPath(this.meta.cwd, this.meta.claudeSessionId);
-    const evs = eventsFromTranscript(file);
+    const evs = eventsFromTranscript(file, (imgs) => this.saveImages(imgs));
     if (evs.length) {
       evs.push({ k: 'notice', text: 'Resumed from an earlier conversation', ts: Date.now() });
       fs.writeFileSync(this.logFile, evs.map((e) => JSON.stringify(e)).join('\n') + '\n');
@@ -809,11 +817,10 @@ export class ChatSession {
 
   enqueue({ text, from, images, refs }) {
     const item = { id: queueId(), text, from, ts: Date.now() };
-    // Images stay in memory only, so sessions.json doesn't fill up with base64.
-    if (images?.length) {
-      item.images = images.length;
-      (this.queuedImages ||= new Map()).set(item.id, images);
-    }
+    // Images are saved to disk and the queue keeps their URLs, so a restart doesn't lose them
+    // and sessions.json doesn't fill up with base64.
+    const urls = this.saveImages(images);
+    if (urls.length) item.images = urls;
     if (refs?.length) item.refs = refs;
     this.inbox.push(item);
     this.store.save();
@@ -858,7 +865,6 @@ export class ChatSession {
   removeQueued(id) {
     const before = this.inbox.length;
     this.meta.inbox = this.inbox.filter((b) => b.id !== id);
-    this.queuedImages?.delete(id);
     if (this.meta.inbox.length === before) return;
     this.store.save();
     this.broadcastState();
@@ -869,11 +875,10 @@ export class ChatSession {
     // Send now picks those messages; otherwise everything queued goes together, in order.
     const picked = this.inbox.some((b) => b.now) ? this.inbox.filter((b) => b.now) : this.inbox;
     const rest = this.inbox.filter((b) => !picked.includes(b));
-    const batch = picked.map(({ now, ...b }) => ({ ...b, imageData: this.queuedImages?.get(b.id) || [] }));
+    const batch = picked.map(({ now, ...b }) => ({ ...b, imageData: loadImages(b.images) }));
     this.meta.inbox = rest;
     const ok = batch.length === 1 && batch[0].from ? this.send(batch[0]) : this.send({ batch });
-    if (ok) for (const b of batch) this.queuedImages?.delete(b.id);
-    else this.meta.inbox = [...picked.map(({ now, ...b }) => b), ...this.meta.inbox];
+    if (!ok) this.meta.inbox = [...picked.map(({ now, ...b }) => b), ...this.meta.inbox];
     this.store.save();
     this.broadcastState();
   }
@@ -973,8 +978,8 @@ export class ChatSession {
       if (this.proc === proc && !this.heard && this.turns > 0) this.record({ k: 'error', resumable: true, text: "Claude hasn't responded for a minute. Press Resume to restart it and continue." });
     }, 60_000);
     this.watchdog.unref?.();
-    if (batch) for (const b of batch) this.record({ k: 'user', text: b.text, images: b.imageData?.length || 0, ...(b.refs?.length ? { refs: b.refs } : {}), ...(b.from ? { from: b.from } : {}) });
-    else this.record({ k: 'user', text, images: imgs.length, ...(chats.length ? { refs: chats.map((c) => ({ id: c.id, name: c.meta.name })) } : {}), ...(from?.name ? { from } : {}), ...(wake ? { wake } : {}) });
+    if (batch) for (const b of batch) this.record({ k: 'user', text: b.text, images: Array.isArray(b.images) ? b.images : this.saveImages(b.imageData), ...(b.refs?.length ? { refs: b.refs } : {}), ...(b.from ? { from: b.from } : {}) });
+    else this.record({ k: 'user', text, images: this.saveImages(imgs), ...(chats.length ? { refs: chats.map((c) => ({ id: c.id, name: c.meta.name })) } : {}), ...(from?.name ? { from } : {}), ...(wake ? { wake } : {}) });
     clearTimeout(this.idleTimer);
     this.store.save();
     this.broadcastState();
@@ -1234,7 +1239,7 @@ export class ChatSession {
     fs.writeFileSync(this.logFile, this.events.map((e) => JSON.stringify(e)).join('\n') + (this.events.length ? '\n' : ''));
     this.record({ k: 'notice', text: restored ? 'Edited message: conversation and files rewound to this point' : 'Edited message: conversation rewound to this point' });
     this.broadcast({ t: 'reload' });
-    this.send({ text, refs: (ev.refs || []).map((r) => r.id) });
+    this.send({ text, images: loadImages(ev.images), refs: (ev.refs || []).map((r) => r.id) });
   }
 
   stop() {

@@ -3,7 +3,7 @@ import { api, wsUrl } from '../api.js';
 import ArtifactsGallery from '../ArtifactsGallery.jsx';
 import { buildItems, lastTodos, isPublishTool, isPinViewTool, isPlanTool, publishedPath, publishedTitle, localPageFromUrl } from './model.js';
 import { renderMarkdown } from './markdown.js';
-import ToolCard, { Todos, ToolGroup } from './ToolCard.jsx';
+import ToolCard, { Todos, ToolGroup, ImageLightbox } from './ToolCard.jsx';
 import Permission from './Permission.jsx';
 import { Elicitation, McpSignInBar, startSignIn, needsSignIn, deliverCallback, LOCAL_CALLBACK } from './McpAuth.jsx';
 import Composer from './Composer.jsx';
@@ -106,6 +106,28 @@ const withRefs = (chats, refs) => (refs?.length ? [...refs, ...(chats || [])] : 
 // Refs whose @chat: token isn't in the text (shown as a row under the bubble instead of inline).
 const offText = (refs, text) => (refs || []).filter((r) => !r.name || !String(text || '').includes('@' + chatToken(r)));
 
+/** Pictures sent with a message: thumbnails (click to enlarge), or a count for older messages. */
+function SentImages({ images }) {
+  const [big, setBig] = useState(null);
+  const [broken, setBroken] = useState({});
+  if (typeof images === 'number') return images > 0 ? <div className="img-note">🖼 {images} image{images > 1 ? 's' : ''}</div> : null;
+  if (!images?.length) return null;
+  return (
+    <div className="sent-images">
+      {images.map((src, n) =>
+        broken[src] ? (
+          <span key={src + n} className="sent-image-gone">🖼</span>
+        ) : (
+          <button key={src + n} type="button" className="sent-image" title="Click to enlarge" onClick={() => setBig(src)}>
+            <img src={src} alt={`Image ${n + 1}`} loading="lazy" onError={() => setBroken((b) => ({ ...b, [src]: true }))} />
+          </button>
+        ),
+      )}
+      {big && <ImageLightbox src={big} alt="Sent image" onClose={() => setBig(null)} />}
+    </div>
+  );
+}
+
 function QueuedMessage({ item, busy, onNow, onEdit, onRemove, onOpen, chats }) {
   const [quoted, body] = splitQuote(splitAttachments(item.text)[0]);
   const [open, setOpen] = useState(false);
@@ -129,7 +151,7 @@ function QueuedMessage({ item, busy, onNow, onEdit, onRemove, onOpen, chats }) {
       )}
       <div className={`bubble ${long && !open ? 'clamped' : ''}`} onClick={long && !open ? () => setOpen(true) : undefined}>
         {quoted && <div className="bubble-quote">{quoted}</div>}
-        {item.images > 0 && <div className="img-note">🖼 {item.images} image{item.images > 1 ? 's' : ''}</div>}
+        <SentImages images={item.images} />
         <MentionText text={body} chats={withRefs(chats, item.refs)} onOpenChat={onOpen} />
         {offText(item.refs, body).length > 0 && (
           <div className="attach-row in-bubble">
@@ -148,7 +170,7 @@ function QueuedMessage({ item, busy, onNow, onEdit, onRemove, onOpen, chats }) {
             <Button size="sm" onClick={onNow} title={busy ? 'Stop what Claude is doing and send this now' : 'Send this now'}>
               Send now
             </Button>
-            {item.mine && !item.images && (
+            {item.mine && !(item.images > 0) && (
               <IconButton onClick={onEdit} title="Edit (moves it back to the message box)" aria-label="Edit">
                 ✎
               </IconButton>
@@ -215,7 +237,7 @@ function UserMessage({ item, canEdit, onEdit, onOpen, onFork, chats }) {
       )}
       <div className="bubble">
         {quoted && <div className="bubble-quote">{quoted}</div>}
-        {item.images > 0 && <div className="img-note">🖼 {item.images} image{item.images > 1 ? 's' : ''}</div>}
+        <SentImages images={item.images} />
         <MentionText text={body} chats={withRefs(chats, item.refs)} onOpenChat={onOpen} />
         {offText(item.refs, body).length > 0 && (
           <div className="attach-row in-bubble">
@@ -1023,7 +1045,7 @@ export default function ChatView({ session, sessions, onSelect, onCreate, onMenu
                   onRemove={() => send({ t: 'queue_remove', id: q.id })}
                   onEdit={() => {
                     if (!send({ t: 'queue_remove', id: q.id })) return;
-                    setInsert({ text: q.text, key: q.id });
+                    setInsert({ text: q.text, images: Array.isArray(q.images) ? q.images : [], key: q.id });
                   }}
                   onOpen={(id) => sessions?.some((x) => x.id === id) && onSelect?.(id)}
                   chats={chatList}

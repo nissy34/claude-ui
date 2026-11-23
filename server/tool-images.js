@@ -41,6 +41,43 @@ function saveBase64(mediaType, data) {
   return `/api/tool-images/${name}`;
 }
 
+// Pictures you send in a chat live with that chat's uploads (<data dir>/uploads/<chat>/images/),
+// so deleting the chat deletes them. The chat log keeps their URLs.
+const chatImageDir = (sid) => path.join(config.dataDir, 'uploads', sid, 'images');
+const SID_RE = /^[0-9a-f-]{36}$/;
+
+/** Save a picture sent in chat `sid`; returns its URL, or null. */
+export function saveChatImage(sid, mediaType, data) {
+  const ext = EXT_OF[String(mediaType || '').toLowerCase()];
+  if (!SID_RE.test(sid) || !ext || typeof data !== 'string' || !data) return null;
+  const buf = Buffer.from(data, 'base64');
+  if (!buf.length || buf.length > MAX_BYTES) return null;
+  const name = `${crypto.createHash('sha1').update(buf).digest('hex')}.${ext}`;
+  const dir = chatImageDir(sid);
+  try {
+    if (!fs.existsSync(path.join(dir, name))) {
+      fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+      fs.writeFileSync(path.join(dir, name), buf, { mode: 0o600 });
+    }
+  } catch {
+    return null;
+  }
+  return `/api/chat-images/${sid}/${name}`;
+}
+
+const CHAT_IMAGE_RE = /^\/api\/chat-images\/([0-9a-f-]{36})\/([0-9a-f]{40}\.(png|jpg|gif|webp))$/;
+
+/** A picture saved by saveChatImage, back as { media_type, data } for Claude, or null. */
+export function loadChatImage(url) {
+  const m = CHAT_IMAGE_RE.exec(String(url || ''));
+  if (!m) return null;
+  try {
+    return { media_type: TYPES[m[3]], data: fs.readFileSync(path.join(chatImageDir(m[1]), m[2])).toString('base64') };
+  } catch {
+    return null;
+  }
+}
+
 /** Real path of a saved tool-result picture, or null when the path isn't one we may serve. */
 export function toolResultFile(p) {
   if (typeof p !== 'string' || !p || p.includes('\0')) return null;
@@ -116,6 +153,12 @@ export function mountToolImages(app) {
   app.get('/api/tool-images/:name', (req, res) => {
     const m = /^[0-9a-f]{40}\.(png|jpg|gif|webp)$/.exec(req.params.name);
     const file = m && path.join(DIR, req.params.name);
+    if (!file || !fs.existsSync(file)) return res.status(404).json({ error: 'Not found' });
+    sendImage(res, file);
+  });
+  app.get('/api/chat-images/:sid/:name', (req, res) => {
+    const m = CHAT_IMAGE_RE.exec(`/api/chat-images/${req.params.sid}/${req.params.name}`);
+    const file = m && path.join(chatImageDir(m[1]), m[2]);
     if (!file || !fs.existsSync(file)) return res.status(404).json({ error: 'Not found' });
     sendImage(res, file);
   });
