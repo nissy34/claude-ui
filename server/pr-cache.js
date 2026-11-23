@@ -1,7 +1,7 @@
 // Keeps a small copy of each chat's pull request in its meta (meta.pr), so the sidebar can show
 // PR state icons and a "Done" label without asking gh for every row. Refreshed when a chat's PR
 // is opened in the UI, shortly after a turn ends, and by a slow background sweep of recent chats.
-import { prStatus } from './pr-status.js';
+import { prStatus, chatTexts } from './pr-status.js';
 import { sessionExtras } from './environments.js';
 
 const SWEEP_MS = 3 * 60_000;
@@ -10,13 +10,16 @@ const MAX_SWEEP = 30;
 let ghMissingUntil = 0;
 const inFlight = new Map();
 
-/** The chat environment's variables for gh (GH_HOST, GH_ENTERPRISE_TOKEN, ...), so it signs in as it does in the chat. */
-export function prOpts(s) {
+/**
+ * The chat environment's variables for gh (GH_HOST, GH_ENTERPRISE_TOKEN, ...), so it signs in as it does in the chat.
+ * `linked` also passes the chat's text, so prStatus lists the PRs the chat linked to (the Details card only).
+ */
+export function prOpts(s, { linked = false } = {}) {
+  let env = {};
   try {
-    return { env: sessionExtras(s.meta).env };
-  } catch {
-    return {};
-  }
+    env = sessionExtras(s.meta).env;
+  } catch {}
+  return linked ? { env, texts: chatTexts(s.events) } : { env };
 }
 
 function brief(pr) {

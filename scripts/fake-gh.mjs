@@ -5,6 +5,7 @@
 //   none    - no PR for this branch
 //   auth    - gh isn't signed in to the remote's host
 //   odd     - an unexpected error
+// `gh pr view <url>` always answers with that PR (head `multisession`), except in auth mode or for pull/404.
 // FAKE_GH_ENV_CHECK: if set, `gh` fails unless GH_HOST has this value (checks the chat's env reaches gh).
 const args = process.argv.slice(2);
 const mode = process.env.FAKE_GH_MODE || 'branch';
@@ -16,6 +17,15 @@ const fail = (msg) => {
 if (process.env.FAKE_GH_ENV_CHECK && process.env.GH_HOST !== process.env.FAKE_GH_ENV_CHECK) fail('none of the git remotes configured for this repository point to a known GitHub host. To tell gh about a new GitHub host, please use `gh auth login`');
 if (args[0] !== 'pr' || args[1] !== 'view') fail('unknown command');
 if (mode === 'auth') fail('none of the git remotes configured for this repository point to a known GitHub host. To tell gh about a new GitHub host, please use `gh auth login`');
+const target = args[2] && !args[2].startsWith('--') ? args[2] : null;
+if (target && mode !== 'auth') {
+  if (target.endsWith('/404')) fail('GraphQL: Could not resolve to a PullRequest with the number of 404.');
+  const n = Number(target.split('/').pop());
+  const u = target.replace(/^https:\/\/([^/]+)\/([^/]+)/, (m, h, o) => `https://${h.toLowerCase()}/${o.toLowerCase()}`);
+  const p = { number: n, title: `PR ${n}`, url: u, state: n === 1521 ? 'MERGED' : 'OPEN', isDraft: false, headRefName: 'multisession', baseRefName: 'main', reviewDecision: null, statusCheckRollup: [{ name: 'harness', status: 'IN_PROGRESS' }, { name: 'golangci-lint', conclusion: 'SUCCESS' }], additions: 1, deletions: 1, mergeable: 'MERGEABLE', mergeStateStatus: 'BLOCKED', autoMergeRequest: null };
+  process.stdout.write(JSON.stringify(Object.fromEntries(json.split(',').map((k) => [k, p[k]]))) + '\n');
+  process.exit(0);
+}
 if (mode === 'none') fail('no pull requests found for branch "claude/pr-1494-ci-green-mwt7cqhw"');
 if (mode === 'odd') fail('HTTP 502: Bad Gateway (https://github-chf01.example.com/api/graphql)');
 if (mode === 'oldghes' && /autoMergeRequest|mergeStateStatus|mergeable/.test(json)) fail("GraphQL: Field 'autoMergeRequest' doesn't exist on type 'PullRequest'");

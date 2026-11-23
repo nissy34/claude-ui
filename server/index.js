@@ -1074,7 +1074,7 @@ app.get(
   '/api/sessions/:id/pr',
   wrap(async (req, res) => {
     const s = getSession(req);
-    const st = await prStatus(s.meta.cwd, prOpts(s));
+    const st = await prStatus(s.meta.cwd, prOpts(s, { linked: true }));
     rememberPr(s, st, store);
     res.json(st);
   })
@@ -1083,7 +1083,7 @@ app.post(
   '/api/sessions/:id/pr/merge-when-ready',
   wrap(async (req, res) => {
     const s = getSession(req);
-    const st = await mergeWhenReady(s.meta.cwd, parseInt(req.body?.number, 10), prOpts(s));
+    const st = await mergeWhenReady(s.meta.cwd, parseInt(req.body?.number, 10), prOpts(s, { linked: true }));
     rememberPr(s, st, store);
     res.json(st);
   })

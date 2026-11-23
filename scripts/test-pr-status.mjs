@@ -12,7 +12,7 @@ import { fileURLToPath } from 'node:url';
 const here = path.dirname(fileURLToPath(import.meta.url));
 process.env.CW_GH_BIN = path.join(here, 'fake-gh.mjs');
 fs.chmodSync(process.env.CW_GH_BIN, 0o755);
-const { prStatus } = await import('../server/pr-status.js');
+const { prStatus, prLinks, repoKey } = await import('../server/pr-status.js');
 
 let failures = 0;
 const check = (cond, msg, extra) => {
@@ -42,6 +42,18 @@ process.env.FAKE_GH_ENV_CHECK = 'github-chf01.example.com';
 r = await mode('branch', { env: { GH_HOST: 'github-chf01.example.com' } });
 check(r.pr?.number === 1520, "the chat environment's variables reach gh", r);
 delete process.env.FAKE_GH_ENV_CHECK;
+
+// Chats that push to another branch (e.g. an existing PR's): the repository's PRs the chat linked to.
+check(repoKey('git@github-chf01.example.com:hyperscale/hyperscale-ui-streamer.git') === 'github-chf01.example.com/hyperscale/hyperscale-ui-streamer', 'scp-style Enterprise remote is parsed');
+const base = 'https://github-chf01.example.com/hyperscale/hyperscale-ui-streamer/pull/';
+const said = [`Watching ${base}1494`, `Merged ${base}1521, back on ${base}1494`, 'Unrelated https://github.com/other/repo/pull/9', `Opened ${base}1520`, `Old ${base}404`];
+check(JSON.stringify(prLinks(said, new Set(['github-chf01.example.com/hyperscale/hyperscale-ui-streamer'])).map((u) => +u.split('/').pop())) === '[404,1520,1494,1521]', 'links: this repository only, newest first, once each', prLinks(said, new Set(['github-chf01.example.com/hyperscale/hyperscale-ui-streamer'])));
+r = await mode('none', { texts: said });
+check(r.pr === null && JSON.stringify(r.linked.map((p) => p.number)) === '[1520,1494]' && r.linked[1].head === 'multisession', 'no PR on the branch: linked PRs are listed (a link gh cannot open is skipped, three at most)', r);
+r = await mode('branch', { texts: said });
+check(r.pr?.number === 1520 && JSON.stringify(r.linked.map((p) => p.number)) === '[1494,1521]', "the branch's own PR is not listed twice", r);
+r = await mode('none');
+check(r.linked === undefined, 'no chat text: no linked lookup (sidebar sweep stays at one gh call)', r);
 
 fs.rmSync(repo, { recursive: true, force: true });
 console.log(failures ? `\n${failures} failed` : '\nall passed');
