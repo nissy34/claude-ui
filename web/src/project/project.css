@@ -400,3 +400,8 @@
 .pj-composer-box:has(.pj-thumbs) { flex-wrap: wrap; }
 .pj-thumbs { flex-basis: 100%; margin-bottom: 0; }
 .thumb.uploading img { opacity: 0.5; }
+
+/* Model chip in the project chat and thread composers (menu: chat/ModelMenu.jsx) */
+.pj-model-chip { background: none; border: 0; border-radius: var(--r-sm); padding: 2px var(--sp-1h); font-size: var(--fs-xs); color: var(--muted); cursor: pointer; white-space: nowrap; }
+.pj-model-chip:hover, .pj-model-chip[aria-expanded='true'] { background: var(--hover); color: var(--text); }
+.pj-model-chip .chev { font-size: var(--fs-2xs); }

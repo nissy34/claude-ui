@@ -227,6 +227,9 @@ export function mountProjectRoutes(app, { engine, store, resolveDir, wrap }) {
           if (s) await s.resume({ from: PROJECT_FROM });
           break;
         }
+        case 'model':
+          await engine.setThreadModel(p, tid, req.body?.model);
+          break;
         case 'message': {
           const ev = engine.steerThread(p, tid, req.body?.text);
           return res.json({ event: ev });

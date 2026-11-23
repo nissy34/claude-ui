@@ -11,6 +11,7 @@ import { STATUS_LABEL, STATUS_ORDER, useProject } from './useProject.js';
 import { useGatewayMode, useOAuthTokenMode } from '../Gateway.jsx';
 import { ImageLightbox } from '../chat/ToolCard.jsx';
 import { sendableImage } from '../chat/Composer.jsx';
+import ModelMenu from '../chat/ModelMenu.jsx';
 import './project.css';
 
 export default function ProjectView({ projectId, tab: initialTab, thread: initialThread, onSelect, onCreate, onMenu, onError, onDeleted, projects }) {
@@ -82,7 +83,7 @@ export default function ProjectView({ projectId, tab: initialTab, thread: initia
             </IconButton>
           </div>
           <Banners project={project} reload={reload} onError={onError} onCreate={onCreate} />
-          <ProjectChat project={project} openThread={openThread} onError={onError} onFullUsage={() => setSettings('usage')} />
+          <ProjectChat project={project} reload={reload} openThread={openThread} onError={onError} onFullUsage={() => setSettings('usage')} onModels={() => setSettings('general')} />
         </div>
       )}
       {showPanel && (
@@ -149,7 +150,7 @@ function Banners({ project, reload, onError, onCreate }) {
 }
 
 // ---------------------------------------------------------------- project chat
-function ProjectChat({ project, openThread, onError, onFullUsage }) {
+function ProjectChat({ project, reload, openThread, onError, onFullUsage, onModels }) {
   const listRef = useRef(null);
   const stick = useRef(true);
   const [text, setText] = useState(() => {
@@ -306,10 +307,22 @@ function ProjectChat({ project, openThread, onError, onFullUsage }) {
             {project.running} thread{project.running === 1 ? '' : 's'} running · ${project.usage.total.toFixed(2)}
           </span>
           <span className="spacer" />
-          <span className="muted small">
-            {modelName(cm.model)}
-            {cm.effort ? ` ${cm.effort[0].toUpperCase()}${cm.effort.slice(1)}` : ''}
-          </span>
+          <ModelMenu
+            className="pj-model-chip"
+            align="right"
+            value={cm.model}
+            active={project.coordinator?.context?.model}
+            title="Coordinator model"
+            onPick={(id) => api(`/api/cprojects/${project.id}`, { method: 'PATCH', body: { models: { coordinator: { model: id } } } }).then(reload).catch(onError)}
+            note={
+              <>
+                Applies from Claude's next turn, in the same conversation. The coordinator runs at {cm.effort ? `${EFFORT_NAME[cm.effort] || cm.effort} effort` : 'default effort'} to route requests and answer quickly.{' '}
+                <button type="button" className="linklike" onClick={onModels}>
+                  Project models
+                </button>
+              </>
+            }
+          />
           <ProjectUsageRing project={project} context={project.coordinator?.context} onOpenThread={openThread} onFullUsage={onFullUsage} />
         </div>
       </div>
@@ -323,7 +336,7 @@ const STARTERS = [
   ['Pick up recent work', 'Look at the recent commits and open branches and tell me what is in progress.'],
 ];
 
-const modelName = (m) => (!m ? 'Default model' : m.length < 10 ? m[0].toUpperCase() + m.slice(1) : m);
+const EFFORT_NAME = { low: 'low', medium: 'medium', high: 'high', xhigh: 'extra high', max: 'max' };
 
 const aboutIds = (b) => (b?.abouts?.length ? b.abouts : b?.about ? [b.about] : []);
 const isWorking = (t) => t.status === 'working' || t.status === 'queued';
