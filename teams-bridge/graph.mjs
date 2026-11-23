@@ -293,6 +293,11 @@ export class Graph {
     return this.call('PATCH', this.chanPath(c, id, root), this.msgBody(html, card));
   }
 
+  /** Delete a thread (its first post) or a reply. Needs ChannelMessage.ReadWrite. */
+  channelDelete(c, id, root) {
+    return this.call('POST', `${this.chanPath(c, id, root)}/softDelete`);
+  }
+
   /** Add (or with on=false take away) a reaction. `where` is a chat id, or { chan, root } in a channel. */
   react(where, id, emoji, on = true) {
     const base = typeof where === 'string' ? `/chats/${encodeURIComponent(where)}/messages/${encodeURIComponent(id)}` : this.chanPath(where.chan, id, where.root);

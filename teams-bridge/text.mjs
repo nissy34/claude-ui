@@ -105,6 +105,21 @@ export function postHtml(ev) {
   }
 }
 
+const STATES = { working: ['🔄', 'Working'], waiting: ['✋', 'Needs you'], done: ['✅', 'Done'], error: ['⚠️', 'Stopped'], idle: ['💤', 'Idle'] };
+
+/**
+ * The first post of a chat's (or project's) thread: what it is and, for a chat, where it is now.
+ * It is edited in place as the chat works, which doesn't notify.
+ */
+export function rootHtml(target, status) {
+  // The thread's subject already names it, so the body is just the status.
+  if (target.type === 'project') return 'Project thread: replies here go to its coordinator.';
+  const [icon, label] = STATES[status?.state] || STATES.idle;
+  const line = status?.line ? `: ${esc(clip(status.line, 200))}` : '';
+  const bg = status?.running && status.state !== 'done' ? ` · ${status.running === 1 ? '1 background task' : `${status.running} background tasks`}` : '';
+  return `${icon} <b>${label}</b>${line}${bg}<br><i>Reply in this thread to talk to this chat.</i>`;
+}
+
 export const HELP = [
   `${TAG} Here's what I understand:`,
   '• Just write what you want: the Assistant works out what you mean ("tell the Claude UI project to add dark mode", "yes to the npm one", "what\'s going on?").',

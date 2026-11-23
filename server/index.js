@@ -909,7 +909,10 @@ app.patch(
       s.meta.name = req.body.name.trim().slice(0, 80);
       s.meta.customName = true;
     }
-    if (typeof req.body?.archived === 'boolean') s.meta.archived = req.body.archived;
+    if (typeof req.body?.archived === 'boolean') {
+      if (req.body.archived && !s.meta.archived) attention.archived(s);
+      s.meta.archived = req.body.archived;
+    }
     if (typeof req.body?.pinned === 'boolean') s.meta.pinned = req.body.pinned;
     if (req.body?.unread === true) s.meta.attention = true;
     store.save();
@@ -1351,6 +1354,7 @@ app.delete(
   wrap(async (req, res) => {
     const s = getSession(req);
     const meta = { ...s.meta };
+    attention.archived(s);
     store.remove(req.params.id);
     browser.closeTab(req.params.id);
     // Its worktrees go too, unless another chat uses them or they hold uncommitted work.
