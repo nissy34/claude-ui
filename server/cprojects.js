@@ -24,7 +24,7 @@ import { changedFiles, createWorktree, isGitRepo, removeWorktree, worktreeMerged
 import { prStatus } from './pr-status.js';
 import { rawUrl } from './artifacts.js';
 import { coordinatorPrompt, threadPrompt, instructionsBlock, memoryBlock } from './cproject-prompts.js';
-import { ProjectMemory } from './cproject-memory.js';
+import { ProjectMemory, collapseMemoryEvents } from './cproject-memory.js';
 import { NOTE_KINDS, NOTE_MAX_CHARS, NOTES_PER_HOUR, MEMORY_FILE_FOR, cleanFiles, liveNotes, noteLine, noteMatchesThread, packNotes, search, similarThreads } from './cproject-notes.js';
 
 const ROOT = path.join(config.dataDir, 'cprojects');
@@ -451,7 +451,7 @@ export class Project {
     this.settings = cleanSettings(readJson(this.file('project.json'), {}));
     this.events = [];
     this.state = initialState();
-    this.memory = new ProjectMemory(this.file('memory'), (change) => this.append({ type: 'memory.changed', from: change.by, trust: 'system', body: { name: change.name, action: change.action } }));
+    this.memory = new ProjectMemory(this.file('memory'), (change) => this.append({ type: 'memory.changed', from: change.by, trust: 'system', body: { name: change.name, action: change.action, diffs: change.diffs || [] } }));
     fs.mkdirSync(this.file('library'), { recursive: true });
     this.turnInfo = new Map(); // sid -> what the current turn did (for the turn guard)
     this.idem = new Map(); // tool-call key -> { at, result }
@@ -760,7 +760,9 @@ export class Project {
       body = lines.join('\n');
     }
     try {
-      this.memory.write({ name, description, content: body, baseVersion: cur?.version, by: { kind: 'system' } });
+      // A thread's learned items show as its own "Updated project memory" row (the note itself already
+      // reached the other threads, so memoryNotice skips it).
+      this.memory.write({ name, description, content: body, baseVersion: cur?.version, by: n.by && n.kind !== 'decision' ? { kind: 'thread', id: n.by, viaNote: true } : { kind: 'system' } });
     } catch (e) {
       console.warn('note to memory:', e.message);
     }
@@ -791,7 +793,7 @@ export class Project {
   /** A thread or the coordinator changed memory: a one-line notice to the other running threads. */
   memoryNotice(ev) {
     const by = ev.from || {};
-    if (!['thread', 'coordinator', 'user'].includes(by.kind) || !['created', 'updated'].includes(ev.body.action)) return;
+    if (by.viaNote || !['thread', 'coordinator', 'user'].includes(by.kind) || !['created', 'updated'].includes(ev.body.action)) return;
     const entry = this.memory.entries().find((e) => e.name === ev.body.name);
     const pushTo = this.openThreads().filter((t) => t.id !== by.id && this.isRunning(t.id)).map((t) => t.id);
     if (!pushTo.length) return;
@@ -1573,8 +1575,9 @@ export class Project {
   }
 
   detail({ limit = 300 } = {}) {
-    const chatTypes = new Set(['user.message', 'chat.post', 'thread.started', 'decision.requested', 'decision.answered', 'decision.withdrawn', 'thread.resolved', 'project.paused', 'project.resumed', 'limit.hit', 'limit.reset', 'policy.changed', 'notice', 'coordinator.rotated', 'thread.post', 'pr.updated', 'thread.suggested', 'suggestion.answered', 'turn.failed']);
-    const feed = this.events.filter((e) => chatTypes.has(e.type) && (e.type !== 'user.message' || e.body.where === 'chat') && (e.type !== 'thread.post' || e.body.kind !== 'progress')).slice(-limit);
+    const chatTypes = new Set(['user.message', 'chat.post', 'thread.started', 'decision.requested', 'decision.answered', 'decision.withdrawn', 'thread.resolved', 'project.paused', 'project.resumed', 'limit.hit', 'limit.reset', 'policy.changed', 'notice', 'coordinator.rotated', 'thread.post', 'pr.updated', 'thread.suggested', 'suggestion.answered', 'turn.failed', 'memory.changed']);
+    // The coordinator's own memory writes show in the chat; a thread's show in that thread.
+    const feed = collapseMemoryEvents(this.events.filter((e) => chatTypes.has(e.type) && (e.type !== 'user.message' || e.body.where === 'chat') && (e.type !== 'thread.post' || e.body.kind !== 'progress') && (e.type !== 'memory.changed' || e.from?.kind === 'coordinator')).slice(-limit));
     const coord = this.session(this.state.coordinator);
     return {
       ...this.summary(),

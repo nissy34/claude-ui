@@ -226,6 +226,17 @@ async function main() {
   await api(`/api/cprojects/${id}/memory/team-prefs`, { method: 'PUT', body: { description: 'How the team likes work done', content: 'Small PRs. See [[build-steps]].', type: 'feedback' } });
   const typed = await api(`/api/cprojects/${id}/memory/team-prefs`);
   check(typed.type === 'feedback' && typed.modified, 'memory files keep a type and modified time', typed);
+  // Memory writes show as an "Updated project memory" row with a diff: a thread's in its thread, the coordinator's in the chat.
+  const tm = (await detail(id)).threads.find((t) => t.title === 'Thread M');
+  const tfeed = (await api(`/api/cprojects/${id}/threads/${tm.id}/feed`)).feed.filter((e) => e.type === 'memory.changed');
+  const tdiff = tfeed[0]?.body.diffs || [];
+  check(tfeed.length === 1 && tdiff[0]?.file === 'MEMORY.md' && tdiff[0].lines.some(([op, l]) => op === '+' && l.includes('[build-steps](build-steps.md)')), 'thread feed: memory write carries the MEMORY.md line it added', tfeed);
+  check(tdiff[1]?.file === 'build-steps.md' && tdiff[1].lines.some(([op, l]) => op === '+' && l === 'npm run build'), 'thread feed: and the memory file diff', tdiff);
+  await api(`/api/cprojects/${id}/messages`, { method: 'POST', body: { text: [call('memory_write', { name: 'release-plan', description: 'When we ship', content: 'Friday' }), call('memory_write', { name: 'release-owner', description: 'Who ships', content: 'Dana' }), call('post_message', { text: 'saved' })].join('\n') } });
+  await until(async () => (await detail(id)).feed.some((e) => e.type === 'memory.changed' && e.body.names.includes('release-owner')), 8000, 'coordinator memory row');
+  const cfeed = (await detail(id)).feed.filter((e) => e.type === 'memory.changed');
+  check(cfeed.length === 1 && cfeed[0].body.names.join() === 'release-plan,release-owner' && cfeed[0].body.diffs.length === 3, 'project chat: the coordinator\'s consecutive writes collapse into one row with their diffs', cfeed);
+  check(!cfeed.some((e) => e.body.names.includes('build-steps') || e.body.names.includes('team-prefs')), 'project chat: thread and user writes stay out of it', cfeed);
 
   console.log('Restart: state and queued wakes survive');
   const slow = ['@@sleep 4000', call('post_message', { kind: 'result', text: 'slow done' })].join('\n');
