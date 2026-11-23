@@ -17,7 +17,8 @@
     "demo:teams": "node scripts/teams-demo.mjs",
     "test:gateway": "node scripts/test-gateway.mjs",
     "test:token": "node scripts/test-oauth-token.mjs",
-    "test:sessions": "node scripts/test-sessions.mjs"
+    "test:sessions": "node scripts/test-sessions.mjs",
+    "test:pr": "node scripts/test-pr-status.mjs"
   },
   "engines": {
     "node": ">=20.6"

@@ -22,6 +22,7 @@ import { config } from './config.js';
 import { gatewayMode, failoverEngaged, oauthTokenMode } from './gateway.js';
 import { changedFiles, createWorktree, isGitRepo, removeWorktree, worktreeMerged } from './git.js';
 import { prStatus } from './pr-status.js';
+import { prOpts } from './pr-cache.js';
 import { rawUrl } from './artifacts.js';
 import { coordinatorPrompt, threadPrompt, instructionsBlock, memoryBlock } from './cproject-prompts.js';
 import { ProjectMemory } from './cproject-memory.js';
@@ -2050,14 +2051,14 @@ export class ProjectEngine {
     const s = this.store.get(sid);
     if (!t || !s || !fs.existsSync(s.meta.cwd)) return;
     (this.prPolled ||= new Map()).set(sid, Date.now());
-    const r = await prStatus(s.meta.cwd);
-    if (!r.available) {
+    const r = await prStatus(s.meta.cwd, prOpts(s));
+    if (!r.available || r.note) {
       this.ghMissingUntil = Date.now() + 3600_000; // no gh, or not signed in: try again in an hour
       return;
     }
     const pr = r.pr;
     if (!pr && !t.pr) return;
-    if (pr && pr.head && t.branch && pr.head !== t.branch) return; // a PR for some other branch
+    if (pr && pr.head && t.branch && pr.head !== t.branch && !pr.via) return; // a PR for some other branch
     const before = t.pr;
     const slim = pr && { number: pr.number, url: pr.url, title: pr.title, state: pr.state, review: pr.review, autoMerge: pr.autoMerge, head: pr.head, additions: pr.additions, deletions: pr.deletions, summary: pr.summary, failing: pr.checks.filter((c) => c.state === 'fail').map((c) => c.name).slice(0, 10) };
     if (JSON.stringify(slim) === JSON.stringify(before)) return;

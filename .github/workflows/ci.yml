@@ -43,6 +43,8 @@ jobs:
         run: npm run test:token
       - name: Chat-to-chat messaging test
         run: npm run test:sessions
+      - name: PR status tests
+        run: npm run test:pr
 
   ui:
     name: UI smoke test (headless Chrome)
