@@ -1,4 +1,4 @@
-// Company AI gateway mode (for example Bifrost): every claude process this server starts talks
+// Company AI gateway mode: every claude process this server starts talks
 // to an Anthropic-compatible gateway with a personal key instead of a Claude login or Bedrock.
 //
 // Same three variables the gateway's own setup puts in ~/.claude/settings.json on a machine with
@@ -30,16 +30,15 @@ const MODEL_PINS = ['ANTHROPIC_MODEL', 'ANTHROPIC_SMALL_FAST_MODEL', 'ANTHROPIC_
 // they break gateway mode even though we remove them from the environment.
 const SETTINGS_CONFLICTS = [...CONFLICT_ENV, 'AWS_PROFILE', 'AWS_REGION', 'ANTHROPIC_MODEL', 'ANTHROPIC_BASE_URL', 'ANTHROPIC_AUTH_TOKEN'];
 
-export const DEFAULT_URL = 'https://bifrost.ai.synamedia.com/anthropic';
 
 let cached;
 function load() {
   if (cached !== undefined) return cached;
   try {
     const j = JSON.parse(fs.readFileSync(FILE(), 'utf8'));
-    cached = { enabled: !!j.enabled, baseUrl: String(j.baseUrl || ''), token: String(j.token || ''), discovery: j.discovery !== false, saved: true };
+    cached = { enabled: !!j.enabled, baseUrl: String(j.baseUrl || ''), token: String(j.token || ''), discovery: j.discovery !== false, failover: failoverCfg(j.failover), failoverUntil: Number(j.failoverUntil) || 0, failoverKind: String(j.failoverKind || ''), saved: true };
   } catch {
-    cached = { enabled: false, baseUrl: '', token: '', discovery: true, saved: false };
+    cached = { enabled: false, baseUrl: '', token: '', discovery: true, failover: failoverCfg(), failoverUntil: 0, failoverKind: '', saved: false };
   }
   return cached;
 }
@@ -47,13 +46,14 @@ function load() {
 function save(c) {
   fs.mkdirSync(config.dataDir, { recursive: true });
   const tmp = FILE() + '.tmp';
-  c = { enabled: c.enabled, baseUrl: c.baseUrl, token: c.token, discovery: c.discovery };
+  c = { enabled: c.enabled, baseUrl: c.baseUrl, token: c.token, discovery: c.discovery, failover: c.failover, failoverUntil: c.failoverUntil || 0, failoverKind: c.failoverKind || '' };
   fs.writeFileSync(tmp, JSON.stringify(c, null, 2), { mode: 0o600 });
   fs.renameSync(tmp, FILE());
   try {
     fs.chmodSync(FILE(), 0o600);
   } catch {}
   cached = { ...c, saved: true };
+  scheduleFailoverEnd();
   for (const fn of listeners) {
     try {
       fn();
@@ -70,7 +70,70 @@ export function onGatewayChange(fn) {
 /** True when the UI's gateway setting is on and complete. */
 export function gatewayActive() {
   const c = load();
-  return !!(c.enabled && c.baseUrl && c.token);
+  return !!((c.enabled || failoverEngaged()) && c.baseUrl && c.token);
+}
+
+// ---- Failover: the gateway steps in while the subscription's usage limit is reached ----
+// On by choice; once on, it triggers on the weekly limits only, unless the 5-hour one is ticked too.
+function failoverCfg(f = {}) {
+  return { enabled: !!f.enabled, weekly: f.weekly !== false, fiveHour: !!f.fiveHour };
+}
+
+/** The gateway is standing in for the subscription right now (until its limit resets). */
+export function failoverEngaged() {
+  const c = load();
+  return !!(c.failover.enabled && !c.enabled && c.failoverUntil > Date.now() && c.baseUrl && c.token);
+}
+
+/** Which limit a rate_limit_event's info is about: 'weekly', 'five_hour' or ''. */
+export function limitKind(info) {
+  const t = String(info?.rateLimitType || '');
+  if (t.startsWith('seven_day')) return 'weekly';
+  if (t === 'five_hour') return 'five_hour';
+  return '';
+}
+
+/**
+ * A chat saw the CLI's rate_limit_event. If the subscription is now blocked by a limit the
+ * failover covers, switch every chat to the gateway until it resets. Returns true when this
+ * event made the gateway step in (or moved its end later).
+ */
+export function onRateLimit(info) {
+  const c = load();
+  if (!c.failover.enabled || c.enabled || !c.baseUrl || !c.token) return false;
+  // Rejected and not carried by extra usage (overage): the subscription can't answer.
+  if (info?.status !== 'rejected' || info.isUsingOverage || !info.resetsAt) return false;
+  const kind = limitKind(info);
+  if (!((kind === 'weekly' && c.failover.weekly) || (kind === 'five_hour' && c.failover.fiveHour))) return false;
+  const until = Number(info.resetsAt) * 1000;
+  if (!(until > Date.now()) || (failoverEngaged() && until <= c.failoverUntil)) return false;
+  save({ ...c, failoverUntil: until, failoverKind: kind });
+  return true;
+}
+
+let endTimer = null;
+function scheduleFailoverEnd() {
+  clearTimeout(endTimer);
+  const c = load();
+  if (!c.failoverUntil) return;
+  const ms = c.failoverUntil - Date.now();
+  // Past its end: back to the subscription (the next limit, if any, switches again).
+  if (ms <= 0) return endFailover();
+  endTimer = setTimeout(scheduleFailoverEnd, Math.min(ms + 1000, 2 ** 31 - 1));
+  endTimer.unref?.();
+}
+
+/** Back to the subscription now (the limit reset, or the user asked). */
+export function endFailover() {
+  const c = load();
+  if (!c.failoverUntil) return gatewayStatus();
+  save({ ...c, failoverUntil: 0, failoverKind: '' });
+  return gatewayStatus();
+}
+
+/** Called once at start: picks up a failover that was running before a restart. */
+export function startFailoverTimer() {
+  scheduleFailoverEnd();
 }
 
 // The gateway's own variables. Once the switch has been turned off in the UI they are also
@@ -97,6 +160,7 @@ function externalGateway() {
 
 /** Any gateway in use (the UI's, or one configured by hand): the Claude login doesn't matter then. */
 export function gatewayMode() {
+  if (failoverEngaged()) return { source: 'failover', baseUrl: load().baseUrl, until: load().failoverUntil, kind: load().failoverKind };
   if (gatewayActive()) return { source: 'ui', baseUrl: load().baseUrl };
   return externalGateway();
 }
@@ -180,10 +244,12 @@ export function gatewayStatus() {
     enabled: c.enabled,
     active: gatewayActive(),
     baseUrl: c.baseUrl,
-    defaultUrl: DEFAULT_URL,
     hasToken: !!c.token,
     tokenHint: hint(c.token),
     discovery: c.discovery,
+    failover: c.failover,
+    failoverUntil: failoverEngaged() ? c.failoverUntil : 0,
+    failoverKind: failoverEngaged() ? c.failoverKind : '',
     mode: gatewayMode(),
     external: ext && !gatewayActive() ? ext : null,
     settingsConflicts: settingsConflicts(),
@@ -197,7 +263,7 @@ export function gatewayStatus() {
 }
 
 /** Update the setting. token: undefined keeps the saved key, '' removes it. */
-export function setGateway({ enabled, baseUrl, token, discovery }) {
+export function setGateway({ enabled, baseUrl, token, discovery, failover }) {
   const c = { ...load() };
   if (baseUrl !== undefined) {
     const u = trimUrl(baseUrl);
@@ -211,7 +277,15 @@ export function setGateway({ enabled, baseUrl, token, discovery }) {
   }
   if (discovery !== undefined) c.discovery = !!discovery;
   if (enabled !== undefined) c.enabled = !!enabled;
-  if (c.enabled && (!c.baseUrl || !c.token)) throw new Error('Enter the gateway address and your key first.');
+  if (failover !== undefined) {
+    c.failover = failoverCfg({ ...c.failover, ...failover });
+    // Failover turned off, or a limit kind it was standing in for unticked: back to the subscription.
+    if (!c.failover.enabled || (c.failoverKind === 'weekly' && !c.failover.weekly) || (c.failoverKind === 'five_hour' && !c.failover.fiveHour)) {
+      c.failoverUntil = 0;
+      c.failoverKind = '';
+    }
+  }
+  if ((c.enabled || c.failover.enabled) && (!c.baseUrl || !c.token)) throw new Error('Enter the gateway address and your key first.');
   save(c);
   return gatewayStatus();
 }
@@ -302,7 +376,7 @@ export async function gatewayModels(override = {}) {
     const why = e?.cause?.code || e?.name || e?.message || 'error';
     throw new Error(`Could not reach the gateway (${why}). If it is on the company network, check this server can reach it (VPN).`);
   }
-  if (r.status === 401 || r.status === 403) throw new Error(`The gateway refused the key (HTTP ${r.status}). Get a new one with "bifrost-auth get-key" on your laptop.`);
+  if (r.status === 401 || r.status === 403) throw new Error(`The gateway refused the key (HTTP ${r.status}). Check the key, or get a new one from your gateway.`);
   if (!r.ok) throw new Error(`The gateway answered HTTP ${r.status}.`);
   let j;
   try {
