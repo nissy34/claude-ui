@@ -289,6 +289,7 @@ All settings are environment variables; see [`.env.example`](.env.example).
 | `CW_CLAUDE_BIN` | `claude` | Path to the CLI |
 | `CW_CLAUDE_ARGS` | | Extra args for every `claude` process |
 | `CW_CHAT_IDLE_MINUTES` | `30` | Stop idle chat processes (they resume on the next message); `0` keeps them |
+| `CW_UPLOAD_DAYS` | `30` | Delete files and images sent in chats (and pictures tools returned) after this many days; `0` keeps them. Deleting a chat deletes its files right away |
 | `CW_ALLOW_ANY_DIR` | `0` | `1` allows sessions outside the projects root |
 | `CW_SCRATCH_DIR` | `~/.claude-web/scratch` | Folder that "No folder" chats run in (shared, so Past conversations works there) |
 | `CW_AUTO_TITLES` | `1` | Give chats a short title after the first reply, from one quick no-tools call to `CW_TITLE_MODEL` (about $0.001 per chat). A rename always wins; `0` keeps the first line of the first message |

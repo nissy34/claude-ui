@@ -1061,6 +1061,32 @@ export class Project {
     return Object.values(this.state.threads).filter((t) => !done.has(t.id) && !t.resolved && t.cites?.some((c) => cites.has(c)) && this.liveOf(t.id).busy).map((t) => t.id);
   }
 
+  /**
+   * Pictures pasted in the project chat: saved to the library, and the message ends with an
+   * "Attached images:" list of their paths. Claude gets them inline too (the coordinator has no
+   * file tools to open them); threads can also open the paths.
+   */
+  pastedImages(evs) {
+    const out = [];
+    const types = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp' };
+    for (const e of evs) {
+      if (e.type !== 'user.message') continue;
+      const m = /\n*Attached images:\n((?:- .+(?:\n|$))+)$/.exec(e.body?.text || '');
+      if (!m) continue;
+      for (const line of m[1].trim().split('\n')) {
+        const file = path.resolve(line.replace(/^- /, '').trim());
+        const rel = path.relative(this.libraryDir, file);
+        const type = types[path.extname(file).toLowerCase()];
+        if (!type || !rel || rel.startsWith('..') || path.isAbsolute(rel)) continue;
+        try {
+          const buf = fs.readFileSync(file);
+          if (buf.length <= 5 * 1024 * 1024) out.push({ media_type: type, data: buf.toString('base64') });
+        } catch {}
+      }
+    }
+    return out.slice(0, 10);
+  }
+
   deliver(sid, s, items) {
     const evs = items.map((q) => this.byId.get(q.e)).filter(Boolean);
     const wake = newId('wk');
@@ -1074,7 +1100,7 @@ export class Project {
     this.append({ type: 'wake.sent', body: { session: sid, wake, events: evs.map((e) => e.id) } });
     const info = { wake, types: evs.map((e) => e.type), threads: [...new Set(evs.map((e) => e.thread).filter(Boolean))], user: evs.some((e) => e.trust === 'principal' && (e.type === 'user.message' || e.type === 'decision.answered')), posted: false, engine: true };
     this.turnInfo.set(sid, info);
-    const ok = s.send({ text: display, envelope, wake, from: this.wakeFrom(evs) });
+    const ok = s.send({ text: display, envelope, wake, from: this.wakeFrom(evs), images: this.pastedImages(evs) });
     if (!ok) {
       this.turnInfo.delete(sid);
       this.append({ type: 'wake.requeued', body: { session: sid, wake, reason: 'could not start a turn' } });

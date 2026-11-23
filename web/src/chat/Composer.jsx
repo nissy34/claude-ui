@@ -38,6 +38,54 @@ function readFile(file) {
   });
 }
 
+const SENDABLE = /^image\/(png|jpeg|gif|webp)$/;
+const MAX_IMAGE_BYTES = 3.75 * 1024 * 1024; // Claude takes up to 5 MB per image once base64-encoded
+const MAX_SIDE = 2000;
+
+const loadBitmap = (blob) =>
+  new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(blob);
+    const img = new Image();
+    img.onload = () => (URL.revokeObjectURL(url), resolve(img));
+    img.onerror = () => (URL.revokeObjectURL(url), reject(new Error('not a picture this browser can open')));
+    img.src = url;
+  });
+
+/**
+ * A picture ready to send to Claude: PNG, JPEG, GIF or WebP under the size limit. Bigger ones,
+ * or other formats the browser can open (BMP, AVIF, HEIC on Safari…), are scaled down and
+ * re-encoded. Returns null when it can't be made into one (then it goes up as a file).
+ */
+export async function sendableImage(file) {
+  if (SENDABLE.test(file.type) && file.size <= MAX_IMAGE_BYTES) return file;
+  let img;
+  try {
+    img = await loadBitmap(file);
+  } catch {
+    return null;
+  }
+  const encode = (scale, type, q) => {
+    const c = document.createElement('canvas');
+    c.width = Math.max(1, Math.round(img.naturalWidth * scale));
+    c.height = Math.max(1, Math.round(img.naturalHeight * scale));
+    const g = c.getContext('2d');
+    if (type === 'image/jpeg') (g.fillStyle = '#fff'), g.fillRect(0, 0, c.width, c.height);
+    g.drawImage(img, 0, 0, c.width, c.height);
+    return new Promise((res) => c.toBlob(res, type, q));
+  };
+  let scale = Math.min(1, MAX_SIDE / Math.max(img.naturalWidth, img.naturalHeight));
+  // Screenshots stay sharp as PNG when that fits; otherwise JPEG, smaller until it fits.
+  if (file.type === 'image/png') {
+    const png = await encode(scale, 'image/png');
+    if (png && png.size <= MAX_IMAGE_BYTES) return new File([png], file.name.replace(/\.\w+$/, '') + '.png', { type: 'image/png' });
+  }
+  for (let i = 0; i < 6; i++, scale *= 0.75) {
+    const jpg = await encode(scale, 'image/jpeg', 0.85);
+    if (jpg && jpg.size <= MAX_IMAGE_BYTES) return new File([jpg], (file.name || 'image').replace(/\.\w+$/, '') + '.jpg', { type: 'image/jpeg' });
+  }
+  return null;
+}
+
 function MenuIcon({ type }) {
   const common = { width: 16, height: 16, viewBox: '0 0 16 16', fill: 'none', stroke: 'currentColor', strokeWidth: 1.3, className: 'cm-ico', 'aria-hidden': true };
   if (type === 'chat')
@@ -253,6 +301,10 @@ export default function Composer({ sessionId, disabled, busy, onSend, onStop, mo
   useEffect(() => {
     if (!insert) return;
     setText((t) => (t.trim() ? `${t}\n\n${insert.text}` : insert.text));
+    // Its pictures come back too.
+    if (insert.images?.length)
+      Promise.all(insert.images.map((u) => fetch(u).then((r) => (r.ok ? r.blob() : null)).then((b) => b && readFile(new File([b], 'image', { type: b.type })))).map((p) => p.catch(() => null)))
+        .then((read) => setImages((im) => [...im, ...read.filter(Boolean)].slice(0, 10)));
     taRef.current?.focus();
   }, [insert]);
 
@@ -332,8 +384,10 @@ export default function Composer({ sessionId, disabled, busy, onSend, onStop, mo
 
   const addFiles = async (files) => {
     const all = [...files];
-    const imgs = all.filter((f) => /^image\/(png|jpeg|gif|webp)$/.test(f.type) && f.size <= 5 * 1024 * 1024);
-    const others = all.filter((f) => !imgs.includes(f));
+    // Pictures go to Claude inline (scaled down when too big); anything else is uploaded as a file.
+    const ready = await Promise.all(all.map((f) => (f.type.startsWith('image/') ? sendableImage(f) : null)));
+    const imgs = ready.filter(Boolean);
+    const others = all.filter((f, i) => !ready[i]);
     if (others.some((f) => f.size > 50 * 1024 * 1024)) return onError(new Error('Files must be under 50 MB each'));
     others.forEach(upload);
     if (imgs.length) {

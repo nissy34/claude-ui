@@ -1,4 +1,5 @@
 import { mountToolImages } from './tool-images.js';
+import { startCleanup } from './cleanup.js';
 import http from 'node:http';
 import os from 'node:os';
 import crypto from 'node:crypto';
@@ -1536,6 +1537,7 @@ if (config.schedules) schedules.startScheduler(async (t) => {
 server.listen(config.port, config.host, () => {
   startPrSweep(store);
   tokenKeeper.start();
+  startCleanup();
   startFailoverTimer();
   const h = ['0.0.0.0', '::', ''].includes(config.host) ? '127.0.0.1' : config.host.includes(':') ? `[${config.host}]` : config.host;
   config.internalUrl = `http://${h}:${config.port}`;
