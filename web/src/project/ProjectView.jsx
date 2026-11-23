@@ -1,7 +1,7 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { api, timeAgo } from '../api.js';
 import { Button, IconButton, Input, Menu, Modal, ModalBody, ModalFoot, ModalHead, Pill, Segmented, Spinner, Textarea, useDismiss } from '../ui/index.jsx';
-import { DecisionCard, Md, StatusPill, SuggestionCard, ThreadCard } from './ProjectCards.jsx';
+import { DecisionCard, Md, MemoryUpdate, StatusPill, SuggestionCard, ThreadCard } from './ProjectCards.jsx';
 import { confirmDialog, promptDialog } from '../ui/dialogs.jsx';
 import { useResizable } from '../ui/resizable.jsx';
 import { ProjectSettingsModal } from './ProjectSettings.jsx';
@@ -488,6 +488,8 @@ function FeedItem({ e, project, threads, decisions, onSelect, onError }) {
       return b.manual ? <div className="pj-notice">Coordinator restarted</div> : null;
     case 'notice':
       return <div className="pj-notice">{b.text}</div>;
+    case 'memory.changed':
+      return <MemoryUpdate body={b} ts={e.ts} />;
     case 'pr.updated':
       if (b.quiet) return null;
       return (
@@ -842,6 +844,7 @@ export function ThreadConversation({ session, onSelect, onError }) {
             );
           if (e.type === 'decision.requested') return <DecisionCard key={e.id} projectId={project.id} decision={decisions[b.id]} threadTitle={t?.title} onError={onError} />;
           if (e.type === 'pr.updated') return <div key={e.id} className="pj-notice">{b.summary}</div>;
+          if (e.type === 'memory.changed') return <MemoryUpdate key={e.id} body={b} ts={e.ts} />;
           if (e.type === 'reminder.set') return <div key={e.id} className="pj-notice">⏰ Snoozed until {new Date(b.at).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' })}{b.note ? `: ${b.note}` : ''}</div>;
           if (e.type === 'reminder.due') return <div key={e.id} className="pj-notice">⏰ Reminder due</div>;
           if (e.type === 'thread.resolved') return <div key={e.id} className="pj-notice">✓ Resolved{b.auto ? ` (${b.auto})` : ''}</div>;
