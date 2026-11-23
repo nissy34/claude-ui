@@ -1,8 +1,9 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { api, timeAgo } from '../api.js';
 import { Button, IconButton, Input, Menu, Modal, ModalBody, ModalFoot, ModalHead, Pill, Segmented, Spinner, Textarea, useDismiss } from '../ui/index.jsx';
-import { DecisionCard, Md, StatusPill, SuggestionCard, ThreadCard } from './ProjectCards.jsx';
+import { DecisionCard, Md, MemoryUpdate, StatusPill, SuggestionCard, ThreadCard } from './ProjectCards.jsx';
 import { confirmDialog, promptDialog } from '../ui/dialogs.jsx';
+import { useResizable } from '../ui/resizable.jsx';
 import { ProjectSettingsModal } from './ProjectSettings.jsx';
 import { ProjectUsageRing } from './ProjectUsage.jsx';
 import ProjectPanel, { PrChip, StatusIcon } from './ProjectPanel.jsx';
@@ -10,11 +11,13 @@ import { STATUS_LABEL, STATUS_ORDER, useProject } from './useProject.js';
 import { useGatewayMode, useOAuthTokenMode } from '../Gateway.jsx';
 import { ImageLightbox } from '../chat/ToolCard.jsx';
 import { sendableImage } from '../chat/Composer.jsx';
+import ModelMenu from '../chat/ModelMenu.jsx';
 import './project.css';
 
 export default function ProjectView({ projectId, tab: initialTab, thread: initialThread, onSelect, onCreate, onMenu, onError, onDeleted, projects }) {
   const [project, reload] = useProject(projectId, onError);
   const narrow = useNarrow();
+  const resize = useResizable('pj-panel', { edge: 'left', min: 320, max: () => window.innerWidth - 420, label: 'Resize threads panel' });
   // Right panel: Threads or Context; a thread opens in place. On a phone the panel is a view of its own.
   const [panel, setPanelState] = useState(['context', 'view'].includes(initialTab) ? initialTab : 'threads');
   const [threadId, setThreadId] = useState(initialThread || null);
@@ -80,11 +83,12 @@ export default function ProjectView({ projectId, tab: initialTab, thread: initia
             </IconButton>
           </div>
           <Banners project={project} reload={reload} onError={onError} onCreate={onCreate} />
-          <ProjectChat project={project} openThread={openThread} onError={onError} onFullUsage={() => setSettings('usage')} />
+          <ProjectChat project={project} reload={reload} openThread={openThread} onError={onError} onFullUsage={() => setSettings('usage')} onModels={() => setSettings('general')} />
         </div>
       )}
       {showPanel && (
-        <div className="pj-right">
+        <div className="pj-right" ref={resize.ref} style={resize.style}>
+          {resize.handle}
           {narrow && (
             <div className="pj-mobile-back">
               <button className="linklike" onClick={() => setMobileView('chat')}>
@@ -146,7 +150,7 @@ function Banners({ project, reload, onError, onCreate }) {
 }
 
 // ---------------------------------------------------------------- project chat
-function ProjectChat({ project, openThread, onError, onFullUsage }) {
+function ProjectChat({ project, reload, openThread, onError, onFullUsage, onModels }) {
   const listRef = useRef(null);
   const stick = useRef(true);
   const [text, setText] = useState(() => {
@@ -303,10 +307,22 @@ function ProjectChat({ project, openThread, onError, onFullUsage }) {
             {project.running} thread{project.running === 1 ? '' : 's'} running · ${project.usage.total.toFixed(2)}
           </span>
           <span className="spacer" />
-          <span className="muted small">
-            {modelName(cm.model)}
-            {cm.effort ? ` ${cm.effort[0].toUpperCase()}${cm.effort.slice(1)}` : ''}
-          </span>
+          <ModelMenu
+            className="pj-model-chip"
+            align="right"
+            value={cm.model}
+            active={project.coordinator?.context?.model}
+            title="Coordinator model"
+            onPick={(id) => api(`/api/cprojects/${project.id}`, { method: 'PATCH', body: { models: { coordinator: { model: id } } } }).then(reload).catch(onError)}
+            note={
+              <>
+                Applies from Claude's next turn, in the same conversation. The coordinator runs at {cm.effort ? `${EFFORT_NAME[cm.effort] || cm.effort} effort` : 'default effort'} to route requests and answer quickly.{' '}
+                <button type="button" className="linklike" onClick={onModels}>
+                  Project models
+                </button>
+              </>
+            }
+          />
           <ProjectUsageRing project={project} context={project.coordinator?.context} onOpenThread={openThread} onFullUsage={onFullUsage} />
         </div>
       </div>
@@ -320,7 +336,7 @@ const STARTERS = [
   ['Pick up recent work', 'Look at the recent commits and open branches and tell me what is in progress.'],
 ];
 
-const modelName = (m) => (!m ? 'Default model' : m.length < 10 ? m[0].toUpperCase() + m.slice(1) : m);
+const EFFORT_NAME = { low: 'low', medium: 'medium', high: 'high', xhigh: 'extra high', max: 'max' };
 
 const aboutIds = (b) => (b?.abouts?.length ? b.abouts : b?.about ? [b.about] : []);
 const isWorking = (t) => t.status === 'working' || t.status === 'queued';
@@ -485,6 +501,8 @@ function FeedItem({ e, project, threads, decisions, onSelect, onError }) {
       return b.manual ? <div className="pj-notice">Coordinator restarted</div> : null;
     case 'notice':
       return <div className="pj-notice">{b.text}</div>;
+    case 'memory.changed':
+      return <MemoryUpdate body={b} ts={e.ts} />;
     case 'pr.updated':
       if (b.quiet) return null;
       return (
@@ -839,6 +857,7 @@ export function ThreadConversation({ session, onSelect, onError }) {
             );
           if (e.type === 'decision.requested') return <DecisionCard key={e.id} projectId={project.id} decision={decisions[b.id]} threadTitle={t?.title} onError={onError} />;
           if (e.type === 'pr.updated') return <div key={e.id} className="pj-notice">{b.summary}</div>;
+          if (e.type === 'memory.changed') return <MemoryUpdate key={e.id} body={b} ts={e.ts} />;
           if (e.type === 'reminder.set') return <div key={e.id} className="pj-notice">⏰ Snoozed until {new Date(b.at).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' })}{b.note ? `: ${b.note}` : ''}</div>;
           if (e.type === 'reminder.due') return <div key={e.id} className="pj-notice">⏰ Reminder due</div>;
           if (e.type === 'thread.resolved') return <div key={e.id} className="pj-notice">✓ Resolved{b.auto ? ` (${b.auto})` : ''}</div>;

@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { api } from '../api.js';
 import { Button, IconButton } from '../ui/index.jsx';
+import { useResizable } from '../ui/resizable.jsx';
 import { PrCard } from './SidePanel.jsx';
 import { contextWindowFor } from './Composer.jsx';
 import { needsSignIn } from './McpAuth.jsx';
@@ -75,6 +76,7 @@ export default function SessionRail({
   onClose,
   onError,
 }) {
+  const resize = useResizable('rail', { edge: 'left', min: 220, max: 480, label: 'Resize details panel' });
   const [changes, setChanges] = useState(null);
   const [outputs, setOutputs] = useState(null);
   const [more, setMore] = useState(false);
@@ -113,7 +115,8 @@ export default function SessionRail({
   return (
     <>
       <div className="rail-scrim" onClick={onClose} />
-      <aside className="session-rail" aria-label="Session details">
+      <aside className="session-rail" aria-label="Session details" ref={resize.ref} style={resize.style}>
+        {resize.handle}
         <div className="rail-top">
           <span className="rail-top-title">Details</span>
           <IconButton size="sm" title="Session info and usage" onClick={onInfo}>

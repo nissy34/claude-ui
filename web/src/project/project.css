@@ -149,7 +149,7 @@
 /* ---------- split layout: project chat left, panel right ---------- */
 .pj-split { flex-direction: row; }
 .pj-left { flex: 1; min-width: 0; display: flex; flex-direction: column; min-height: 0; }
-.pj-right { width: clamp(380px, 46%, 760px); flex: none; border-left: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; background: var(--bg); }
+.pj-right { width: var(--pj-panel-w, clamp(380px, 46%, 760px)); max-width: calc(100% - 320px); flex: none; position: relative; border-left: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; background: var(--bg); }
 .pj-left-head { height: var(--topbar-h); flex: none; display: flex; align-items: center; gap: var(--sp-2); padding: 0 var(--sp-3) 0 var(--sp-4); border-bottom: 1px solid var(--line); }
 .pj-avatar-mark { width: 26px; height: 26px; border-radius: var(--r-md); background: var(--accent-soft); color: var(--accent); display: inline-flex; align-items: center; justify-content: center; font-weight: var(--fw-bold); font-size: var(--fs-sm); flex: none; }
 .pj-name { font-weight: var(--fw-medium); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -304,7 +304,7 @@
 .pj-mobile-switch { border: 1px solid var(--line); background: var(--panel); border-radius: var(--r-full); padding: 3px var(--sp-2h); font: inherit; font-size: var(--fs-sm); color: var(--text); display: inline-flex; gap: var(--sp-1); align-items: center; }
 .pj-mobile-back { padding: var(--sp-2) var(--sp-3); border-bottom: 1px solid var(--line); }
 @media (max-width: 860px) {
-  .pj-right { width: 100%; border-left: 0; }
+  .pj-right { width: 100%; max-width: none; border-left: 0; }
   .pjp-body { padding: var(--sp-2) var(--sp-3) var(--sp-5); }
   .pjs-wrap { flex-direction: column; max-height: none; }
   .pjs-nav { width: auto; flex-direction: row; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--line); }
@@ -400,3 +400,28 @@
 .pj-composer-box:has(.pj-thumbs) { flex-wrap: wrap; }
 .pj-thumbs { flex-basis: 100%; margin-bottom: 0; }
 .thumb.uploading img { opacity: 0.5; }
+
+/* Model chip in the project chat and thread composers (menu: chat/ModelMenu.jsx) */
+.pj-model-chip { background: none; border: 0; border-radius: var(--r-sm); padding: 2px var(--sp-1h); font-size: var(--fs-xs); color: var(--muted); cursor: pointer; white-space: nowrap; }
+.pj-model-chip:hover, .pj-model-chip[aria-expanded='true'] { background: var(--hover); color: var(--text); }
+.pj-model-chip .chev { font-size: var(--fs-2xs); }
+/* "Updated project memory" row with an inline diff */
+.pj-mem { font-size: var(--fs-sm); color: var(--muted); padding: var(--sp-1) 0; }
+.pj-mem-head { display: inline-flex; align-items: center; gap: var(--sp-1); background: none; border: 0; padding: 2px 0; color: var(--muted); font: inherit; cursor: pointer; max-width: 100%; text-align: left; }
+.pj-mem-head:hover:not(:disabled) { color: var(--text); }
+.pj-mem-head:disabled { cursor: default; }
+.pj-mem-head:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+.pj-mem-names { color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.pj-mem-chev { flex: none; transition: transform 0.15s; }
+.pj-mem.open .pj-mem-chev { transform: rotate(180deg); }
+.pj-mem-body { margin-top: var(--sp-1); display: flex; flex-direction: column; gap: var(--sp-2); }
+.pj-mem-fname { font-family: var(--mono); font-size: var(--fs-xs); color: var(--text-2); margin-bottom: 2px; display: flex; gap: var(--sp-2); }
+.pj-mem-count .add { color: var(--green); margin-right: 4px; }
+.pj-mem-count .del { color: var(--red); }
+.pj-mem-diff { margin: 0; font-family: var(--mono); font-size: var(--fs-xs); line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text-2); background: none; padding: 0; }
+.pj-mem-diff > div { padding: 0 var(--sp-2) 0 1.6em; text-indent: -1.2em; }
+.pj-mem-diff .op { display: inline-block; width: 1.2em; text-indent: 0; user-select: none; }
+.pj-mem-diff .add { background: var(--diff-add); color: var(--green); }
+.pj-mem-diff .del { background: var(--diff-del); color: var(--red); }
+.pj-mem-diff .gap { color: var(--muted); }
+.pj-mem-ts { font-size: var(--fs-xs); color: var(--muted); margin-top: 2px; }

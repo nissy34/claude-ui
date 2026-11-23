@@ -7,6 +7,7 @@ import BackgroundTasks, { isLive } from './BackgroundTasks.jsx';
 import { Button, IconButton, Menu, useDismiss } from '../ui/index.jsx';
 import DiffView from './DiffView.jsx';
 import { confirmDialog } from '../ui/dialogs.jsx';
+import { useResizable } from '../ui/resizable.jsx';
 import { copyText } from '../ui/clipboard.js';
 
 // The branch's pull request with CI checks, like Desktop's PR status in the Changes card, plus the
@@ -459,6 +460,8 @@ function readRatio(dir) {
  */
 export default function SidePanel({ sessionId, tab, files, titles = {}, onTab, onCloseFile, onClose, refreshKey, onOpenFile, onPrompt, busy, onError, wide, onWide, tasks = [], taskFocus, split, onSplit, terminal, onStartTerminal }) {
   const liveTasks = tasks.filter(isLive).length;
+  // Normal and wide keep their own dragged widths.
+  const resize = useResizable(wide ? 'panel-wide' : 'panel', { edge: 'left', min: 320, max: () => window.innerWidth - 420, label: 'Resize side panel' });
   const dir = wide ? 'across' : 'down';
   const [ratios, setRatios] = useState(() => ({ down: readRatio('down'), across: readRatio('across') }));
   const ratio = ratios[dir];
@@ -514,7 +517,8 @@ export default function SidePanel({ sessionId, tab, files, titles = {}, onTab, o
   };
 
   return (
-    <aside className={`side-panel ${wide ? 'wide' : ''} ${split ? 'split' : ''}`}>
+    <aside className={`side-panel ${wide ? 'wide' : ''} ${split ? 'split' : ''}`} ref={resize.ref} style={resize.style}>
+      {resize.handle}
       <div className="panel-head">
         <PaneTabs tab={tab} onTab={onTab} onCloseFile={onCloseFile} {...tabProps} />
         {onSplit && (

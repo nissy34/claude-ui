@@ -20,6 +20,11 @@ export function setModels(list) {
   cachedAt = Date.now();
 }
 
+/** The last model list seen (no CLI call); null until a chat or Settings asked once. */
+export function cachedModels() {
+  return cache;
+}
+
 function fetchFromCli() {
   return new Promise((resolve) => {
     // In gateway mode (CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY) the CLI adds the gateway's

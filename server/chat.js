@@ -35,7 +35,8 @@ export function transcriptPath(cwd, id) {
 
 const MCP_SCRIPT = path.join(path.dirname(fileURLToPath(import.meta.url)), 'mcp-sessions.js');
 const commandCache = new Map(); // cwd -> commands with descriptions
-import { setModels } from './models.js';
+import { setModels, cachedModels } from './models.js';
+import { coauthorAttribution } from './git-identity.js';
 import { globalNotesPrompt } from './notes.js';
 import { firstExchange, generateTitle, queueTitle, transcriptTitle } from './chat-title.js';
 import { bgTaskMethods, isTaskMessage } from './bg-tasks.js';
@@ -422,8 +423,12 @@ export class ChatSession {
       if (proj?.allowed) allowed.push(...proj.allowed);
       if (allowed.length) args.push('--allowedTools', allowed.join(','));
       if (proj?.disallowed?.length) args.push('--disallowedTools', proj.disallowed.join(','));
-      const settings = withAllowRules(proj?.settings, m.allowRules);
-      if (settings) args.push('--settings', JSON.stringify(settings));
+      let settings = withAllowRules(proj?.settings, m.allowRules);
+      // Co-Authored-By: Claude <model> on commits (server/git-identity.js), named for this chat's model.
+      const attribution = coauthorAttribution(this.attributionModel());
+      this.attrCommit = attribution.commit;
+      settings = { ...(settings || {}), attribution: { ...(settings?.attribution || {}), ...attribution } };
+      args.push('--settings', JSON.stringify(settings));
       if (proj && typeof proj.tools === 'string') args.push('--tools', proj.tools);
       for (const d of proj?.addDirs || []) args.push('--add-dir', d);
     }
@@ -571,6 +576,8 @@ export class ChatSession {
         if (msg.subtype === 'init') {
           if (msg.session_id) m.claudeSessionId = msg.session_id;
           m.activeModel = msg.model;
+          // Started before the model was known (an alias, first chat): pick the name up after this turn.
+          if (!m.assistant && this.attrCommit !== undefined && coauthorAttribution(this.attributionModel()).commit !== this.attrCommit) this.envStale = true;
           m.permissionMode = msg.permissionMode || m.permissionMode;
           m.commands = msg.slash_commands || [];
           m.tools = msg.tools || [];
@@ -1128,8 +1135,20 @@ export class ChatSession {
     model = String(model || '').trim().slice(0, 100) || null;
     this.meta.model = model;
     if (this.proc) await this.control({ subtype: 'set_model', model: model || 'default' }).catch((e) => this.record({ k: 'error', text: `Could not change model: ${e.message}` }));
+    // The commit co-author line names the model and is fixed at launch: restart (after any turn) to update it.
+    if (this.proc && !this.meta.assistant && this.attrCommit !== undefined && coauthorAttribution(this.attributionModel()).commit !== this.attrCommit) this.restartForEnv();
     this.store.save();
     this.broadcastState();
+  }
+
+  /** The concrete model id this chat runs on, as best known: its pick, the alias resolved, or what the CLI reported. */
+  attributionModel() {
+    const m = this.meta;
+    const pick = m.model || 'default';
+    if (m.model && /claude-/i.test(m.model)) return m.model;
+    const hit = cachedModels()?.find((x) => x.value === pick);
+    if (hit?.resolvedModel && /claude-/i.test(hit.resolvedModel)) return hit.resolvedModel;
+    return m.activeModel || m.model || '';
   }
 
   /**

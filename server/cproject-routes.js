@@ -3,6 +3,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { PROJECT_FROM } from './cprojects.js';
+import { collapseMemoryEvents } from './cproject-memory.js';
 
 export function mountProjectRoutes(app, { engine, store, resolveDir, wrap }) {
   // ---- internal: tool calls from the project MCP server (x-cw-session names the caller) ----
@@ -167,18 +168,13 @@ export function mountProjectRoutes(app, { engine, store, resolveDir, wrap }) {
         // What passed between threads shows as activity rows: notes it shared, notes handed to it, signals about it.
         else if (e.type === 'note.shared' && e.thread === tid && e.body.kind !== 'decision') feed.push(e);
         else if (e.type === 'signal' && (e.thread === tid || (e.body.threads || []).includes(tid))) feed.push(e);
-        else if (e.type === 'memory.changed' && e.from?.id === tid) {
-          // Consecutive memory writes collapse into one "Updated project memory" row.
-          const last = feed[feed.length - 1];
-          if (last?.type === 'memory.changed') last.body = { ...last.body, names: [...new Set([...(last.body.names || [last.body.name]), e.body.name])] };
-          else feed.push({ ...e, body: { ...e.body, names: [e.body.name] } });
-        }
+        else if (e.type === 'memory.changed' && e.from?.id === tid) feed.push(e); // consecutive writes collapse below
         else if (e.type === 'notes.delivered' && e.body.session === tid && !e.body.dropped) {
           const notes = e.body.ids.map((id) => p.state.notes?.[id]).filter(Boolean).map((n) => ({ id: n.id, kind: n.kind, text: n.text, files: n.files, from: n.by ? p.state.threads[n.by]?.title || n.by : 'the user' }));
           if (notes.length) feed.push({ ...e, body: { ...e.body, notes } });
         }
       }
-      res.json({ feed });
+      res.json({ feed: collapseMemoryEvents(feed) });
     })
   );
 
@@ -227,6 +223,9 @@ export function mountProjectRoutes(app, { engine, store, resolveDir, wrap }) {
           if (s) await s.resume({ from: PROJECT_FROM });
           break;
         }
+        case 'model':
+          await engine.setThreadModel(p, tid, req.body?.model);
+          break;
         case 'message': {
           const ev = engine.steerThread(p, tid, req.body?.text);
           return res.json({ event: ev });

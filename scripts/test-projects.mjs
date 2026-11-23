@@ -137,6 +137,28 @@ async function main() {
     return d.threads.find((t) => t.id === B.id).status === 'resolved' && d.threads.find((t) => t.id === A.id).status === 'idle' && d;
   }, 15_000, 'both threads done');
   check(true, 'both threads ran in parallel; B resolved itself');
+
+  console.log('Switch models on demand: a thread and the coordinator, same sessions');
+  {
+    const r = await api(`/api/cprojects/${id}/threads/${A.id}/model`, { method: 'POST', body: { model: 'opus' } });
+    check(r.thread.id === A.id && r.thread.model === 'opus', 'the thread shows its new model', r.thread);
+    const s = (await api('/api/sessions')).sessions.find((x) => x.id === A.id);
+    check(s.model === 'opus' && s.effort === 'medium', 'the same thread session switched model and kept its effort', s);
+    const d = await detail(id);
+    check(d.threads.length === 2 && d.settings.models.thread.model === 'sonnet', 'no new thread, and the project default for new threads is unchanged', d.settings.models);
+    await api(`/api/cprojects/${id}/threads/${A.id}/model`, { method: 'POST', body: { model: '' } });
+    check((await detail(id)).threads.find((t) => t.id === A.id).model === null, 'picking Default clears the thread model');
+    await api(`/api/cprojects/${id}/threads/${A.id}/model`, { method: 'POST', body: { model: 'opus' } });
+    await api(`/api/cprojects/${id}`, { method: 'PATCH', body: { models: { coordinator: { model: 'sonnet' } } } });
+    const c = (await api('/api/sessions')).sessions.find((x) => x.id === project.coordinatorId);
+    check(c.model === 'sonnet' && c.effort === 'low', 'the coordinator switched model in place and kept its effort', c);
+    await until(() => fakeLog().some((l) => l.sessionId && l.setModel === 'sonnet'), 5000, 'set_model sent to the running coordinator');
+    check(true, 'a running coordinator gets the new model without a restart');
+    await api(`/api/cprojects/${id}`, { method: 'PATCH', body: { models: { thread: { model: 'haiku' } } } });
+    const d2 = await detail(id);
+    check(d2.settings.models.thread.model === 'haiku' && d2.settings.models.thread.effort === 'medium', 'the project default for new threads changes on its own', d2.settings.models.thread);
+    await api(`/api/cprojects/${id}`, { method: 'PATCH', body: { models: { thread: { model: 'sonnet' } } } });
+  }
   const ev = await until(async () => {
     const log = fs.readFileSync(path.join(env.CW_DATA_DIR, 'cprojects', id, 'events.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
     const coordWakes = log.filter((e) => e.type === 'wake.sent' && e.body.session === project.coordinatorId);
@@ -226,6 +248,17 @@ async function main() {
   await api(`/api/cprojects/${id}/memory/team-prefs`, { method: 'PUT', body: { description: 'How the team likes work done', content: 'Small PRs. See [[build-steps]].', type: 'feedback' } });
   const typed = await api(`/api/cprojects/${id}/memory/team-prefs`);
   check(typed.type === 'feedback' && typed.modified, 'memory files keep a type and modified time', typed);
+  // Memory writes show as an "Updated project memory" row with a diff: a thread's in its thread, the coordinator's in the chat.
+  const tm = (await detail(id)).threads.find((t) => t.title === 'Thread M');
+  const tfeed = (await api(`/api/cprojects/${id}/threads/${tm.id}/feed`)).feed.filter((e) => e.type === 'memory.changed');
+  const tdiff = tfeed[0]?.body.diffs || [];
+  check(tfeed.length === 1 && tdiff[0]?.file === 'MEMORY.md' && tdiff[0].lines.some(([op, l]) => op === '+' && l.includes('[build-steps](build-steps.md)')), 'thread feed: memory write carries the MEMORY.md line it added', tfeed);
+  check(tdiff[1]?.file === 'build-steps.md' && tdiff[1].lines.some(([op, l]) => op === '+' && l === 'npm run build'), 'thread feed: and the memory file diff', tdiff);
+  await api(`/api/cprojects/${id}/messages`, { method: 'POST', body: { text: [call('memory_write', { name: 'release-plan', description: 'When we ship', content: 'Friday' }), call('memory_write', { name: 'release-owner', description: 'Who ships', content: 'Dana' }), call('post_message', { text: 'saved' })].join('\n') } });
+  await until(async () => (await detail(id)).feed.some((e) => e.type === 'memory.changed' && e.body.names.includes('release-owner')), 8000, 'coordinator memory row');
+  const cfeed = (await detail(id)).feed.filter((e) => e.type === 'memory.changed');
+  check(cfeed.length === 1 && cfeed[0].body.names.join() === 'release-plan,release-owner' && cfeed[0].body.diffs.length === 3, 'project chat: the coordinator\'s consecutive writes collapse into one row with their diffs', cfeed);
+  check(!cfeed.some((e) => e.body.names.includes('build-steps') || e.body.names.includes('team-prefs')), 'project chat: thread and user writes stay out of it', cfeed);
 
   console.log('Restart: state and queued wakes survive');
   const slow = ['@@sleep 4000', call('post_message', { kind: 'result', text: 'slow done' })].join('\n');
@@ -274,6 +307,13 @@ async function main() {
   check(true, 'steering a thread from the project page delivers to that thread');
   const sfeed = (await api(`/api/cprojects/${q.id}/threads/${T1.id}/feed`)).feed;
   check(sfeed.some((e) => e.type === 'user.message' && e.body.where === 'steer'), 'the steer message shows in the thread feed', sfeed.map((e) => e.type));
+  const steered = sfeed.find((e) => e.type === 'thread.post' && e.body.text === 'steered done');
+  check(steered?.body.inThread && !(steered.to || []).length, "a thread's answer to the user talking in it does not wake the coordinator", steered);
+  await api(`/api/cprojects/${q.id}/threads/${T1.id}/message`, { method: 'POST', body: { text: 'STEER-AUTO just say hi\n@@say hi from the thread' } });
+  const autoPost = await until(async () => (await api(`/api/cprojects/${q.id}/threads/${T1.id}/feed`)).feed.find((e) => e.type === 'thread.post' && e.body.auto && e.body.text.includes('hi from the thread')), 10_000, 'steered plain reply');
+  check(autoPost.body.inThread && !(autoPost.to || []).length, 'a plain reply to the user in a thread stays in that thread too', autoPost);
+  await sleep(1000);
+  check(!fakeLog().some((l) => l.prompt?.includes('hi from the thread') && l.prompt.includes('<project-wake') && !l.prompt.includes('STEER-AUTO')), 'the coordinator is not handed the in-thread reply');
   const side = await api(`/api/cprojects/${q.id}/threads/${T1.id}/side`, { method: 'POST', body: { question: `what is up?\n${call('post_message', { kind: 'result', text: 'side answer' })}` } });
   check(side.thread?.sideOf === T1.id && side.thread.cwd === T1.cwd, 'a side question forks the thread and uses its worktree', side.thread);
   qd = await until(async () => {
@@ -413,7 +453,8 @@ async function aboutLabel() {
   await until(() => fakeLog().some((l) => l.prompt?.includes('<project-wake') && l.prompt.includes('from thread "Funny custom view"')), 12_000, 'new thread reported');
   await until(async () => { const x = await detail(r.id); return !x.coordinatorBusy && !x.coordinator?.queued; }, 12_000, 'coordinator idle');
   // (The thread's result text is a directive line, which the fake coordinator runs when the wake relays it.)
-  await api(`/api/cprojects/${r.id}/threads/${T.id}/message`, { method: 'POST', body: { text: call('post_message', { kind: 'result', text: `\n${call('post_message', { text: 'LABEL-RELAY' })}\n` }) } });
+  // (Handed over by the coordinator: a reply to the user steering the thread directly would stay in the thread.)
+  await api(`/api/cprojects/${r.id}/messages`, { method: 'POST', body: { text: [call('post_message', { text: 'LABEL-ASKED' }), call('message_thread', { thread_id: T.id, text: call('post_message', { kind: 'result', text: `\n${call('post_message', { text: 'LABEL-RELAY' })}\n` }) })].join('\n') } });
   const d2 = await until(async () => { const x = await detail(r.id); return x.feed.some((e) => e.type === 'chat.post' && e.body.text === 'LABEL-RELAY') && x; }, 12_000, 'relay post');
   const relay = d2.feed.find((e) => e.type === 'chat.post' && e.body.text === 'LABEL-RELAY');
   check(relay.body.about === T.id && !relay.body.ack, "a post in a wake with only one thread's news is labeled with that thread", { about: relay.body.about, wake: fakeLog().filter((l) => l.prompt?.includes('LABEL-RELAY') && l.prompt.includes('<project-wake')).map((l) => l.prompt.slice(-1500)) });
