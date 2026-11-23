@@ -10,6 +10,7 @@ import TeamsTab from './TeamsTab.jsx';
 import SignInsTab from './SignIns.jsx';
 import { GatewaySettings } from './Gateway.jsx';
 import { ClaudeTokenSettings } from './ClaudeToken.jsx';
+import { GitIdentitySettings } from './GitIdentity.jsx';
 import { Button, IconButton, Modal, ModalHead, Segmented, Toggle } from './ui/index.jsx';
 
 const TABS = [
@@ -232,6 +233,8 @@ function Account({ onError }) {
       <ClaudeTokenSettings onError={onError} onChange={onToken} gateway={gw} />
       <h4 className="set-h">AI gateway</h4>
       <GatewaySettings onError={onError} onChange={onChange} />
+      <h4 className="set-h">Git identity</h4>
+      <GitIdentitySettings onError={onError} />
       <h4 className="set-h">How Claude Code signs in</h4>
       <p className="muted set-note">
         {gw?.mode
