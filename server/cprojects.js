@@ -22,6 +22,7 @@ import { config } from './config.js';
 import { gatewayMode, failoverEngaged, oauthTokenMode } from './gateway.js';
 import { changedFiles, createWorktree, isGitRepo, removeWorktree, worktreeMerged } from './git.js';
 import { prStatus } from './pr-status.js';
+import { prOpts } from './pr-cache.js';
 import { rawUrl } from './artifacts.js';
 import { coordinatorPrompt, threadPrompt, instructionsBlock, memoryBlock } from './cproject-prompts.js';
 import { ProjectMemory, collapseMemoryEvents } from './cproject-memory.js';
@@ -2086,7 +2087,7 @@ export class ProjectEngine {
     const s = this.store.get(sid);
     if (!t || !s || !fs.existsSync(s.meta.cwd)) return;
     (this.prPolled ||= new Map()).set(sid, Date.now());
-    const r = await prStatus(s.meta.cwd);
+    const r = await prStatus(s.meta.cwd, prOpts(s));
     if (!r.available) {
       this.ghMissingUntil = Date.now() + 3600_000; // no gh, or not signed in: try again in an hour
       return;
