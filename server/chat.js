@@ -11,7 +11,7 @@ import { sessionExtras } from './environments.js';
 import { fileURLToPath } from 'node:url';
 import { browserAvailable } from './browser.js';
 import { config } from './config.js';
-import { claudeEnv } from './gateway.js';
+import { claudeEnv, withGatewayArgs, onRateLimit, failoverEngaged, limitKind, gatewayActive } from './gateway.js';
 import { resolveCommand } from './launch.js';
 import { withOpener } from './opener.js';
 import { toolResultParts, saveChatImage, loadChatImage } from './tool-images.js';
@@ -379,7 +379,9 @@ export class ChatSession {
 
   // ---------- process ----------
   ensureProcess() {
+    if (this.proc && this.envStale && !this.isBusy()) this.dropStaleProcess();
     if (this.proc) return;
+    this.envStale = false;
     const m = this.meta;
     const args = [
       '--output-format', 'stream-json',
@@ -450,7 +452,7 @@ export class ChatSession {
 
     let proc;
     try {
-      const cmd = resolveCommand(config.claudeBin, args);
+      const cmd = resolveCommand(config.claudeBin, withGatewayArgs(args));
       const env = childEnv(m.id, envx.env);
       // Our own switch decides; an inherited CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=0 would silence them.
       if (config.promptSuggestions) delete env.CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION;
@@ -574,6 +576,8 @@ export class ChatSession {
           m.mcpServers = msg.mcp_servers || [];
           m.cliVersion = msg.claude_code_version;
           m.apiKeySource = msg.apiKeySource;
+          // false when the CLI talks to a gateway (ANTHROPIC_BASE_URL), true for the Claude login / API.
+          m.servedByAnthropic = typeof msg.served_by_anthropic === 'boolean' ? msg.served_by_anthropic : null;
           this.broadcastState();
         } else if (msg.subtype === 'status') {
           this.broadcast({ t: 'status', status: msg.status });
@@ -632,9 +636,24 @@ export class ChatSession {
           const restart = this.effortPending;
           this.effortPending = false;
           setTimeout(async () => {
-            if (restart && this.state === 'idle') await this.stopAndWait();
+            if (restart && this.state === 'idle') {
+              this.quietExit = true;
+              await this.stopAndWait();
+            }
             this.flushInbox();
           }, 200);
+        }
+        if (this.turns === 0 && this.envStale) setTimeout(() => this.envStale && !this.isBusy() && this.dropStaleProcess(), 100);
+        if (this.turns === 0 && this.failoverResume) {
+          const kind = this.failoverResume;
+          const failed = !!msg.is_error && !this.interrupted;
+          this.failoverResume = null;
+          setTimeout(() => {
+            if (!failed || !gatewayActive()) return;
+            const what = kind === 'five_hour' ? '5-hour' : 'weekly';
+            this.record({ k: 'notice', text: `Subscription reached its ${what} limit. Continuing on the AI gateway until it resets.` });
+            this.deliver({ text: `(The Claude subscription reached its ${what} usage limit, so this conversation now continues on the company AI gateway.) Continue from where you left off.`, from: { role: 'system', kind: 'system' } });
+          }, 600);
         }
         if (this.interrupted) {
           this.interrupted = false;
@@ -687,6 +706,9 @@ export class ChatSession {
         break;
       case 'rate_limit_event':
         m.rateLimit = msg.rate_limit_info;
+        // Subscription out of its weekly (or, if chosen, 5-hour) limit with the gateway failover on:
+        // every chat moves to the gateway, and this turn continues there once it ends.
+        if (onRateLimit(msg.rate_limit_info) || (failoverEngaged() && msg.rate_limit_info?.status === 'rejected')) this.failoverResume = limitKind(msg.rate_limit_info) || 'limit';
         // Plan limits are account-wide: keep the latest from any chat for views like a project's.
         if (msg.rate_limit_info) this.store.rateLimit = { ...msg.rate_limit_info, at: Date.now() };
         if (m.cproject) this.store.onSignal?.(this, 'rate_limit', msg.rate_limit_info);
@@ -1106,6 +1128,36 @@ export class ChatSession {
     this.meta.model = model;
     if (this.proc) await this.control({ subtype: 'set_model', model: model || 'default' }).catch((e) => this.record({ k: 'error', text: `Could not change model: ${e.message}` }));
     this.store.save();
+    this.broadcastState();
+  }
+
+  /**
+   * The sign-in changed (gateway on/off). The running process has the old one, so it is never
+   * used for another turn: dropped now if idle, else as soon as its turn ends. A message sent in
+   * between starts a fresh process (ensureProcess), so the switch holds from the next message on.
+   */
+  restartForEnv() {
+    if (!this.proc) return;
+    this.envStale = true;
+    if (!this.isBusy()) this.dropStaleProcess();
+  }
+
+  /** Let go of the current (idle) process at once and stop it quietly; the next turn starts a new one. */
+  dropStaleProcess() {
+    const old = this.proc;
+    if (!old) return;
+    this.proc = null;
+    this.meta.pid = null;
+    this.envStale = false;
+    try {
+      old.stdin.end();
+      old.kill('SIGTERM');
+    } catch {}
+    setTimeout(() => {
+      try {
+        old.kill('SIGKILL');
+      } catch {}
+    }, 3000).unref?.();
     this.broadcastState();
   }
 

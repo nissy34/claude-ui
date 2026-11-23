@@ -38,8 +38,13 @@ const env = {
   CLAUDE_CODE_USE_BEDROCK: '1',
   ANTHROPIC_MODEL: 'arn:aws:bedrock:old',
   AWS_PROFILE: 'dev',
+  // A gateway someone put in .env by hand.
+  ANTHROPIC_BASE_URL: 'http://old.example/anthropic',
+  ANTHROPIC_AUTH_TOKEN: 'old-env-key',
 };
-for (const k of ['CLAUDECODE', 'CLAUDE_CODE_SESSION_ID', 'CLAUDE_CODE_MESSAGING_SOCKET', 'ANTHROPIC_BASE_URL', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_API_KEY']) delete env[k];
+for (const k of ['CLAUDECODE', 'CLAUDE_CODE_SESSION_ID', 'CLAUDE_CODE_MESSAGING_SOCKET', 'CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_API_KEY']) delete env[k];
+const repo = path.join(tmp, 'projects', 'demo');
+fs.mkdirSync(repo, { recursive: true });
 
 let failures = 0;
 let passes = 0;
@@ -90,6 +95,17 @@ async function spawnedEnv(since) {
     return hit?.env;
   }, 10_000, 'a claude process');
 }
+/** The env of the newest claude process's --settings flag (what wins over settings.json). */
+function lastSettingsEnv(since) {
+  const lines = fs.readFileSync(log, 'utf8').trim().split('\n').slice(since).map((l) => JSON.parse(l));
+  const argv = lines.filter((x) => x.env).pop()?.argv || [];
+  const i = argv.lastIndexOf('--settings');
+  try {
+    return i >= 0 ? JSON.parse(argv[i + 1]).env || null : null;
+  } catch {
+    return null;
+  }
+}
 const logLines = () => (fs.existsSync(log) ? fs.readFileSync(log, 'utf8').trim().split('\n').length : 0);
 
 let server;
@@ -103,12 +119,31 @@ async function main() {
 
   console.log('Off by default');
   let s = (await api('/api/gateway')).j;
-  check(s.active === false && s.hasToken === false && s.mode === null, 'gateway off, no key', s);
+  check(s.active === false && s.hasToken === false && s.mode?.source === 'env' && s.external?.source === 'env', 'a gateway in .env is reported as set up outside the UI', s);
   check(s.envConflicts.includes('CLAUDE_CODE_USE_BEDROCK'), 'the Bedrock switch in the environment is reported', s.envConflicts);
   let n = logLines();
   await api('/api/claude/models');
   let e = await spawnedEnv(n);
-  check(!e.ANTHROPIC_AUTH_TOKEN && e.CLAUDE_CODE_USE_BEDROCK === '1', 'with the gateway off, claude gets the environment as it was', e);
+  check(e.ANTHROPIC_AUTH_TOKEN === 'old-env-key' && e.CLAUDE_CODE_USE_BEDROCK === '1', 'never switched here: claude gets the environment as it was', e);
+  check(lastSettingsEnv(n) === null, 'never switched here: no --settings override');
+
+  console.log('A running chat moves with the switch');
+  const { project } = (await api('/api/cprojects', { method: 'POST', body: { name: 'Demo', folders: [repo] } })).j;
+  await api(`/api/cprojects/${project.id}/messages`, { method: 'POST', body: { text: 'hello' } });
+  const firstPid = await until(() => {
+    const lines = fs.readFileSync(log, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+    return lines.find((x) => x.env && x.argv.join(' ').includes('coordinator'))?.pid;
+  }, 10_000, 'coordinator process');
+  await sleep(1500);
+  const alive = (pid) => {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  check(alive(firstPid), 'the coordinator process stays up between turns');
 
   console.log('Saving and testing');
   let r = await api('/api/gateway', { method: 'PUT', body: { enabled: true } });
@@ -134,7 +169,15 @@ async function main() {
   e = await spawnedEnv(n);
   check(e.ANTHROPIC_BASE_URL === gwUrl && e.ANTHROPIC_AUTH_TOKEN === KEY && e.CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY === '1', 'claude gets the gateway address, key and model discovery', e);
   check(!e.CLAUDE_CODE_USE_BEDROCK && !e.ANTHROPIC_MODEL, 'the Bedrock switch and model pin are removed', e);
+  let se = lastSettingsEnv(n);
+  check(se?.ANTHROPIC_BASE_URL === gwUrl && se.CLAUDE_CODE_USE_BEDROCK === '' && se.ANTHROPIC_API_KEY === '' && !('ANTHROPIC_AUTH_TOKEN' in se), '--settings pins the gateway over settings.json files (no key in the arguments)', se);
   check(e.AWS_PROFILE === 'dev', "AWS_PROFILE is left for Claude's own aws commands", e);
+  await until(() => !alive(firstPid), 8000, 'the old coordinator process to stop').catch(() => null);
+  check(!alive(firstPid), 'turning the gateway on restarts the idle chat process');
+  n = logLines();
+  await api(`/api/cprojects/${project.id}/messages`, { method: 'POST', body: { text: 'again' } });
+  e = await spawnedEnv(n);
+  check(e.ANTHROPIC_AUTH_TOKEN === KEY, "the chat's next message runs on the gateway", e);
   r = await api('/api/gateway', { method: 'PUT', body: { discovery: false } });
   n = logLines();
   await api('/api/claude/models');
@@ -158,16 +201,102 @@ async function main() {
   check(r.j.removed?.length === 2 && after.env.KEEP_ME === 'x' && !after.env.CLAUDE_CODE_USE_BEDROCK && after.model === 'opus', 'they are removed, everything else kept', after);
   check(fs.existsSync(settings + '.before-gateway') && r.j.status.settingsConflicts.length === 0, 'a backup is kept and no conflicts remain');
 
+  console.log('Turning it off really goes back to the Claude login');
+  await api('/api/gateway', { method: 'PUT', body: { enabled: false } });
+  n = logLines();
+  await api('/api/claude/models');
+  e = await spawnedEnv(n);
+  check(!e.ANTHROPIC_AUTH_TOKEN && !e.ANTHROPIC_BASE_URL && !e.CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY, 'switched off: no gateway variables, not even the ones from .env', e);
+  se = lastSettingsEnv(n);
+  check(se?.ANTHROPIC_BASE_URL === '' && se.ANTHROPIC_AUTH_TOKEN === '' && se.CLAUDE_CODE_USE_BEDROCK === '', 'switched off: --settings blanks the gateway and Bedrock, whatever settings.json says', se);
+  s = (await api('/api/gateway')).j;
+  check(s.mode === null && s.external === null, 'switched off: no gateway reported', s);
+  n = logLines();
+  await api(`/api/cprojects/${project.id}/messages`, { method: 'POST', body: { text: 'and back' } });
+  e = await spawnedEnv(n);
+  check(!e.ANTHROPIC_AUTH_TOKEN && !e.ANTHROPIC_BASE_URL, "the open chat's next message is back on the Claude login", e);
+
   console.log('Gateway set up by hand in settings.json');
   await api('/api/gateway', { method: 'PUT', body: { enabled: false, token: '' } });
   fs.writeFileSync(settings, JSON.stringify({ env: { ANTHROPIC_BASE_URL: gwUrl, ANTHROPIC_AUTH_TOKEN: KEY } }));
   r = await api('/api/gateway');
-  check(r.j.active === false && r.j.hasToken === false && r.j.external?.source === 'settings' && r.j.mode?.source === 'settings', 'reported as set up outside the UI', r.j);
+  check(r.j.active === false && r.j.mode === null && r.j.settingsGateway === true, 'the switch is off and wins: settings.json gateway noted but not in use', r.j);
   check(!r.text.includes(KEY), 'the hand-set key is not sent back either');
   n = logLines();
   await api('/api/claude/models');
   e = await spawnedEnv(n);
   check(!e.ANTHROPIC_AUTH_TOKEN, 'with the UI setting off, nothing is added to the environment', e);
+  r = await api('/api/gateway/import', { method: 'POST' });
+  const cleaned = JSON.parse(fs.readFileSync(settings, 'utf8'));
+  check(r.j.active && r.j.baseUrl === gwUrl && r.j.tokenHint === '…9876' && !cleaned.env, '"Manage it here" moves the gateway from settings.json into the switch', { r: r.j, cleaned });
+  check(!r.text.includes(KEY), 'the moved key is not sent back');
+  await api('/api/gateway', { method: 'PUT', body: { enabled: false } });
+  n = logLines();
+  await api('/api/claude/models');
+  e = await spawnedEnv(n);
+  check(!e.ANTHROPIC_AUTH_TOKEN && (await api('/api/gateway')).j.mode === null, 'after moving it, the switch turns it off', e);
+  await failover(project);
+}
+
+/** Prompts the fake CLI got since log line `since`, with the env of the process that got them. */
+function promptsSince(since) {
+  const lines = fs.readFileSync(log, 'utf8').trim().split('\n').slice(since).map((l) => JSON.parse(l));
+  const envOf = new Map(lines.filter((x) => x.env).map((x) => [x.pid, x.env]));
+  return lines.filter((x) => x.prompt).map((x) => ({ text: x.prompt, env: envOf.get(x.pid) || null }));
+}
+
+async function failover(project) {
+  console.log('Failover: the gateway steps in when the subscription runs out');
+  let s = (await api('/api/gateway', { method: 'PUT', body: { failover: { enabled: true } } })).j;
+  check(s.failover.enabled && s.failover.weekly && !s.failover.fiveHour && !s.active, 'failover on: weekly yes, 5-hour no by default, gateway not in use yet', s.failover);
+  // Resets in a few seconds, so the project's own wait for it is over before the next steps.
+  const soon = Math.floor(Date.now() / 1000) + 4;
+  await api(`/api/cprojects/${project.id}/messages`, { method: 'POST', body: { text: `@@limit {"rateLimitType":"five_hour","resetsAt":${soon}}` } });
+  await sleep(2500);
+  s = (await api('/api/gateway')).j;
+  check(!s.active && s.mode === null, 'the 5-hour limit does not switch (off by default)', s.mode);
+  const d1 = (await api(`/api/cprojects/${project.id}`)).j.project;
+  check(d1.limit?.until === soon * 1000, 'the project waits for the 5-hour reset as before', d1.limit);
+  await until(async () => !(await api(`/api/cprojects/${project.id}`)).j.project.limit, 10_000, 'the 5-hour reset').catch(() => null);
+  await sleep(1500);
+
+  const week = Math.floor(Date.now() / 1000) + 5 * 86400;
+  const n = logLines();
+  await api(`/api/cprojects/${project.id}/messages`, { method: 'POST', body: { text: `@@limit {"rateLimitType":"seven_day","resetsAt":${week}}` } });
+  s = (await until(async () => {
+    const r = (await api('/api/gateway')).j;
+    return r.active && r;
+  }, 8000, 'failover to engage').catch(() => ({})));
+  check(s.active && s.mode?.source === 'failover' && s.failoverKind === 'weekly' && s.failoverUntil === week * 1000, 'the weekly limit switches every chat to the gateway until it resets', s);
+  const cont = await until(() => promptsSince(n).find((p) => /continues on the company AI gateway/.test(p.text)), 10_000, 'continuation').catch(() => null);
+  check(cont && cont.env?.ANTHROPIC_AUTH_TOKEN === KEY, 'the cut-off chat continues by itself, on the gateway', cont);
+  const d2 = (await api(`/api/cprojects/${project.id}`)).j.project;
+  check(d2.feed.filter((e) => e.type === 'turn.failed' && /usage limit/.test(e.body?.text || '')).length === 1, 'no failed turn is reported for the switch (only the earlier 5-hour one)');
+  const si = (await api('/api/sign-ins')).j.rows.find((x) => x.kind === 'claude');
+  check(si?.state === 'gateway', 'Sign-ins shows the gateway while it stands in', si);
+
+  console.log('Back to the subscription');
+  const n2 = logLines();
+  s = (await api('/api/gateway/end-failover', { method: 'POST' })).j;
+  check(!s.active && s.mode === null && s.failoverUntil === 0, '"Back to subscription now" ends it', s);
+  await api(`/api/cprojects/${project.id}/messages`, { method: 'POST', body: { text: 'after the reset' } });
+  const back = await until(() => promptsSince(n2).find((p) => /after the reset/.test(p.text)), 10_000, 'next message').catch(() => null);
+  check(back && !back.env?.ANTHROPIC_AUTH_TOKEN, "the chat's next message is on the subscription again", back);
+
+  s = (await api('/api/gateway', { method: 'PUT', body: { failover: { fiveHour: true } } })).j;
+  check(s.failover.fiveHour && s.failover.weekly, 'the 5-hour limit can be ticked too', s.failover);
+  const soon2 = Math.floor(Date.now() / 1000) + 1800;
+  await sleep(1500);
+  await api(`/api/cprojects/${project.id}/messages`, { method: 'POST', body: { text: `@@limit {"rateLimitType":"five_hour","resetsAt":${soon2}}` } });
+  s = (await until(async () => {
+    const r = (await api('/api/gateway')).j;
+    return r.active && r;
+  }, 8000, 'failover on 5-hour').catch(() => ({})));
+  check(s.failoverKind === 'five_hour', 'then the 5-hour limit switches too', s);
+  s = (await api('/api/gateway', { method: 'PUT', body: { failover: { fiveHour: false } } })).j;
+  check(!s.active, 'unticking the limit it stands in for goes back to the subscription', s);
+  s = (await api('/api/gateway', { method: 'PUT', body: { failover: { enabled: false } } })).j;
+  check(!s.failover.enabled && !s.active, 'failover off');
 }
 
 main()
@@ -179,6 +308,7 @@ main()
     server?.kill('SIGTERM');
     gw.close();
     console.log(`\n${passes} passed, ${failures} failed`);
-    fs.rmSync(tmp, { recursive: true, force: true });
+    if (!process.env.KEEP) fs.rmSync(tmp, { recursive: true, force: true });
+    else console.log("kept", tmp);
     process.exit(failures ? 1 : 0);
   });

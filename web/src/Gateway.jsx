@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { api } from './api.js';
-import { Button, Checkbox, Input, Pill, Toggle } from './ui/index.jsx';
+import { Button, Checkbox, Input, Pill, Segmented } from './ui/index.jsx';
 
 // Whether Claude runs through a company AI gateway (any source), fetched once per page load.
 let mode;
@@ -38,7 +38,7 @@ export function GatewaySettings({ onError, onChange }) {
 
   const take = (r) => {
     setS(r);
-    setUrl(r.baseUrl || r.defaultUrl || '');
+    setUrl(r.baseUrl || '');
     setMode(r.mode || null);
     onChange?.(r);
   };
@@ -71,61 +71,77 @@ export function GatewaySettings({ onError, onChange }) {
       setBusy('');
     }
   };
-  const fix = async () => {
-    setBusy('fix');
+  const post = async (path, what) => {
+    setBusy(what);
     try {
-      const r = await api('/api/gateway/fix-settings', { method: 'POST' });
-      take(r.status);
+      take(await api(path, { method: 'POST' }));
     } catch (e) {
       onError(e);
     } finally {
       setBusy('');
     }
   };
-
+  const takeOver = async () => {
+    setBusy('import');
+    try {
+      take(await api('/api/gateway/import', { method: 'POST' }));
+    } catch (e) {
+      onError(e);
+    } finally {
+      setBusy('');
+    }
+  };
   const dirty = url.trim().replace(/\/+$/, '') !== (s.baseUrl || '') || !!key.trim();
   const canEnable = !!(url.trim() && (key.trim() || s.hasToken));
+
+  const mode = s.enabled ? 'always' : s.failover.enabled ? 'fallback' : 'off';
+  const chooseMode = (m) => {
+    const body = { enabled: m === 'always', failover: { enabled: m === 'fallback' } };
+    save(m !== 'off' && dirty ? { ...body, baseUrl: url, token: key || undefined } : body, 'mode');
+  };
+  const until = (t) => new Date(t).toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 
   return (
     <>
       <p className="muted set-note">
-        Use your company's AI gateway (for example Bifrost) instead of a Claude login. Every chat, project, terminal, the Assistant and chat titles then send requests to the gateway with your personal key, and are billed to your team. On a machine with no browser, get the key on your laptop with <code>bifrost-auth-macos get-key</code> (or <code>bifrost-auth-linux get-key</code>) and paste it here.
+        Send Claude's requests through your company's AI gateway with your personal key, always or only when your subscription runs out. It covers every chat, project, terminal, the Assistant and chat titles.
       </p>
 
-      {s.external && (
+      {s.external?.source === 'env' && (
         <div className="set-note">
           <Pill tone="green">In use</Pill>{' '}
           <span className="muted">
-            A gateway is already set up in {s.external.source === 'env' ? "this server's environment (.env)" : s.settingsPath}: {s.external.baseUrl}. You don't need to set it here.
+            A gateway is set up in this server's environment (.env): {s.external.baseUrl}. Chats use it until you pick an option below. From then on that choice alone decides.
           </span>
         </div>
       )}
-
-      <div className="set-row">
-        <div className="set-label">
-          <div>Use the AI gateway</div>
-          <div className="desc">{s.active ? 'On: new chats and helpers use the gateway. Running chats switch when they restart.' : 'Off: Claude Code uses its own login.'}</div>
+      {s.settingsGateway && (
+        <div className="set-note warn-box">
+          {s.external?.source === 'settings' ? <b>Chats use the gateway from {s.settingsPath} ({s.external.baseUrl}).</b> : <b>{s.settingsPath} also has a gateway.</b>}{' '}
+          {s.external?.source === 'settings' ? 'Move it here to control it from this page.' : 'Chats here ignore it and follow this page; Claude Code run directly on the host still uses it.'}{' '}
+          <Button size="sm" variant={s.external ? 'primary' : undefined} disabled={!!busy} onClick={takeOver}>
+            {busy === 'import' ? 'Moving…' : 'Move it here'}
+          </Button>
+          <div className="muted">Saves its address and key here, sets "Always", and removes those lines from settings.json (a copy is kept as settings.json.before-gateway). That file is shared with Claude Code on the host.</div>
         </div>
-        <Toggle
-          value={s.enabled}
-          label="Use the AI gateway"
-          disabled={!!busy || (!s.enabled && !canEnable)}
-          onChange={(v) => save(v && dirty ? { enabled: true, baseUrl: url, token: key || undefined } : { enabled: v }, 'enable')}
-        />
-      </div>
+      )}
+      {s.apiKeyHelper && !s.active && (
+        <p className="set-note warn-box">
+          <b>{s.settingsPath} sets apiKeyHelper</b>, so Claude Code takes its key from that helper instead of the Claude login. Remove it from that file to use your subscription.
+        </p>
+      )}
 
       <label className="set-field">
         <span>Gateway address</span>
-        <Input mono value={url} placeholder={s.defaultUrl} onChange={(e) => setUrl(e.target.value)} spellCheck={false} autoComplete="off" />
+        <Input mono value={url} placeholder="https://gateway.example.com/anthropic" onChange={(e) => setUrl(e.target.value)} spellCheck={false} autoComplete="off" />
       </label>
       <label className="set-field">
         <span>Your key {s.hasToken && <span className="muted">(saved, ends {s.tokenHint}; paste a new one to replace it)</span>}</span>
-        <Input mono type="password" value={key} placeholder={s.hasToken ? '••••••••••••' : 'Paste the key from get-key'} onChange={(e) => setKey(e.target.value)} spellCheck={false} autoComplete="new-password" />
+        <Input mono type="password" value={key} placeholder={s.hasToken ? '••••••••••••' : 'Paste your gateway key'} onChange={(e) => setKey(e.target.value)} spellCheck={false} autoComplete="new-password" />
       </label>
       <Checkbox className="set-check" checked={s.discovery} disabled={!!busy} onChange={(v) => save({ discovery: v }, 'discovery')}>
         List the gateway's models in the model picker
       </Checkbox>
-
       <div className="set-actions">
         <Button variant="primary" size="sm" disabled={!!busy || !dirty} onClick={() => save({ baseUrl: url, token: key || undefined }, 'save')}>
           {busy === 'save' ? 'Saving…' : 'Save'}
@@ -134,7 +150,7 @@ export function GatewaySettings({ onError, onChange }) {
           {busy === 'test' ? 'Testing…' : 'Test connection'}
         </Button>
         {s.hasToken && (
-          <Button size="sm" disabled={!!busy} onClick={() => save({ enabled: false, token: '' }, 'remove')}>
+          <Button size="sm" disabled={!!busy} onClick={() => save({ enabled: false, failover: { enabled: false }, token: '' }, 'remove')}>
             Remove key
           </Button>
         )}
@@ -145,17 +161,48 @@ export function GatewaySettings({ onError, onChange }) {
         </p>
       )}
 
-      {s.settingsConflicts.length > 0 && (s.active || s.enabled) && (
-        <div className="set-note warn-box">
-          <b>{s.settingsPath} overrides the gateway.</b> It sets {s.settingsConflicts.join(', ')}, which Claude Code applies on top of what this server passes, so requests skip the gateway (for example straight to Bedrock).{' '}
-          <Button size="sm" disabled={!!busy} onClick={fix}>
-            {busy === 'fix' ? 'Removing…' : 'Remove them'}
-          </Button>
-          <div className="muted">A copy of the old file is kept as settings.json.before-gateway. This file is shared with Claude Code on the host.</div>
+      <div className="set-row gw-mode">
+        <div className="set-label">
+          <div>Use the gateway</div>
+          <div className="desc">
+            {mode === 'always'
+              ? 'Every chat uses the gateway.'
+              : mode === 'fallback'
+                ? 'Chats use your Claude subscription, and move to the gateway only while a limit ticked below is reached. They come back when it resets.'
+                : 'Every chat uses your Claude subscription.'}{' '}
+            Open chats switch with their next message.
+          </div>
+        </div>
+        <div className={!canEnable && mode === 'off' ? 'disabled' : undefined} title={!canEnable && mode === 'off' ? 'Enter the address and key first' : undefined}>
+          <Segmented
+            options={[
+              ['off', 'Off'],
+              ['always', 'Always'],
+              ['fallback', 'As fallback'],
+            ]}
+            value={mode}
+            onChange={(m) => (m === 'off' || canEnable ? chooseMode(m) : null)}
+          />
+        </div>
+      </div>
+      {mode === 'fallback' && (
+        <div className="set-checks">
+          <span className="muted">Switch when the subscription reaches</span>
+          <Checkbox checked={s.failover.weekly} disabled={!!busy} onChange={(v) => save({ failover: { weekly: v } }, 'failover')}>
+            the weekly limit
+          </Checkbox>
+          <Checkbox checked={s.failover.fiveHour} disabled={!!busy} onChange={(v) => save({ failover: { fiveHour: v } }, 'failover')}>
+            the 5-hour limit
+          </Checkbox>
         </div>
       )}
-      {s.active && s.envConflicts.length > 0 && (
-        <p className="muted set-note">Not passed to Claude while the gateway is on: {s.envConflicts.join(', ')} (from this server's environment).</p>
+      {s.failoverUntil > 0 && (
+        <div className="set-note warn-box">
+          <b>The gateway is standing in now.</b> The subscription reached its {s.failoverKind === 'five_hour' ? '5-hour' : 'weekly'} limit, so every chat uses the gateway until it resets on {until(s.failoverUntil)}.{' '}
+          <Button size="sm" disabled={!!busy} onClick={() => post('/api/gateway/end-failover', 'end')}>
+            {busy === 'end' ? 'Switching…' : 'Back to subscription now'}
+          </Button>
+        </div>
       )}
       <p className="muted set-note">The key is kept in this server's data folder (gateway.json, readable only by its owner) and is never shown again. Claude's own tools in a chat can still see it in their environment, like any Claude Code key.</p>
     </>

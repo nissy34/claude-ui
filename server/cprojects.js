@@ -19,7 +19,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { config } from './config.js';
-import { gatewayMode } from './gateway.js';
+import { gatewayMode, failoverEngaged } from './gateway.js';
 import { changedFiles, createWorktree, isGitRepo, removeWorktree, worktreeMerged } from './git.js';
 import { prStatus } from './pr-status.js';
 import { rawUrl } from './artifacts.js';
@@ -1407,7 +1407,7 @@ export class Project {
         // nothing is lost and nothing retries in a loop until the user logs in and resumes.
         if (failed && AUTH_RE.test(ev.text)) this.authFailed(sid, ev.text);
         this.append({ type: 'turn.ended', body: { session: sid, cost: ev.cost || 0, tokens: ev.tokens || 0, isError: !!ev.isError, interrupted: ev.text === 'Interrupted' } });
-        if (failed && !AUTH_RE.test(ev.text)) this.append({ type: 'turn.failed', body: { session: sid, text: clipText(ev.text, 500) } });
+        if (failed && !AUTH_RE.test(ev.text) && !(s.failoverResume || failoverEngaged())) this.append({ type: 'turn.failed', body: { session: sid, text: clipText(ev.text, 500) } });
         this.afterTurn(s, ev);
         // The session is idle again: deliver what queued meanwhile (after its own inbox flush).
         this.schedulePump(400);
@@ -1489,6 +1489,8 @@ export class Project {
   }
 
   onSignal(s, kind, info) {
+    // The gateway failover took over: nothing waits for the reset (the session continues itself).
+    if (kind === 'rate_limit' && info?.status === 'rejected' && failoverEngaged()) return;
     if (kind === 'rate_limit' && info?.status === 'rejected' && info.resetsAt) {
       const until = info.resetsAt * 1000;
       if (!this.state.limit || this.state.limit.until !== until) this.append({ type: 'limit.hit', body: { until, session: s.id } });

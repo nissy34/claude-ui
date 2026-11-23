@@ -266,13 +266,15 @@ Desktop on another computer needs the server to listen on your network (`CW_HOST
 
 Talk to your agents from Microsoft Teams: permission prompts, questions and project decision cards show up in your Teams chat with yourself, and you answer by replying. You can also message a project's coordinator or start a chat in a folder from Teams. It is a separate small service (`teams-bridge/`) that only makes outbound calls (Microsoft Graph polling), so it works on a server with no inbound access. Setup and commands: [teams-bridge/README.md](teams-bridge/README.md).
 
-## Company AI gateway (Bifrost)
+## Company AI gateway
 
-To bill Claude to a company gateway instead of a Claude login, open **Settings > Account > AI gateway**, enter the gateway address (for Bifrost `https://bifrost.ai.synamedia.com/anthropic`) and your personal key (on a laptop: `bifrost-auth-macos get-key` or `bifrost-auth-linux get-key`), press **Test connection**, then turn **Use the AI gateway** on.
+To send Claude's requests through an Anthropic-compatible company gateway with a personal key, open **Settings > Account > AI gateway**, enter the gateway address (usually ending in `/anthropic`) and your key, press **Test connection**, and pick **Use the gateway**:
 
-Every claude process the server starts (chats, project threads, terminals, the Assistant, chat titles, model list) then gets `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN` and `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1`, and loses `CLAUDE_CODE_USE_BEDROCK`, `AWS_BEARER_TOKEN_BEDROCK`, `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN` and the `ANTHROPIC_*MODEL` pins from the server's own environment. The model picker shows the gateway's models ("From gateway"). Turning it off goes back to the Claude login, which is never touched. The key is kept in `~/.claude-web/gateway.json` (mode 600) and is never sent back to the browser.
+- **Off**: every chat uses the Claude subscription (the Claude login is never touched).
+- **Always**: every chat uses the gateway.
+- **As fallback**: chats use the subscription and move to the gateway only while it is out of its usage limit, then come back when the limit resets. The weekly limit is ticked by default, the 5-hour limit is not. **Back to subscription now** ends it early.
 
-`~/.claude/settings.json` "env" wins over the environment the server passes, so Settings warns when it still sets `CLAUDE_CODE_USE_BEDROCK`, `AWS_*`, `ANTHROPIC_MODEL` or another gateway, and can remove them (keeping `settings.json.before-gateway`). Setting the three variables in `.env` or in `settings.json` by hand also works; Settings then shows the gateway as set up outside the UI.
+Open chats switch with their next message. When the gateway is in use, every claude process the server starts (chats, project threads, terminals, the Assistant, chat titles, model list) gets `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN` and `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1`, and the model picker shows the gateway's models ("From gateway"). The choice is also passed as `--settings` env, which wins over `~/.claude/settings.json` and `.env`, so Bedrock or another gateway configured there can't override it. The key is kept in `~/.claude-web/gateway.json` (mode 600) and is never sent back to the browser.
 
 ## Configuration
 

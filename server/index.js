@@ -30,7 +30,7 @@ import { listArtifacts, publishArtifact, rawHandler, rawUrl, writtenPaths } from
 import * as admin from './claude-admin.js';
 import { McpAdmin, onSignedIn, stopAllAdmins } from './mcp-admin.js';
 import { tokenKeeper } from './token-keeper.js';
-import { gatewayStatus, setGateway, gatewayModels, fixSettingsConflicts } from './gateway.js';
+import { gatewayStatus, setGateway, gatewayModels, fixSettingsConflicts, importFromSettings, onGatewayChange, endFailover, startFailoverTimer } from './gateway.js';
 import { getModels } from './models.js';
 import { sideChat } from './side-chat.js';
 import { prStatus, mergeWhenReady } from './pr-status.js';
@@ -1215,7 +1215,7 @@ app.put(
   wrap(async (req, res) => {
     const b = req.body || {};
     const pick = (k) => (b[k] === undefined ? undefined : b[k]);
-    res.json(setGateway({ enabled: pick('enabled'), baseUrl: pick('baseUrl'), token: pick('token'), discovery: pick('discovery') }));
+    res.json(setGateway({ enabled: pick('enabled'), baseUrl: pick('baseUrl'), token: pick('token'), discovery: pick('discovery'), failover: pick('failover') }));
   })
 );
 app.post(
@@ -1230,6 +1230,14 @@ app.post(
     }
   })
 );
+app.post('/api/gateway/end-failover', wrap(async (req, res) => res.json(endFailover())));
+app.post('/api/gateway/import', wrap(async (req, res) => res.json(importFromSettings())));
+// Switching the gateway restarts every chat's claude process (now if idle, else after its turn)
+// so running chats move to the new sign-in with their next message; --resume keeps the chat.
+onGatewayChange(() => {
+  for (const s of store.sessions.values()) if (s.meta.kind === 'chat' && s.running) s.restartForEnv?.();
+  for (const a of McpAdmin.all()) if (a.proc && !a.oauthWaiting() && !a.elicits?.size) a.stop();
+});
 app.post('/api/gateway/fix-settings', wrap(async (req, res) => res.json({ ...fixSettingsConflicts(), status: gatewayStatus() })));
 app.get('/api/claude/status', wrap(async (req, res) => res.json({ auth: await authStatus(), gateway: gatewayStatus(), version: await cliVersion(), dataDir: config.dataDir, projectsRoot: config.projectsRoot, node: process.version, platform: process.platform })));
 app.get('/api/claude/mcp', wrap(async (req, res) => res.json(await mcpList(req.query.cwd ? resolveDir(req.query.cwd) : config.projectsRoot))));
@@ -1530,6 +1538,7 @@ server.listen(config.port, config.host, () => {
   startPrSweep(store);
   tokenKeeper.start();
   startCleanup();
+  startFailoverTimer();
   const h = ['0.0.0.0', '::', ''].includes(config.host) ? '127.0.0.1' : config.host.includes(':') ? `[${config.host}]` : config.host;
   config.internalUrl = `http://${h}:${config.port}`;
   console.log(`claude-web listening on http://${config.host}:${config.port}`);

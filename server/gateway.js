@@ -1,4 +1,4 @@
-// Company AI gateway mode (for example Bifrost): every claude process this server starts talks
+// Company AI gateway mode: every claude process this server starts talks
 // to an Anthropic-compatible gateway with a personal key instead of a Claude login or Bedrock.
 //
 // Same three variables the gateway's own setup puts in ~/.claude/settings.json on a machine with
@@ -30,16 +30,15 @@ const MODEL_PINS = ['ANTHROPIC_MODEL', 'ANTHROPIC_SMALL_FAST_MODEL', 'ANTHROPIC_
 // they break gateway mode even though we remove them from the environment.
 const SETTINGS_CONFLICTS = [...CONFLICT_ENV, 'AWS_PROFILE', 'AWS_REGION', 'ANTHROPIC_MODEL', 'ANTHROPIC_BASE_URL', 'ANTHROPIC_AUTH_TOKEN'];
 
-export const DEFAULT_URL = 'https://bifrost.ai.synamedia.com/anthropic';
 
 let cached;
 function load() {
   if (cached !== undefined) return cached;
   try {
     const j = JSON.parse(fs.readFileSync(FILE(), 'utf8'));
-    cached = { enabled: !!j.enabled, baseUrl: String(j.baseUrl || ''), token: String(j.token || ''), discovery: j.discovery !== false };
+    cached = { enabled: !!j.enabled, baseUrl: String(j.baseUrl || ''), token: String(j.token || ''), discovery: j.discovery !== false, failover: failoverCfg(j.failover), failoverUntil: Number(j.failoverUntil) || 0, failoverKind: String(j.failoverKind || ''), saved: true };
   } catch {
-    cached = { enabled: false, baseUrl: '', token: '', discovery: true };
+    cached = { enabled: false, baseUrl: '', token: '', discovery: true, failover: failoverCfg(), failoverUntil: 0, failoverKind: '', saved: false };
   }
   return cached;
 }
@@ -47,12 +46,14 @@ function load() {
 function save(c) {
   fs.mkdirSync(config.dataDir, { recursive: true });
   const tmp = FILE() + '.tmp';
+  c = { enabled: c.enabled, baseUrl: c.baseUrl, token: c.token, discovery: c.discovery, failover: c.failover, failoverUntil: c.failoverUntil || 0, failoverKind: c.failoverKind || '' };
   fs.writeFileSync(tmp, JSON.stringify(c, null, 2), { mode: 0o600 });
   fs.renameSync(tmp, FILE());
   try {
     fs.chmodSync(FILE(), 0o600);
   } catch {}
-  cached = c;
+  cached = { ...c, saved: true };
+  scheduleFailoverEnd();
   for (const fn of listeners) {
     try {
       fn();
@@ -69,11 +70,88 @@ export function onGatewayChange(fn) {
 /** True when the UI's gateway setting is on and complete. */
 export function gatewayActive() {
   const c = load();
-  return !!(c.enabled && c.baseUrl && c.token);
+  return !!((c.enabled || failoverEngaged()) && c.baseUrl && c.token);
 }
 
-/** Gateway set up outside the UI: in the server's environment or ~/.claude/settings.json. */
+// ---- Failover: the gateway steps in while the subscription's usage limit is reached ----
+// On by choice; once on, it triggers on the weekly limits only, unless the 5-hour one is ticked too.
+function failoverCfg(f = {}) {
+  return { enabled: !!f.enabled, weekly: f.weekly !== false, fiveHour: !!f.fiveHour };
+}
+
+/** The gateway is standing in for the subscription right now (until its limit resets). */
+export function failoverEngaged() {
+  const c = load();
+  return !!(c.failover.enabled && !c.enabled && c.failoverUntil > Date.now() && c.baseUrl && c.token);
+}
+
+/** Which limit a rate_limit_event's info is about: 'weekly', 'five_hour' or ''. */
+export function limitKind(info) {
+  const t = String(info?.rateLimitType || '');
+  if (t.startsWith('seven_day')) return 'weekly';
+  if (t === 'five_hour') return 'five_hour';
+  return '';
+}
+
+/**
+ * A chat saw the CLI's rate_limit_event. If the subscription is now blocked by a limit the
+ * failover covers, switch every chat to the gateway until it resets. Returns true when this
+ * event made the gateway step in (or moved its end later).
+ */
+export function onRateLimit(info) {
+  const c = load();
+  if (!c.failover.enabled || c.enabled || !c.baseUrl || !c.token) return false;
+  // Rejected and not carried by extra usage (overage): the subscription can't answer.
+  if (info?.status !== 'rejected' || info.isUsingOverage || !info.resetsAt) return false;
+  const kind = limitKind(info);
+  if (!((kind === 'weekly' && c.failover.weekly) || (kind === 'five_hour' && c.failover.fiveHour))) return false;
+  const until = Number(info.resetsAt) * 1000;
+  if (!(until > Date.now()) || (failoverEngaged() && until <= c.failoverUntil)) return false;
+  save({ ...c, failoverUntil: until, failoverKind: kind });
+  return true;
+}
+
+let endTimer = null;
+function scheduleFailoverEnd() {
+  clearTimeout(endTimer);
+  const c = load();
+  if (!c.failoverUntil) return;
+  const ms = c.failoverUntil - Date.now();
+  // Past its end: back to the subscription (the next limit, if any, switches again).
+  if (ms <= 0) return endFailover();
+  endTimer = setTimeout(scheduleFailoverEnd, Math.min(ms + 1000, 2 ** 31 - 1));
+  endTimer.unref?.();
+}
+
+/** Back to the subscription now (the limit reset, or the user asked). */
+export function endFailover() {
+  const c = load();
+  if (!c.failoverUntil) return gatewayStatus();
+  save({ ...c, failoverUntil: 0, failoverKind: '' });
+  return gatewayStatus();
+}
+
+/** Called once at start: picks up a failover that was running before a restart. */
+export function startFailoverTimer() {
+  scheduleFailoverEnd();
+}
+
+// The gateway's own variables. Once the switch has been turned off in the UI they are also
+// removed from the server's environment (.env), so "off" really means the Claude login.
+const GATEWAY_ENV = ['ANTHROPIC_BASE_URL', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY'];
+
+/** Turned off in the UI (saved), as opposed to never set up here. */
+function switchedOff() {
+  const c = load();
+  return c.saved && !gatewayActive();
+}
+
+/**
+ * Gateway set up outside the UI (.env or ~/.claude/settings.json). It applies only until the
+ * switch here is used: from then on the switch decides (see gatewaySettingsEnv).
+ */
 function externalGateway() {
+  if (switchedOff()) return null;
   if (process.env.ANTHROPIC_BASE_URL && process.env.ANTHROPIC_AUTH_TOKEN) return { source: 'env', baseUrl: process.env.ANTHROPIC_BASE_URL };
   const e = settingsEnv();
   if (e.ANTHROPIC_BASE_URL && e.ANTHROPIC_AUTH_TOKEN) return { source: 'settings', baseUrl: e.ANTHROPIC_BASE_URL };
@@ -82,6 +160,7 @@ function externalGateway() {
 
 /** Any gateway in use (the UI's, or one configured by hand): the Claude login doesn't matter then. */
 export function gatewayMode() {
+  if (failoverEngaged()) return { source: 'failover', baseUrl: load().baseUrl, until: load().failoverUntil, kind: load().failoverKind };
   if (gatewayActive()) return { source: 'ui', baseUrl: load().baseUrl };
   return externalGateway();
 }
@@ -129,6 +208,25 @@ export function fixSettingsConflicts() {
   return { removed: keys, backup: f + '.before-gateway' };
 }
 
+/**
+ * Move a gateway written by hand into ~/.claude/settings.json (as the gateway's own setup does)
+ * into this server's setting, so the switch here can turn it off. A copy of the old file is kept.
+ */
+export function importFromSettings() {
+  const s = readSettings();
+  const e = s?.env || {};
+  if (!e.ANTHROPIC_BASE_URL || !e.ANTHROPIC_AUTH_TOKEN) throw new Error('No gateway in settings.json to take over.');
+  const c = { ...load(), enabled: true, baseUrl: trimUrl(e.ANTHROPIC_BASE_URL), token: String(e.ANTHROPIC_AUTH_TOKEN).trim() };
+  if ('CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY' in e) c.discovery = e.CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY !== '0';
+  const f = settingsFile();
+  fs.copyFileSync(f, f + '.before-gateway');
+  for (const k of GATEWAY_ENV) delete s.env[k];
+  if (!Object.keys(s.env).length) delete s.env;
+  fs.writeFileSync(f, JSON.stringify(s, null, 2) + '\n');
+  save(c);
+  return gatewayStatus();
+}
+
 function trimUrl(u) {
   return String(u || '').trim().replace(/\/+$/, '');
 }
@@ -146,20 +244,26 @@ export function gatewayStatus() {
     enabled: c.enabled,
     active: gatewayActive(),
     baseUrl: c.baseUrl,
-    defaultUrl: DEFAULT_URL,
     hasToken: !!c.token,
     tokenHint: hint(c.token),
     discovery: c.discovery,
+    failover: c.failover,
+    failoverUntil: failoverEngaged() ? c.failoverUntil : 0,
+    failoverKind: failoverEngaged() ? c.failoverKind : '',
     mode: gatewayMode(),
     external: ext && !gatewayActive() ? ext : null,
     settingsConflicts: settingsConflicts(),
     envConflicts,
     settingsPath: settingsFile(),
+    // An apiKeyHelper (another way to hand Claude Code a key) also skips the Claude login.
+    apiKeyHelper: !!readSettings()?.apiKeyHelper,
+    // A gateway written into settings.json by hand (ignored by chats here once the switch is used).
+    settingsGateway: !!(settingsEnv().ANTHROPIC_BASE_URL && settingsEnv().ANTHROPIC_AUTH_TOKEN),
   };
 }
 
 /** Update the setting. token: undefined keeps the saved key, '' removes it. */
-export function setGateway({ enabled, baseUrl, token, discovery }) {
+export function setGateway({ enabled, baseUrl, token, discovery, failover }) {
   const c = { ...load() };
   if (baseUrl !== undefined) {
     const u = trimUrl(baseUrl);
@@ -173,7 +277,15 @@ export function setGateway({ enabled, baseUrl, token, discovery }) {
   }
   if (discovery !== undefined) c.discovery = !!discovery;
   if (enabled !== undefined) c.enabled = !!enabled;
-  if (c.enabled && (!c.baseUrl || !c.token)) throw new Error('Enter the gateway address and your key first.');
+  if (failover !== undefined) {
+    c.failover = failoverCfg({ ...c.failover, ...failover });
+    // Failover turned off, or a limit kind it was standing in for unticked: back to the subscription.
+    if (!c.failover.enabled || (c.failoverKind === 'weekly' && !c.failover.weekly) || (c.failoverKind === 'five_hour' && !c.failover.fiveHour)) {
+      c.failoverUntil = 0;
+      c.failoverKind = '';
+    }
+  }
+  if ((c.enabled || c.failover.enabled) && (!c.baseUrl || !c.token)) throw new Error('Enter the gateway address and your key first.');
   save(c);
   return gatewayStatus();
 }
@@ -185,7 +297,10 @@ export function setGateway({ enabled, baseUrl, token, discovery }) {
  */
 export function applyGateway(env, extra = {}) {
   for (const k of PRIVATE_ENV) delete env[k];
-  if (!gatewayActive()) return env;
+  if (!gatewayActive()) {
+    if (switchedOff()) for (const k of GATEWAY_ENV) if (!(k in extra)) delete env[k];
+    return env;
+  }
   const c = load();
   for (const k of CONFLICT_ENV) delete env[k];
   for (const k of MODEL_PINS) if (!(k in extra)) delete env[k];
@@ -194,6 +309,46 @@ export function applyGateway(env, extra = {}) {
   if (c.discovery) env.CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY = '1';
   else delete env.CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY;
   return env;
+}
+
+/**
+ * The same choice as settings for a claude session's --settings flag. Claude Code applies the
+ * "env" of ~/.claude/settings.json (and a project's .claude/settings*.json) over the environment
+ * we pass, but --settings over those, so this is what makes the switch win whatever those files
+ * say. An empty value unsets a variable. The key itself only goes in here when settings.json has
+ * a key of its own to override (it is in the environment already otherwise).
+ */
+export function gatewaySettingsEnv() {
+  const c = load();
+  if (gatewayActive()) {
+    const out = Object.fromEntries(CONFLICT_ENV.map((k) => [k, '']));
+    out.ANTHROPIC_BASE_URL = c.baseUrl;
+    out.CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY = c.discovery ? '1' : '';
+    if (settingsEnv().ANTHROPIC_AUTH_TOKEN) out.ANTHROPIC_AUTH_TOKEN = c.token;
+    return out;
+  }
+  if (switchedOff()) return Object.fromEntries([...GATEWAY_ENV, 'CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_USE_FOUNDRY'].map((k) => [k, '']));
+  return null;
+}
+
+/** Add gatewaySettingsEnv() to a claude session's arguments (merged into a --settings already there). */
+export function withGatewayArgs(args) {
+  const genv = gatewaySettingsEnv();
+  if (!genv) return args;
+  const out = [...args];
+  const i = out.lastIndexOf('--settings');
+  if (i >= 0 && i + 1 < out.length) {
+    let s;
+    try {
+      s = JSON.parse(out[i + 1]);
+    } catch {}
+    if (s && typeof s === 'object') {
+      out[i + 1] = JSON.stringify({ ...s, env: { ...(s.env || {}), ...genv } });
+      return out;
+    }
+  }
+  out.push('--settings', JSON.stringify({ env: genv }));
+  return out;
 }
 
 /** The environment for a claude process: the server's own, plus `extra`, in gateway mode if on. */
@@ -221,7 +376,7 @@ export async function gatewayModels(override = {}) {
     const why = e?.cause?.code || e?.name || e?.message || 'error';
     throw new Error(`Could not reach the gateway (${why}). If it is on the company network, check this server can reach it (VPN).`);
   }
-  if (r.status === 401 || r.status === 403) throw new Error(`The gateway refused the key (HTTP ${r.status}). Get a new one with "bifrost-auth get-key" on your laptop.`);
+  if (r.status === 401 || r.status === 403) throw new Error(`The gateway refused the key (HTTP ${r.status}). Check the key, or get a new one from your gateway.`);
   if (!r.ok) throw new Error(`The gateway answered HTTP ${r.status}.`);
   let j;
   try {

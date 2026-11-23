@@ -1009,3 +1009,6 @@ body.pane-dragging iframe { pointer-events: none; }
 .warn-box b { color: var(--warn); }
 .warn-box .muted { margin-top: var(--sp-1); font-size: var(--fs-sm); }
 .set-check { margin-top: var(--sp-2h); }
+.set-checks { display: flex; flex-wrap: wrap; gap: var(--sp-2) var(--sp-4); padding: 0 0 var(--sp-3); border-bottom: 1px solid var(--line); }
+.gw-mode .disabled { opacity: .5; }
+.set-checks > .muted { font-size: var(--fs-md); }
