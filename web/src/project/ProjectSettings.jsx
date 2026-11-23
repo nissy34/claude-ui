@@ -316,10 +316,10 @@ export function ProjectSettingsModal({ project, section, setSection, onClose, on
                 <div className="muted small pjs-count">{(s.goal || '').length} / 8,000</div>
               </Row>
               <h4>Models</h4>
-              <Row label="Coordinator" hint="Routes work; short turns">
+              <Row label="Coordinator" hint="Routes work; short turns. Also switchable from the project chat box">
                 <ModelPicker label="" value={s.models.coordinator} onChange={(v) => set({ ...s, models: { ...s.models, coordinator: v } })} />
               </Row>
-              <Row label="Threads" hint="Do the work">
+              <Row label="New threads" hint="The default for threads started from now on. Switch a running thread from its own box">
                 <ModelPicker label="" value={s.models.thread} onChange={(v) => set({ ...s, models: { ...s.models, thread: v } })} />
               </Row>
               <hr />

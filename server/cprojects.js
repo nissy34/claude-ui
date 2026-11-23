@@ -279,6 +279,9 @@ export function reduce(st, ev) {
     case 'thread.reopened':
       if (t) t.resolved = false;
       break;
+    case 'thread.model':
+      if (t) t.model = ev.body.model || null;
+      break;
     case 'thread.stopped':
       if (t) t.stopped = true;
       if (ev.body?.dropped) st.queue[ev.thread] = (st.queue[ev.thread] || []).filter((q) => !ev.body.dropped.includes(q.e));
@@ -1918,6 +1921,18 @@ export class ProjectEngine {
     if (resolved && !t.resolved) p.append({ type: 'thread.resolved', thread: sid, from: { kind: by, ...(by === 'thread' ? { id: sid } : {}) }, trust: by === 'user' ? 'principal' : 'relay', body: inThread ? { inThread: true } : {} });
     if (!resolved && t.resolved) p.append({ type: 'thread.reopened', thread: sid, from: { kind: by }, trust: by === 'user' ? 'principal' : 'relay', body: {} });
     return t;
+  }
+
+  /** Switch a thread's model. A running thread keeps its session and uses the new model from its next turn. */
+  async setThreadModel(p, sid, model, { by = 'user' } = {}) {
+    const t = p.state.threads[sid];
+    if (!t) throw new Error('No such thread');
+    const s = this.store.get(sid);
+    if (!s) throw new Error('That thread has no session');
+    model = String(model || '').trim().slice(0, 100);
+    if (model === 'default') model = '';
+    await s.setModel(model);
+    p.append({ type: 'thread.model', thread: sid, from: { kind: by }, trust: by === 'user' ? 'principal' : 'relay', body: { model: s.meta.model || null } });
   }
 
   async stopThread(p, sid, { by = 'user' } = {}) {

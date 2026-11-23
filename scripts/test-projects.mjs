@@ -137,6 +137,28 @@ async function main() {
     return d.threads.find((t) => t.id === B.id).status === 'resolved' && d.threads.find((t) => t.id === A.id).status === 'idle' && d;
   }, 15_000, 'both threads done');
   check(true, 'both threads ran in parallel; B resolved itself');
+
+  console.log('Switch models on demand: a thread and the coordinator, same sessions');
+  {
+    const r = await api(`/api/cprojects/${id}/threads/${A.id}/model`, { method: 'POST', body: { model: 'opus' } });
+    check(r.thread.id === A.id && r.thread.model === 'opus', 'the thread shows its new model', r.thread);
+    const s = (await api('/api/sessions')).sessions.find((x) => x.id === A.id);
+    check(s.model === 'opus' && s.effort === 'medium', 'the same thread session switched model and kept its effort', s);
+    const d = await detail(id);
+    check(d.threads.length === 2 && d.settings.models.thread.model === 'sonnet', 'no new thread, and the project default for new threads is unchanged', d.settings.models);
+    await api(`/api/cprojects/${id}/threads/${A.id}/model`, { method: 'POST', body: { model: '' } });
+    check((await detail(id)).threads.find((t) => t.id === A.id).model === null, 'picking Default clears the thread model');
+    await api(`/api/cprojects/${id}/threads/${A.id}/model`, { method: 'POST', body: { model: 'opus' } });
+    await api(`/api/cprojects/${id}`, { method: 'PATCH', body: { models: { coordinator: { model: 'sonnet' } } } });
+    const c = (await api('/api/sessions')).sessions.find((x) => x.id === project.coordinatorId);
+    check(c.model === 'sonnet' && c.effort === 'low', 'the coordinator switched model in place and kept its effort', c);
+    await until(() => fakeLog().some((l) => l.sessionId && l.setModel === 'sonnet'), 5000, 'set_model sent to the running coordinator');
+    check(true, 'a running coordinator gets the new model without a restart');
+    await api(`/api/cprojects/${id}`, { method: 'PATCH', body: { models: { thread: { model: 'haiku' } } } });
+    const d2 = await detail(id);
+    check(d2.settings.models.thread.model === 'haiku' && d2.settings.models.thread.effort === 'medium', 'the project default for new threads changes on its own', d2.settings.models.thread);
+    await api(`/api/cprojects/${id}`, { method: 'PATCH', body: { models: { thread: { model: 'sonnet' } } } });
+  }
   const ev = await until(async () => {
     const log = fs.readFileSync(path.join(env.CW_DATA_DIR, 'cprojects', id, 'events.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
     const coordWakes = log.filter((e) => e.type === 'wake.sent' && e.body.session === project.coordinatorId);
