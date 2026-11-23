@@ -1,7 +1,7 @@
 // Keeps a small copy of each chat's pull request in its meta (meta.pr), so the sidebar can show
 // PR state icons and a "Done" label without asking gh for every row. Refreshed when a chat's PR
 // is opened in the UI, shortly after a turn ends, and by a slow background sweep of recent chats.
-import { prStatus, chatTexts } from './pr-status.js';
+import { prStatus } from './pr-status.js';
 import { sessionExtras } from './environments.js';
 
 const SWEEP_MS = 3 * 60_000;
@@ -10,13 +10,13 @@ const MAX_SWEEP = 30;
 let ghMissingUntil = 0;
 const inFlight = new Map();
 
-/** What prStatus needs from a chat: its environment's variables (gh signs in the same way as in the chat) and its text (PR links). */
+/** The chat environment's variables for gh (GH_HOST, GH_ENTERPRISE_TOKEN, ...), so it signs in as it does in the chat. */
 export function prOpts(s) {
-  let env = {};
   try {
-    env = sessionExtras(s.meta).env;
-  } catch {}
-  return { env, texts: chatTexts(s.events) };
+    return { env: sessionExtras(s.meta).env };
+  } catch {
+    return {};
+  }
 }
 
 function brief(pr) {
@@ -26,7 +26,7 @@ function brief(pr) {
 
 /** Store a prStatus() result on the session; saves only when something the sidebar shows changed. */
 export function rememberPr(s, status, store) {
-  if (!s || !status?.available || status.error || status.note) return;
+  if (!s || !status?.available || status.error) return;
   const next = brief(status.pr);
   const prev = s.meta.pr || null;
   if (JSON.stringify(prev) === JSON.stringify(next)) return;
@@ -41,7 +41,7 @@ export async function refreshPr(s, store) {
   if (inFlight.has(s.meta.id)) return inFlight.get(s.meta.id);
   const p = prStatus(cwd, prOpts(s))
     .then((st) => {
-      if (!st.available || st.note) ghMissingUntil = Date.now() + 30 * 60_000; // gh missing or signed out: back off
+      if (!st.available) ghMissingUntil = Date.now() + 30 * 60_000; // gh missing or signed out: back off
       rememberPr(s, st, store);
     })
     .catch(() => {})

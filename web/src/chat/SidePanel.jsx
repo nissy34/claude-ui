@@ -32,21 +32,6 @@ export function PrCard({ sessionId, refreshKey, onPrompt, busy, onError }) {
   const pr = st.pr;
   // gh answered with something unexpected: say so instead of showing nothing.
   if (!pr) return st.error ? <div className="pr-card card muted pr-note" title={st.error}>Couldn't check for a pull request: {st.error}</div> : null;
-  // gh can't be used, but the chat linked to this repository's PR: show the link and why there's no status.
-  if (pr.linkOnly)
-    return (
-      <div className="pr-card card">
-        <div className="pr-top">
-          <a href={pr.url} target="_blank" rel="noreferrer" className="pr-title" title={pr.url}>
-            PR #{pr.number}
-          </a>
-          <IconButton title="Refresh" onClick={load}>
-            ↻
-          </IconButton>
-        </div>
-        {st.note && <div className="pr-meta muted">No checks or status: {st.note}</div>}
-      </div>
-    );
   const { pass, fail, pending: pend } = pr.summary;
   const merge = async () => {
     if (!(await confirmDialog(`Turn on auto-merge (squash) for PR #${pr.number}? GitHub merges it once checks and reviews pass.`, { ok: 'Turn on' }))) return;
