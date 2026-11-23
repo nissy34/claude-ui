@@ -3,6 +3,7 @@ import { api, timeAgo } from '../api.js';
 import { Button, IconButton, Input, Menu, Modal, ModalBody, ModalFoot, ModalHead, Pill, Segmented, Spinner, Textarea, useDismiss } from '../ui/index.jsx';
 import { DecisionCard, Md, StatusPill, SuggestionCard, ThreadCard } from './ProjectCards.jsx';
 import { confirmDialog, promptDialog } from '../ui/dialogs.jsx';
+import { useResizable } from '../ui/resizable.jsx';
 import { ProjectSettingsModal } from './ProjectSettings.jsx';
 import { ProjectUsageRing } from './ProjectUsage.jsx';
 import ProjectPanel, { PrChip, StatusIcon } from './ProjectPanel.jsx';
@@ -15,6 +16,7 @@ import './project.css';
 export default function ProjectView({ projectId, tab: initialTab, thread: initialThread, onSelect, onCreate, onMenu, onError, onDeleted, projects }) {
   const [project, reload] = useProject(projectId, onError);
   const narrow = useNarrow();
+  const resize = useResizable('pj-panel', { edge: 'left', min: 320, max: () => window.innerWidth - 420, label: 'Resize threads panel' });
   // Right panel: Threads or Context; a thread opens in place. On a phone the panel is a view of its own.
   const [panel, setPanelState] = useState(['context', 'view'].includes(initialTab) ? initialTab : 'threads');
   const [threadId, setThreadId] = useState(initialThread || null);
@@ -84,7 +86,8 @@ export default function ProjectView({ projectId, tab: initialTab, thread: initia
         </div>
       )}
       {showPanel && (
-        <div className="pj-right">
+        <div className="pj-right" ref={resize.ref} style={resize.style}>
+          {resize.handle}
           {narrow && (
             <div className="pj-mobile-back">
               <button className="linklike" onClick={() => setMobileView('chat')}>

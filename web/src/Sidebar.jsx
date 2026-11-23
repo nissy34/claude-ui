@@ -3,6 +3,7 @@ import { api, timeAgo } from './api.js';
 import { getThemePref, setThemePref } from './theme.js';
 import { Button, IconButton, Menu, Modal, ModalHead, useDismiss } from './ui/index.jsx';
 import { promptDialog } from './ui/dialogs.jsx';
+import { useResizable } from './ui/resizable.jsx';
 import { deleteChat } from './chat/deleteChat.js';
 import { ProjectList } from './project/ProjectView.jsx';
 import { PrIcon } from './project/ProjectPanel.jsx';
@@ -207,6 +208,7 @@ export default function Sidebar({ sessions, activeId, onSelect, onCreate, onNewC
 
   const asideRef = React.useRef(null);
   useDismiss(!!menu, () => setMenu(null), asideRef);
+  const resize = useResizable('sidebar', { edge: 'right', min: 200, max: 480, label: 'Resize sidebar', ref: asideRef });
 
   // Shortcut letters work while a row's menu is open, like the desktop app.
   React.useEffect(() => {
@@ -224,7 +226,8 @@ export default function Sidebar({ sessions, activeId, onSelect, onCreate, onNewC
   const cap = (t) => t[0].toUpperCase() + t.slice(1);
 
   return (
-    <aside className="sidebar" ref={asideRef}>
+    <aside className="sidebar" ref={asideRef} style={resize.style}>
+      {resize.handle}
       <div className="side-head">
         <div className="brand">
           <span className="mark sm">&gt;_</span> Claude Web
