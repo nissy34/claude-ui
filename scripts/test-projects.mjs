@@ -274,6 +274,13 @@ async function main() {
   check(true, 'steering a thread from the project page delivers to that thread');
   const sfeed = (await api(`/api/cprojects/${q.id}/threads/${T1.id}/feed`)).feed;
   check(sfeed.some((e) => e.type === 'user.message' && e.body.where === 'steer'), 'the steer message shows in the thread feed', sfeed.map((e) => e.type));
+  const steered = sfeed.find((e) => e.type === 'thread.post' && e.body.text === 'steered done');
+  check(steered?.body.inThread && !(steered.to || []).length, "a thread's answer to the user talking in it does not wake the coordinator", steered);
+  await api(`/api/cprojects/${q.id}/threads/${T1.id}/message`, { method: 'POST', body: { text: 'STEER-AUTO just say hi\n@@say hi from the thread' } });
+  const autoPost = await until(async () => (await api(`/api/cprojects/${q.id}/threads/${T1.id}/feed`)).feed.find((e) => e.type === 'thread.post' && e.body.auto && e.body.text.includes('hi from the thread')), 10_000, 'steered plain reply');
+  check(autoPost.body.inThread && !(autoPost.to || []).length, 'a plain reply to the user in a thread stays in that thread too', autoPost);
+  await sleep(1000);
+  check(!fakeLog().some((l) => l.prompt?.includes('hi from the thread') && l.prompt.includes('<project-wake') && !l.prompt.includes('STEER-AUTO')), 'the coordinator is not handed the in-thread reply');
   const side = await api(`/api/cprojects/${q.id}/threads/${T1.id}/side`, { method: 'POST', body: { question: `what is up?\n${call('post_message', { kind: 'result', text: 'side answer' })}` } });
   check(side.thread?.sideOf === T1.id && side.thread.cwd === T1.cwd, 'a side question forks the thread and uses its worktree', side.thread);
   qd = await until(async () => {
@@ -413,7 +420,8 @@ async function aboutLabel() {
   await until(() => fakeLog().some((l) => l.prompt?.includes('<project-wake') && l.prompt.includes('from thread "Funny custom view"')), 12_000, 'new thread reported');
   await until(async () => { const x = await detail(r.id); return !x.coordinatorBusy && !x.coordinator?.queued; }, 12_000, 'coordinator idle');
   // (The thread's result text is a directive line, which the fake coordinator runs when the wake relays it.)
-  await api(`/api/cprojects/${r.id}/threads/${T.id}/message`, { method: 'POST', body: { text: call('post_message', { kind: 'result', text: `\n${call('post_message', { text: 'LABEL-RELAY' })}\n` }) } });
+  // (Handed over by the coordinator: a reply to the user steering the thread directly would stay in the thread.)
+  await api(`/api/cprojects/${r.id}/messages`, { method: 'POST', body: { text: [call('post_message', { text: 'LABEL-ASKED' }), call('message_thread', { thread_id: T.id, text: call('post_message', { kind: 'result', text: `\n${call('post_message', { text: 'LABEL-RELAY' })}\n` }) })].join('\n') } });
   const d2 = await until(async () => { const x = await detail(r.id); return x.feed.some((e) => e.type === 'chat.post' && e.body.text === 'LABEL-RELAY') && x; }, 12_000, 'relay post');
   const relay = d2.feed.find((e) => e.type === 'chat.post' && e.body.text === 'LABEL-RELAY');
   check(relay.body.about === T.id && !relay.body.ack, "a post in a wake with only one thread's news is labeled with that thread", { about: relay.body.about, wake: fakeLog().filter((l) => l.prompt?.includes('LABEL-RELAY') && l.prompt.includes('<project-wake')).map((l) => l.prompt.slice(-1500)) });

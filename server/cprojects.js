@@ -111,6 +111,11 @@ function slug(s) {
   return String(s || 'thread').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || 'thread';
 }
 
+/** How a thread post relates to the user typing in that thread: inThread = it answers them there (no coordinator wake); userSaw = they wrote mid-turn and will read it there. */
+function seenBody(info) {
+  return info?.inThread ? { inThread: true } : info?.userSaw ? { userSaw: true } : {};
+}
+
 function clipText(s, n) {
   s = String(s ?? '');
   return s.length > n ? s.slice(0, n) + '…' : s;
@@ -594,6 +599,7 @@ export class Project {
         return [{ s: ev.thread }];
       case 'thread.post':
         if (this.state.threads[ev.thread]?.sideOf) return []; // a side question: the answer is for the user, in its own thread
+        if (ev.body.inThread) return []; // answers the user who is talking in that thread: they read it there (the board shows it)
         if (ev.body.kind === 'progress') return pro === 'chatty' ? coord({ batch: true }) : [];
         if (ev.body.kind === 'result') return pro === 'quiet' ? [] : coord({ batch: true });
         return coord({ batch: true }); // blocker, question
@@ -601,7 +607,7 @@ export class Project {
         if (ev.body.to === c) return coord({ batch: ev.from?.kind === 'thread' && !ev.body.urgent });
         return [{ s: ev.body.to }];
       case 'thread.resolved':
-        return ev.from?.kind === 'thread' && pro !== 'quiet' && !this.state.threads[ev.thread]?.sideOf ? coord({ batch: true }) : [];
+        return ev.from?.kind === 'thread' && pro !== 'quiet' && !ev.body.inThread && !this.state.threads[ev.thread]?.sideOf ? coord({ batch: true }) : [];
       case 'thread.suggested':
       case 'note.retracted':
       case 'notes.delivered':
@@ -1048,6 +1054,14 @@ export class Project {
     return this.deliver(sid, s, items);
   }
 
+  /**
+   * A thread woken only by the user's own words typed to it (steering it from the project page):
+   * the user is talking to that thread, so its answer stays there and does not wake the coordinator.
+   */
+  inThreadWake(sid, evs) {
+    return !!this.state.threads[sid] && evs.length > 0 && evs.every((e) => e.type === 'user.message' && e.trust === 'principal' && e.thread === sid && ['thread', 'steer'].includes(e.body?.where));
+  }
+
   /** Threads still working on the same user message as a thread whose result waits in these items. */
   workingSiblings(items) {
     const done = new Set();
@@ -1098,7 +1112,7 @@ export class Project {
     if (fresh) envelope = `${this.digest()}\n\n${envelope}`;
     const display = this.displayText(evs);
     this.append({ type: 'wake.sent', body: { session: sid, wake, events: evs.map((e) => e.id) } });
-    const info = { wake, types: evs.map((e) => e.type), threads: [...new Set(evs.map((e) => e.thread).filter(Boolean))], user: evs.some((e) => e.trust === 'principal' && (e.type === 'user.message' || e.type === 'decision.answered')), posted: false, engine: true };
+    const info = { wake, types: evs.map((e) => e.type), threads: [...new Set(evs.map((e) => e.thread).filter(Boolean))], user: evs.some((e) => e.trust === 'principal' && (e.type === 'user.message' || e.type === 'decision.answered')), posted: false, engine: true, ...(this.inThreadWake(sid, evs) ? { inThread: true } : {}) };
     this.turnInfo.set(sid, info);
     const ok = s.send({ text: display, envelope, wake, from: this.wakeFrom(evs), images: this.pastedImages(evs) });
     if (!ok) {
@@ -1239,7 +1253,10 @@ export class Project {
     const coordFooter = userAsked
       ? `\nThe user wrote: answer with post_message (or react when the work comes first).${relayAsk} Then end your turn without further text.`
       : '\nPost to the user only when they need to know or decide something; saying nothing is fine. End your turn without further text.';
-    out.push(sid === this.state.coordinator ? coordFooter : '\nReport with post_message (result, blocker, question). The user may also type to you here directly.');
+    const threadFooter = this.inThreadWake(sid, evs)
+      ? '\nThe user is talking to you here directly: answer them in your reply. This exchange stays in this thread; the coordinator is not woken for it.'
+      : '\nReport with post_message (result, blocker, question). The user may also type to you here directly.';
+    out.push(sid === this.state.coordinator ? coordFooter : threadFooter);
     out.push('</project-wake>');
     return out.join('\n');
   }
@@ -1267,7 +1284,8 @@ export class Project {
         const dec = answered.map((d) => `\nThe user answered this thread's card "${d.question}": "${d.answer.label}"${d.answer.note ? ` (note: ${d.answer.note})` : ''}${d.answer.by?.kind === 'user' ? '' : ' (via Claude Desktop)'}.`).join('');
         const open = Object.values(this.state.decisions).filter((d) => d.thread === e.thread && !d.answer);
         const asked = open.map((d) => `\nThis thread already asked the user with decision card ${d.id}: "${d.question}". The card is shown in the project chat and the answer goes to the thread. Don't ask it again.`).join('');
-        return `[${b.kind}${b.auto ? ', taken from its final reply' : ''}] status now: ${this.statusOf(e.thread)}${cl}${dec}${asked}\n${b.text}`;
+        const saw = b.userSaw ? '\nThe user was typing to this thread directly while it worked and has read this there: relay only what answers something they asked in the project chat, and do not repeat the rest.' : '';
+        return `[${b.kind}${b.auto ? ', taken from its final reply' : ''}] status now: ${this.statusOf(e.thread)}${cl}${dec}${asked}${saw}\n${b.text}`;
       }
       case 'decision.answered': {
         const d = this.state.decisions[b.id];
@@ -1370,7 +1388,7 @@ export class Project {
           this.append({ type: 'turn.started', body: { session: sid } });
         } else {
           // The user typed straight into a thread (or the coordinator's work log).
-          this.turnInfo.set(sid, { user: true, direct: true, posted: false, types: ['user.message'] });
+          this.turnInfo.set(sid, { user: true, direct: true, posted: false, types: ['user.message'], ...(isThread ? { inThread: true } : {}) });
           this.lastInput.set(sid, `typed:${Date.now()}`);
           if (isThread) this.append({ type: 'user.message', from: { kind: 'user' }, trust: 'principal', thread: sid, body: { where: 'thread', text: clipText(ev.text, 20_000) } });
           this.append({ type: 'turn.started', body: { session: sid } });
@@ -1453,7 +1471,7 @@ export class Project {
     this.refreshFiles(sid).catch((e) => console.warn('changed files:', e.message));
     if (info.engine && !info.posted && !info.resolved) {
       const text = s.lastReply().trim();
-      if (text) this.append({ type: 'thread.post', from: { kind: 'thread', id: sid }, trust: 'relay', thread: sid, body: { kind: 'result', text: clipText(text, 8000), auto: true } });
+      if (text) this.append({ type: 'thread.post', from: { kind: 'thread', id: sid }, trust: 'relay', thread: sid, body: { kind: 'result', text: clipText(text, 8000), auto: true, ...seenBody(info) } });
     }
   }
 
@@ -1890,10 +1908,10 @@ export class ProjectEngine {
     return p.append({ type: 'decision.answered', from: { kind: by }, trust: by === 'user' ? 'principal' : 'relay', thread: d.thread || undefined, body: { id, choice: i, label: d.options[i].label, note: clipText(String(note || ''), 2000) } });
   }
 
-  resolveThread(p, sid, { by = 'user', resolved = true } = {}) {
+  resolveThread(p, sid, { by = 'user', resolved = true, inThread = false } = {}) {
     const t = p.state.threads[sid];
     if (!t) throw new Error('No such thread');
-    if (resolved && !t.resolved) p.append({ type: 'thread.resolved', thread: sid, from: { kind: by, ...(by === 'thread' ? { id: sid } : {}) }, trust: by === 'user' ? 'principal' : 'relay', body: {} });
+    if (resolved && !t.resolved) p.append({ type: 'thread.resolved', thread: sid, from: { kind: by, ...(by === 'thread' ? { id: sid } : {}) }, trust: by === 'user' ? 'principal' : 'relay', body: inThread ? { inThread: true } : {} });
     if (!resolved && t.resolved) p.append({ type: 'thread.reopened', thread: sid, from: { kind: by }, trust: by === 'user' ? 'principal' : 'relay', body: {} });
     return t;
   }
@@ -2238,6 +2256,8 @@ export class ProjectEngine {
     p.append({ type: 'wake.delivered', body: { session: sid, wake } });
     const info = p.turnInfo.get(sid);
     if (info && evs.some((e) => e.trust === 'principal')) info.user = true;
+    // The user typed to this thread while it worked on something else: they will read its answer here.
+    if (info && !info.inThread && p.inThreadWake(sid, evs)) info.userSaw = true;
     return `New messages arrived while you were working. Take them into account in this turn (finish or adjust what you are doing; don't resolve before handling them):\n${envelope}`;
   }
 
@@ -2307,8 +2327,8 @@ export class ProjectEngine {
           info.posted = false;
           throw new Error(`Not posted: ${MAX_PROGRESS_POSTS} progress posts since the user last wrote is the limit. Update your checklist instead (update_checklist), and post when you have a result, a blocker or a question.`);
         }
-        const ev = p.append({ type: 'thread.post', from: me, trust: 'relay', thread: s.id, body: { kind, text: clipText(text, 8000) } });
-        return { ok: true, event_id: ev.id, note: kind === 'progress' ? 'Shown in your thread feed.' : 'Shown in your thread feed; the coordinator will see it.' };
+        const ev = p.append({ type: 'thread.post', from: me, trust: 'relay', thread: s.id, body: { kind, text: clipText(text, 8000), ...seenBody(info) } });
+        return { ok: true, event_id: ev.id, note: kind === 'progress' || info.inThread ? 'Shown in your thread feed.' : 'Shown in your thread feed; the coordinator will see it.' };
       }
       case 'update_checklist': {
         if (isCoord) throw new Error('Only threads keep a checklist.');
@@ -2423,7 +2443,7 @@ export class ProjectEngine {
         const summary = String(a.summary || '').trim();
         const t = p.state.threads[s.id];
         const postedResult = t.lastPost?.kind === 'result' && t.lastPost.ts >= (p.state.working[s.id] || 0);
-        if (summary && !postedResult) p.append({ type: 'thread.post', from: me, trust: 'relay', thread: s.id, body: { kind: 'result', text: clipText(summary, 8000) } });
+        if (summary && !postedResult) p.append({ type: 'thread.post', from: me, trust: 'relay', thread: s.id, body: { kind: 'result', text: clipText(summary, 8000), ...seenBody(info) } });
         const saved = [];
         for (const l of learned) {
           try {
@@ -2436,7 +2456,7 @@ export class ProjectEngine {
         }
         info.posted = true;
         info.resolved = true;
-        this.resolveThread(p, s.id, { by: 'thread' });
+        this.resolveThread(p, s.id, { by: 'thread', inThread: !!info.inThread });
         return { ok: true, learned_saved: saved, note: `Resolved.${learned.length ? ` ${learned.length} learned item${learned.length > 1 ? 's' : ''} saved to memory and shared.` : ''} A new message from the user or the coordinator reopens you.` };
       }
       case 'share':
