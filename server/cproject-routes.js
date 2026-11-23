@@ -322,7 +322,7 @@ export function mountProjectRoutes(app, { engine, store, resolveDir, wrap }) {
       fs.mkdirSync(path.dirname(dest), { recursive: true });
       fs.writeFileSync(dest, data);
       p.append({ type: 'library.added', from: { kind: 'user' }, trust: 'principal', body: { path: path.relative(p.libraryDir, dest), size: data.length } });
-      res.json({ ok: true, path: path.relative(p.libraryDir, dest) });
+      res.json({ ok: true, path: path.relative(p.libraryDir, dest), abs: dest });
     })
   );
   app.delete(

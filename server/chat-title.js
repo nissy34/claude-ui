@@ -11,7 +11,7 @@ import fs from 'node:fs';
 import readline from 'node:readline';
 import { spawn } from 'node:child_process';
 import { config } from './config.js';
-import { claudeEnv } from './gateway.js';
+import { claudeEnv, withGatewayArgs } from './gateway.js';
 import { resolveCommand } from './launch.js';
 
 const SYSTEM = [
@@ -111,7 +111,7 @@ export function generateTitle({ user, assistant, env = {}, cwd = config.scratchD
     };
     let p;
     try {
-      const cmd = resolveCommand(config.claudeBin, args);
+      const cmd = resolveCommand(config.claudeBin, withGatewayArgs(args));
       p = spawn(cmd.file, cmd.args, { cwd, env: e, stdio: ['pipe', 'pipe', 'ignore'], windowsHide: true });
     } catch {
       return finish('');

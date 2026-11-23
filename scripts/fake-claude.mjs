@@ -10,6 +10,8 @@
 //   @@bashfail <command>             a Bash call that fails (tool_result with is_error)
 //   @@usage <tokens>                 report this many input tokens on this turn's replies (context size)
 //   @@ratelimit <json>               emit a rate_limit_event with these plan usage windows
+//   @@limit <json>                   the subscription is out: emit a rejected rate_limit_event with this info
+//                                    and fail the turn (ignored on a gateway: ANTHROPIC_AUTH_TOKEN set)
 //   @@ask <tool> <json>              ask permission to use a tool (can_use_tool) and wait; then say the answer
 //   @@bgtask <ms> [text]             start a background agent that ends <ms> later and wakes a follow-up turn
 //   @@bash <command>                 a Bash call that succeeds (tool_use + tool_result "ok")
@@ -110,7 +112,7 @@ async function runTurn(text) {
   let inputTokens = 100;
   // Only top-level directives of the prompt (not ones nested inside JSON strings).
   for (const line of lines) {
-    const m = /^@@(call|say|sleep|fail|write|writetool|bashfail|bash|usage|ratelimit|ask|approve|bgtask)\b\s*(.*)$/.exec(line.trim());
+    const m = /^@@(call|say|sleep|fail|write|writetool|bashfail|bash|usage|ratelimit|limit|ask|approve|bgtask)\b\s*(.*)$/.exec(line.trim());
     if (!m) continue;
     const [, cmd, rest] = m;
     if (cmd === 'usage') {
@@ -132,6 +134,11 @@ async function runTurn(text) {
       }, Number(ms));
     } else if (cmd === 'sleep') {
       await new Promise((r) => setTimeout(r, Number(rest) || 100));
+    } else if (cmd === 'limit') {
+      if (!process.env.ANTHROPIC_AUTH_TOKEN) {
+        out({ type: 'rate_limit_event', rate_limit_info: { status: 'rejected', ...JSON.parse(rest || '{}') }, session_id: sessionId });
+        failed = 'Claude AI usage limit reached';
+      }
     } else if (cmd === 'fail') {
       failed = rest || true;
     } else if (cmd === 'write') {

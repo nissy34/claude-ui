@@ -11,10 +11,10 @@ import { sessionExtras } from './environments.js';
 import { fileURLToPath } from 'node:url';
 import { browserAvailable } from './browser.js';
 import { config } from './config.js';
-import { claudeEnv } from './gateway.js';
+import { claudeEnv, withGatewayArgs, onRateLimit, failoverEngaged, limitKind, gatewayActive } from './gateway.js';
 import { resolveCommand } from './launch.js';
 import { withOpener } from './opener.js';
-import { toolResultParts } from './tool-images.js';
+import { toolResultParts, saveChatImage, loadChatImage } from './tool-images.js';
 import { elicitationEvent, elicitationResponse, mcpAuthMethods, slimServers } from './mcp-admin.js';
 import { allowRuleFor, withAllowRules } from './allow-rules.js';
 
@@ -114,7 +114,7 @@ function promptText(content) {
 }
 
 /** Convert a Claude Code transcript (.jsonl) into chat events, so resumed conversations show their history. */
-export function eventsFromTranscript(file) {
+export function eventsFromTranscript(file, saveImages = () => []) {
   const events = [];
   let lines;
   try {
@@ -148,7 +148,8 @@ export function eventsFromTranscript(file) {
           let from;
           const fm = /^\[(Question|Reply|Message) from (\w+) session "(.*?)" \(session id ([\w-]+)\)[^\]\n]*\]\n\n/.exec(t);
           if (fm) (from = { kind: fm[1] === 'Message' ? undefined : fm[1].toLowerCase(), role: fm[2], name: fm[3], id: fm[4] }), (t = t.slice(fm[0].length));
-          events.push({ k: 'user', text: t, ts, ...(from ? { from } : {}) });
+          const images = Array.isArray(c) ? saveImages(c.filter((x) => x.type === 'image' && x.source?.type === 'base64').map((x) => x.source)) : [];
+          events.push({ k: 'user', text: t, ts, ...(images.length ? { images } : {}), ...(from ? { from } : {}) });
         }
       }
     } else if (o.type === 'assistant' && o.message?.content) {
@@ -160,7 +161,14 @@ export function eventsFromTranscript(file) {
   return events;
 }
 
+// Pictures sent with a message are saved once (by content hash) and the chat log keeps their URLs.
+const loadImages = (urls) => (Array.isArray(urls) ? urls.map(loadChatImage).filter(Boolean) : []);
+
 export class ChatSession {
+  saveImages(images) {
+    return Array.isArray(images) ? images.map((i) => i && saveChatImage(this.id, i.media_type, i.data)).filter(Boolean) : [];
+  }
+
   constructor(meta, store) {
     this.meta = meta;
     this.store = store;
@@ -222,7 +230,7 @@ export class ChatSession {
   // Rebuild the chat from Claude's transcript (after the conversation continued in the terminal UI).
   resync() {
     const file = transcriptPath(this.meta.cwd, this.meta.claudeSessionId);
-    const evs = eventsFromTranscript(file);
+    const evs = eventsFromTranscript(file, (imgs) => this.saveImages(imgs));
     if (!evs.length) return;
     evs.push({ k: 'notice', text: 'Synced with the terminal session', ts: Date.now() });
     fs.writeFileSync(this.logFile, evs.map((e) => JSON.stringify(e)).join('\n') + '\n');
@@ -232,7 +240,7 @@ export class ChatSession {
 
   seedFromTranscript() {
     const file = transcriptPath(this.meta.cwd, this.meta.claudeSessionId);
-    const evs = eventsFromTranscript(file);
+    const evs = eventsFromTranscript(file, (imgs) => this.saveImages(imgs));
     if (evs.length) {
       evs.push({ k: 'notice', text: 'Resumed from an earlier conversation', ts: Date.now() });
       fs.writeFileSync(this.logFile, evs.map((e) => JSON.stringify(e)).join('\n') + '\n');
@@ -372,7 +380,9 @@ export class ChatSession {
 
   // ---------- process ----------
   ensureProcess() {
+    if (this.proc && this.envStale && !this.isBusy()) this.dropStaleProcess();
     if (this.proc) return;
+    this.envStale = false;
     const m = this.meta;
     const args = [
       '--output-format', 'stream-json',
@@ -443,7 +453,7 @@ export class ChatSession {
 
     let proc;
     try {
-      const cmd = resolveCommand(config.claudeBin, args);
+      const cmd = resolveCommand(config.claudeBin, withGatewayArgs(args));
       const env = childEnv(m.id, envx.env);
       // Our own switch decides; an inherited CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=0 would silence them.
       if (config.promptSuggestions) delete env.CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION;
@@ -567,6 +577,8 @@ export class ChatSession {
           m.mcpServers = msg.mcp_servers || [];
           m.cliVersion = msg.claude_code_version;
           m.apiKeySource = msg.apiKeySource;
+          // false when the CLI talks to a gateway (ANTHROPIC_BASE_URL), true for the Claude login / API.
+          m.servedByAnthropic = typeof msg.served_by_anthropic === 'boolean' ? msg.served_by_anthropic : null;
           this.broadcastState();
         } else if (msg.subtype === 'status') {
           this.broadcast({ t: 'status', status: msg.status });
@@ -625,9 +637,24 @@ export class ChatSession {
           const restart = this.effortPending;
           this.effortPending = false;
           setTimeout(async () => {
-            if (restart && this.state === 'idle') await this.stopAndWait();
+            if (restart && this.state === 'idle') {
+              this.quietExit = true;
+              await this.stopAndWait();
+            }
             this.flushInbox();
           }, 200);
+        }
+        if (this.turns === 0 && this.envStale) setTimeout(() => this.envStale && !this.isBusy() && this.dropStaleProcess(), 100);
+        if (this.turns === 0 && this.failoverResume) {
+          const kind = this.failoverResume;
+          const failed = !!msg.is_error && !this.interrupted;
+          this.failoverResume = null;
+          setTimeout(() => {
+            if (!failed || !gatewayActive()) return;
+            const what = kind === 'five_hour' ? '5-hour' : 'weekly';
+            this.record({ k: 'notice', text: `Subscription reached its ${what} limit. Continuing on the AI gateway until it resets.` });
+            this.deliver({ text: `(The Claude subscription reached its ${what} usage limit, so this conversation now continues on the company AI gateway.) Continue from where you left off.`, from: { role: 'system', kind: 'system' } });
+          }, 600);
         }
         if (this.interrupted) {
           this.interrupted = false;
@@ -680,6 +707,9 @@ export class ChatSession {
         break;
       case 'rate_limit_event':
         m.rateLimit = msg.rate_limit_info;
+        // Subscription out of its weekly (or, if chosen, 5-hour) limit with the gateway failover on:
+        // every chat moves to the gateway, and this turn continues there once it ends.
+        if (onRateLimit(msg.rate_limit_info) || (failoverEngaged() && msg.rate_limit_info?.status === 'rejected')) this.failoverResume = limitKind(msg.rate_limit_info) || 'limit';
         // Plan limits are account-wide: keep the latest from any chat for views like a project's.
         if (msg.rate_limit_info) this.store.rateLimit = { ...msg.rate_limit_info, at: Date.now() };
         if (m.cproject) this.store.onSignal?.(this, 'rate_limit', msg.rate_limit_info);
@@ -810,11 +840,10 @@ export class ChatSession {
 
   enqueue({ text, from, images, refs }) {
     const item = { id: queueId(), text, from, ts: Date.now() };
-    // Images stay in memory only, so sessions.json doesn't fill up with base64.
-    if (images?.length) {
-      item.images = images.length;
-      (this.queuedImages ||= new Map()).set(item.id, images);
-    }
+    // Images are saved to disk and the queue keeps their URLs, so a restart doesn't lose them
+    // and sessions.json doesn't fill up with base64.
+    const urls = this.saveImages(images);
+    if (urls.length) item.images = urls;
     if (refs?.length) item.refs = refs;
     this.inbox.push(item);
     this.store.save();
@@ -859,7 +888,6 @@ export class ChatSession {
   removeQueued(id) {
     const before = this.inbox.length;
     this.meta.inbox = this.inbox.filter((b) => b.id !== id);
-    this.queuedImages?.delete(id);
     if (this.meta.inbox.length === before) return;
     this.store.save();
     this.broadcastState();
@@ -870,11 +898,10 @@ export class ChatSession {
     // Send now picks those messages; otherwise everything queued goes together, in order.
     const picked = this.inbox.some((b) => b.now) ? this.inbox.filter((b) => b.now) : this.inbox;
     const rest = this.inbox.filter((b) => !picked.includes(b));
-    const batch = picked.map(({ now, ...b }) => ({ ...b, imageData: this.queuedImages?.get(b.id) || [] }));
+    const batch = picked.map(({ now, ...b }) => ({ ...b, imageData: loadImages(b.images) }));
     this.meta.inbox = rest;
     const ok = batch.length === 1 && batch[0].from ? this.send(batch[0]) : this.send({ batch });
-    if (ok) for (const b of batch) this.queuedImages?.delete(b.id);
-    else this.meta.inbox = [...picked.map(({ now, ...b }) => b), ...this.meta.inbox];
+    if (!ok) this.meta.inbox = [...picked.map(({ now, ...b }) => b), ...this.meta.inbox];
     this.store.save();
     this.broadcastState();
   }
@@ -974,8 +1001,8 @@ export class ChatSession {
       if (this.proc === proc && !this.heard && this.turns > 0) this.record({ k: 'error', resumable: true, text: "Claude hasn't responded for a minute. Press Resume to restart it and continue." });
     }, 60_000);
     this.watchdog.unref?.();
-    if (batch) for (const b of batch) this.record({ k: 'user', text: b.text, images: b.imageData?.length || 0, ...(b.refs?.length ? { refs: b.refs } : {}), ...(b.from ? { from: b.from } : {}) });
-    else this.record({ k: 'user', text, images: imgs.length, ...(chats.length ? { refs: chats.map((c) => ({ id: c.id, name: c.meta.name })) } : {}), ...(from?.name ? { from } : {}), ...(wake ? { wake } : {}) });
+    if (batch) for (const b of batch) this.record({ k: 'user', text: b.text, images: Array.isArray(b.images) ? b.images : this.saveImages(b.imageData), ...(b.refs?.length ? { refs: b.refs } : {}), ...(b.from ? { from: b.from } : {}) });
+    else this.record({ k: 'user', text, images: this.saveImages(imgs), ...(chats.length ? { refs: chats.map((c) => ({ id: c.id, name: c.meta.name })) } : {}), ...(from?.name ? { from } : {}), ...(wake ? { wake } : {}) });
     clearTimeout(this.idleTimer);
     this.store.save();
     this.broadcastState();
@@ -1102,6 +1129,36 @@ export class ChatSession {
     this.meta.model = model;
     if (this.proc) await this.control({ subtype: 'set_model', model: model || 'default' }).catch((e) => this.record({ k: 'error', text: `Could not change model: ${e.message}` }));
     this.store.save();
+    this.broadcastState();
+  }
+
+  /**
+   * The sign-in changed (gateway on/off). The running process has the old one, so it is never
+   * used for another turn: dropped now if idle, else as soon as its turn ends. A message sent in
+   * between starts a fresh process (ensureProcess), so the switch holds from the next message on.
+   */
+  restartForEnv() {
+    if (!this.proc) return;
+    this.envStale = true;
+    if (!this.isBusy()) this.dropStaleProcess();
+  }
+
+  /** Let go of the current (idle) process at once and stop it quietly; the next turn starts a new one. */
+  dropStaleProcess() {
+    const old = this.proc;
+    if (!old) return;
+    this.proc = null;
+    this.meta.pid = null;
+    this.envStale = false;
+    try {
+      old.stdin.end();
+      old.kill('SIGTERM');
+    } catch {}
+    setTimeout(() => {
+      try {
+        old.kill('SIGKILL');
+      } catch {}
+    }, 3000).unref?.();
     this.broadcastState();
   }
 
@@ -1235,7 +1292,7 @@ export class ChatSession {
     fs.writeFileSync(this.logFile, this.events.map((e) => JSON.stringify(e)).join('\n') + (this.events.length ? '\n' : ''));
     this.record({ k: 'notice', text: restored ? 'Edited message: conversation and files rewound to this point' : 'Edited message: conversation rewound to this point' });
     this.broadcast({ t: 'reload' });
-    this.send({ text, refs: (ev.refs || []).map((r) => r.id) });
+    this.send({ text, images: loadImages(ev.images), refs: (ev.refs || []).map((r) => r.id) });
   }
 
   stop() {

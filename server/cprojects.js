@@ -19,7 +19,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { config } from './config.js';
-import { gatewayMode } from './gateway.js';
+import { gatewayMode, failoverEngaged } from './gateway.js';
 import { changedFiles, createWorktree, isGitRepo, removeWorktree, worktreeMerged } from './git.js';
 import { prStatus } from './pr-status.js';
 import { rawUrl } from './artifacts.js';
@@ -1061,6 +1061,32 @@ export class Project {
     return Object.values(this.state.threads).filter((t) => !done.has(t.id) && !t.resolved && t.cites?.some((c) => cites.has(c)) && this.liveOf(t.id).busy).map((t) => t.id);
   }
 
+  /**
+   * Pictures pasted in the project chat: saved to the library, and the message ends with an
+   * "Attached images:" list of their paths. Claude gets them inline too (the coordinator has no
+   * file tools to open them); threads can also open the paths.
+   */
+  pastedImages(evs) {
+    const out = [];
+    const types = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp' };
+    for (const e of evs) {
+      if (e.type !== 'user.message') continue;
+      const m = /\n*Attached images:\n((?:- .+(?:\n|$))+)$/.exec(e.body?.text || '');
+      if (!m) continue;
+      for (const line of m[1].trim().split('\n')) {
+        const file = path.resolve(line.replace(/^- /, '').trim());
+        const rel = path.relative(this.libraryDir, file);
+        const type = types[path.extname(file).toLowerCase()];
+        if (!type || !rel || rel.startsWith('..') || path.isAbsolute(rel)) continue;
+        try {
+          const buf = fs.readFileSync(file);
+          if (buf.length <= 5 * 1024 * 1024) out.push({ media_type: type, data: buf.toString('base64') });
+        } catch {}
+      }
+    }
+    return out.slice(0, 10);
+  }
+
   deliver(sid, s, items) {
     const evs = items.map((q) => this.byId.get(q.e)).filter(Boolean);
     const wake = newId('wk');
@@ -1074,7 +1100,7 @@ export class Project {
     this.append({ type: 'wake.sent', body: { session: sid, wake, events: evs.map((e) => e.id) } });
     const info = { wake, types: evs.map((e) => e.type), threads: [...new Set(evs.map((e) => e.thread).filter(Boolean))], user: evs.some((e) => e.trust === 'principal' && (e.type === 'user.message' || e.type === 'decision.answered')), posted: false, engine: true };
     this.turnInfo.set(sid, info);
-    const ok = s.send({ text: display, envelope, wake, from: this.wakeFrom(evs) });
+    const ok = s.send({ text: display, envelope, wake, from: this.wakeFrom(evs), images: this.pastedImages(evs) });
     if (!ok) {
       this.turnInfo.delete(sid);
       this.append({ type: 'wake.requeued', body: { session: sid, wake, reason: 'could not start a turn' } });
@@ -1381,7 +1407,7 @@ export class Project {
         // nothing is lost and nothing retries in a loop until the user logs in and resumes.
         if (failed && AUTH_RE.test(ev.text)) this.authFailed(sid, ev.text);
         this.append({ type: 'turn.ended', body: { session: sid, cost: ev.cost || 0, tokens: ev.tokens || 0, isError: !!ev.isError, interrupted: ev.text === 'Interrupted' } });
-        if (failed && !AUTH_RE.test(ev.text)) this.append({ type: 'turn.failed', body: { session: sid, text: clipText(ev.text, 500) } });
+        if (failed && !AUTH_RE.test(ev.text) && !(s.failoverResume || failoverEngaged())) this.append({ type: 'turn.failed', body: { session: sid, text: clipText(ev.text, 500) } });
         this.afterTurn(s, ev);
         // The session is idle again: deliver what queued meanwhile (after its own inbox flush).
         this.schedulePump(400);
@@ -1463,6 +1489,8 @@ export class Project {
   }
 
   onSignal(s, kind, info) {
+    // The gateway failover took over: nothing waits for the reset (the session continues itself).
+    if (kind === 'rate_limit' && info?.status === 'rejected' && failoverEngaged()) return;
     if (kind === 'rate_limit' && info?.status === 'rejected' && info.resetsAt) {
       const until = info.resetsAt * 1000;
       if (!this.state.limit || this.state.limit.until !== until) this.append({ type: 'limit.hit', body: { until, session: s.id } });

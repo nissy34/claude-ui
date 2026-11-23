@@ -397,3 +397,6 @@
 .pj-usage-amt { flex: none; font-size: var(--fs-sm); font-variant-numeric: tabular-nums; }
 .pop button.pj-usage-full { justify-content: space-between; color: var(--text-2); }
 .pj-usage-pop .meter.hot > span { background: var(--red); }
+.pj-composer-box:has(.pj-thumbs) { flex-wrap: wrap; }
+.pj-thumbs { flex-basis: 100%; margin-bottom: 0; }
+.thumb.uploading img { opacity: 0.5; }

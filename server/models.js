@@ -2,7 +2,7 @@
 // same list the SDK's supportedModels() returns). Cached, refreshed by chats as they start.
 import { spawn } from 'node:child_process';
 import { config } from './config.js';
-import { claudeEnv, onGatewayChange } from './gateway.js';
+import { claudeEnv, onGatewayChange, withGatewayArgs } from './gateway.js';
 import { resolveCommand } from './launch.js';
 
 let cache = null;
@@ -25,7 +25,7 @@ function fetchFromCli() {
     // In gateway mode (CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY) the CLI adds the gateway's
     // Claude models to this list, marked "From gateway".
     const env = claudeEnv();
-    const cmd = resolveCommand(config.claudeBin, [...config.claudeArgs, '-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose']);
+    const cmd = resolveCommand(config.claudeBin, withGatewayArgs([...config.claudeArgs, '-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose']));
     let p;
     try {
       p = spawn(cmd.file, cmd.args, { env, cwd: config.projectsRoot, windowsHide: true, stdio: ['pipe', 'pipe', 'ignore'] });
