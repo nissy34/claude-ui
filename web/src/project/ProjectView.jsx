@@ -9,6 +9,7 @@ import ProjectPanel, { PrChip, StatusIcon } from './ProjectPanel.jsx';
 import { STATUS_LABEL, STATUS_ORDER, useProject } from './useProject.js';
 import { useGatewayMode } from '../Gateway.jsx';
 import { ImageLightbox } from '../chat/ToolCard.jsx';
+import { sendableImage } from '../chat/Composer.jsx';
 import './project.css';
 
 export default function ProjectView({ projectId, tab: initialTab, thread: initialThread, onSelect, onCreate, onMenu, onError, onDeleted, projects }) {
@@ -154,8 +155,9 @@ function ProjectChat({ project, openThread, onError, onFullUsage }) {
   });
   const [sending, setSending] = useState(false);
   const [pasted, setPasted] = useState([]); // {key, url, abs?} pictures pasted into the box
-  const pasteImages = (files) => {
-    for (const f of files) {
+  const pasteImages = async (files) => {
+    for (const raw of files) {
+      const f = (await sendableImage(raw)) || raw; // scaled down when too big for Claude
       const key = Math.random();
       const url = URL.createObjectURL(f);
       setPasted((l) => [...l, { key, url }]);

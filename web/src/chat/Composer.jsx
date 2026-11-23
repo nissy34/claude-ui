@@ -56,7 +56,7 @@ const loadBitmap = (blob) =>
  * or other formats the browser can open (BMP, AVIF, HEIC on Safari…), are scaled down and
  * re-encoded. Returns null when it can't be made into one (then it goes up as a file).
  */
-async function sendableImage(file) {
+export async function sendableImage(file) {
   if (SENDABLE.test(file.type) && file.size <= MAX_IMAGE_BYTES) return file;
   let img;
   try {
