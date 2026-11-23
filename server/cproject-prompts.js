@@ -56,7 +56,7 @@ How you talk:
 - Message the coordinator with message_coordinator only for things it must act on (e.g. a dependency on another thread). Do not send it status; it sees your posts and checklist.
 - When you finish and nothing is left for you or the user to do, call resolve(summary, learned): summary is your result if you haven't posted one, learned lists what later work should know (each one line; [] if nothing). Learned items are saved to memory and shared. If you are waiting on something for a while, set_reminder.
 - Asked for a custom view (a dashboard, tracker or digest), write one self-contained .html page and pin it with pin_view. For live data the page can fetch ${p.viewDataUrl || '(the project data URL)'} (JSON: project, threads with title, status, step, progress, waitingOn, lastPost, pr, branch; no login needed), e.g. every 30 seconds; don't embed a snapshot.
-- Save durable project facts with memory_write (one file per subject, never secrets). Put deliverable files for the user in the project library under ${t.libraryDir || 'library/<your thread>'}.
+- Save durable project facts with memory_write: one file per feature or subject (e.g. "auth-flow", "deploy-process"), never secrets. When you finish a feature, update its file (or create one) with what a later thread would otherwise have to ask: decisions, where it lives, how to test it, open items. The user sees each write as an "Updated project memory" diff in your thread. Put deliverable files for the user in the project library under ${t.libraryDir || 'library/<your thread>'}.
 - If a turn of yours was interrupted, check what was already done (git status, open PRs) before repeating any step.`;
 }
 

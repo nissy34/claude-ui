@@ -405,3 +405,23 @@
 .pj-model-chip { background: none; border: 0; border-radius: var(--r-sm); padding: 2px var(--sp-1h); font-size: var(--fs-xs); color: var(--muted); cursor: pointer; white-space: nowrap; }
 .pj-model-chip:hover, .pj-model-chip[aria-expanded='true'] { background: var(--hover); color: var(--text); }
 .pj-model-chip .chev { font-size: var(--fs-2xs); }
+/* "Updated project memory" row with an inline diff */
+.pj-mem { font-size: var(--fs-sm); color: var(--muted); padding: var(--sp-1) 0; }
+.pj-mem-head { display: inline-flex; align-items: center; gap: var(--sp-1); background: none; border: 0; padding: 2px 0; color: var(--muted); font: inherit; cursor: pointer; max-width: 100%; text-align: left; }
+.pj-mem-head:hover:not(:disabled) { color: var(--text); }
+.pj-mem-head:disabled { cursor: default; }
+.pj-mem-head:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+.pj-mem-names { color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.pj-mem-chev { flex: none; transition: transform 0.15s; }
+.pj-mem.open .pj-mem-chev { transform: rotate(180deg); }
+.pj-mem-body { margin-top: var(--sp-1); display: flex; flex-direction: column; gap: var(--sp-2); }
+.pj-mem-fname { font-family: var(--mono); font-size: var(--fs-xs); color: var(--text-2); margin-bottom: 2px; display: flex; gap: var(--sp-2); }
+.pj-mem-count .add { color: var(--green); margin-right: 4px; }
+.pj-mem-count .del { color: var(--red); }
+.pj-mem-diff { margin: 0; font-family: var(--mono); font-size: var(--fs-xs); line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text-2); background: none; padding: 0; }
+.pj-mem-diff > div { padding: 0 var(--sp-2) 0 1.6em; text-indent: -1.2em; }
+.pj-mem-diff .op { display: inline-block; width: 1.2em; text-indent: 0; user-select: none; }
+.pj-mem-diff .add { background: var(--diff-add); color: var(--green); }
+.pj-mem-diff .del { background: var(--diff-del); color: var(--red); }
+.pj-mem-diff .gap { color: var(--muted); }
+.pj-mem-ts { font-size: var(--fs-xs); color: var(--muted); margin-top: 2px; }

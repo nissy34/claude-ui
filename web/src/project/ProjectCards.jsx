@@ -249,3 +249,54 @@ export function DecisionCard({ projectId, decision, threadTitle, onError, onOpen
     </Card>
   );
 }
+
+// ---------------------------------------------------------------- "Updated project memory" row
+// A collapsed row; open, it shows what changed in MEMORY.md and the memory file(s) as a diff.
+export function MemoryUpdate({ body, ts }) {
+  const [open, setOpen] = useState(false);
+  const names = (body.names || [body.name]).filter(Boolean);
+  const actions = body.actions || [body.action];
+  const diffs = body.diffs || [];
+  const label = actions.every((a) => a === 'deleted') ? 'Removed from project memory' : actions.every((a) => a === 'pinned') ? 'Updated pinned project memory' : 'Updated project memory';
+  const shown = names.filter((n) => n !== 'MEMORY.md');
+  return (
+    <div className={`pj-mem ${open ? 'open' : ''}`}>
+      <button className="pj-mem-head" aria-expanded={open} onClick={() => setOpen((v) => !v)} disabled={!diffs.length} title={diffs.length ? (open ? 'Hide the change' : 'Show the change') : undefined}>
+        <span>{label}</span>
+        {shown.length > 0 && <span className="pj-mem-names">{shown.join(', ')}</span>}
+        {diffs.length > 0 && (
+          <svg className="pj-mem-chev" width="12" height="12" viewBox="0 0 16 16" aria-hidden="true">
+            <path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        )}
+      </button>
+      {open && (
+        <div className="pj-mem-body">
+          {diffs.map((d) => (
+            <div key={d.file} className="pj-mem-file">
+              {diffs.length > 1 && (
+                <div className="pj-mem-fname">
+                  {d.file}
+                  <span className="pj-mem-count">
+                    {d.added ? <span className="add">+{d.added}</span> : null}
+                    {d.removed ? <span className="del">−{d.removed}</span> : null}
+                  </span>
+                </div>
+              )}
+              <pre className="pj-mem-diff">
+                {d.lines.map(([op, text], i) => (
+                  <div key={i} className={op === '+' ? 'add' : op === '-' ? 'del' : op === '…' ? 'gap' : 'ctx'}>
+                    <span className="op">{op === '…' ? '' : op === ' ' ? ' ' : op === '-' ? '−' : '+'}</span>
+                    {op === '…' ? '…' : text || ' '}
+                  </div>
+                ))}
+                {d.clipped && <div className="gap">… (more lines not shown)</div>}
+              </pre>
+            </div>
+          ))}
+        </div>
+      )}
+      {ts && <div className="pj-mem-ts">{timeAgo(ts)}</div>}
+    </div>
+  );
+}

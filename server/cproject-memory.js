@@ -33,6 +33,64 @@ function render(name, description, body, type) {
   return `---\nname: ${name}\ndescription: ${oneLine(description)}${type ? `\ntype: ${type}` : ''}\n---\n\n${String(body || '').trim()}\n`;
 }
 
+/**
+ * Line diff of two small texts (LCS), as hunks with `context` unchanged lines around each change.
+ * Lines are [op, text] with op ' ', '+' or '-'; a gap between hunks is a ['…', ''] line.
+ */
+export function lineDiff(a, b, { context = 2, maxLines = 80 } = {}) {
+  const A = a ? a.replace(/\n$/, '').split('\n') : [];
+  const B = b ? b.replace(/\n$/, '').split('\n') : [];
+  let pre = 0;
+  while (pre < A.length && pre < B.length && A[pre] === B[pre]) pre++;
+  let suf = 0;
+  while (suf < A.length - pre && suf < B.length - pre && A[A.length - 1 - suf] === B[B.length - 1 - suf]) suf++;
+  const a2 = A.slice(pre, A.length - suf);
+  const b2 = B.slice(pre, B.length - suf);
+  const n = a2.length;
+  const m = b2.length;
+  const ops = [];
+  if (n * m > 250000) {
+    for (const l of a2) ops.push(['-', l]);
+    for (const l of b2) ops.push(['+', l]);
+  } else {
+    const L = Array.from({ length: n + 1 }, () => new Uint16Array(m + 1));
+    for (let i = n - 1; i >= 0; i--) for (let j = m - 1; j >= 0; j--) L[i][j] = a2[i] === b2[j] ? L[i + 1][j + 1] + 1 : Math.max(L[i + 1][j], L[i][j + 1]);
+    let i = 0;
+    let j = 0;
+    while (i < n || j < m) {
+      if (i < n && j < m && a2[i] === b2[j]) ops.push([' ', a2[i++]]), j++;
+      else if (i < n && (j >= m || L[i + 1][j] >= L[i][j + 1])) ops.push(['-', a2[i++]]);
+      else ops.push(['+', b2[j++]]);
+    }
+  }
+  const all = [...A.slice(0, pre).map((l) => [' ', l]), ...ops, ...A.slice(A.length - suf).map((l) => [' ', l])];
+  const keep = new Array(all.length).fill(false);
+  all.forEach(([op], k) => {
+    if (op === ' ') return;
+    for (let x = Math.max(0, k - context); x <= Math.min(all.length - 1, k + context); x++) keep[x] = true;
+  });
+  const out = [];
+  let gap = false;
+  all.forEach((line, k) => {
+    if (!keep[k]) return void (gap = out.length > 0);
+    if (gap) out.push(['…', '']);
+    gap = false;
+    out.push(line);
+  });
+  if (keep.length && !keep[keep.length - 1] && out.length) out.push(['…', '']);
+  const added = all.filter(([op]) => op === '+').length;
+  const removed = all.filter(([op]) => op === '-').length;
+  return { lines: out.slice(0, maxLines), clipped: out.length > maxLines, added, removed };
+}
+
+const readText = (file) => {
+  try {
+    return fs.readFileSync(file, 'utf8');
+  } catch {
+    return '';
+  }
+};
+
 export class ProjectMemory {
   constructor(dir, onChange = () => {}) {
     this.dir = dir;
@@ -83,15 +141,33 @@ export class ProjectMemory {
     text = String(text || '').trim();
     const size = Buffer.byteLength(this.fileLines()) + Buffer.byteLength(text) + 20;
     if (size > MAX_INDEX) throw new Error(`MEMORY.md would be ${Math.ceil(size / 1024)} KB; the limit is 16 KB. Shorten the pinned part.`);
+    const before = this.snapshot(null);
     fs.writeFileSync(path.join(this.dir, '.pinned'), text ? `${text}\n` : '');
     this.writeIndex();
-    this.onChange({ name: 'MEMORY.md', action: 'pinned', by });
+    this.onChange({ name: 'MEMORY.md', action: 'pinned', by, diffs: this.diffs(before, null) });
     return this.indexInfo();
   }
 
   indexInfo() {
     const text = this.index();
     return { size: Buffer.byteLength(text), cap: MAX_INDEX, pinned: this.pinned(), lines: this.fileLines() };
+  }
+
+  /** What a change is diffed against: MEMORY.md and the one file it touches. */
+  snapshot(slug) {
+    return { index: readText(path.join(this.dir, 'MEMORY.md')), file: slug ? readText(path.join(this.dir, `${slug}.md`)) : null };
+  }
+
+  /** The diffs a memory.changed event carries, so the UI can show what was added (MEMORY.md first). */
+  diffs(before, slug) {
+    const out = [];
+    const idx = lineDiff(before.index, readText(path.join(this.dir, 'MEMORY.md')));
+    if (idx.added || idx.removed) out.push({ file: 'MEMORY.md', ...idx });
+    if (slug) {
+      const f = lineDiff(before.file, readText(path.join(this.dir, `${slug}.md`)));
+      if (f.added || f.removed) out.push({ file: `${slug}.md`, ...f });
+    }
+    return out;
   }
 
   writeIndex() {
@@ -131,9 +207,10 @@ export class ProjectMemory {
     if (!kind && exists) kind = parse(fs.readFileSync(file, 'utf8')).meta.type || null; // keep the type it had
     const text = render(slug, description, content, kind);
     if (Buffer.byteLength(text) > MAX_FILE) throw new Error(`Too long (${Buffer.byteLength(text)} bytes; the limit is ${MAX_FILE}). Summarise it, or split it into files by subject.`);
+    const before = this.snapshot(slug);
     fs.writeFileSync(file, text);
     this.writeIndex();
-    this.onChange({ name: slug, action: exists ? 'updated' : 'created', by });
+    this.onChange({ name: slug, action: exists ? 'updated' : 'created', by, diffs: this.diffs(before, slug) });
     return { ok: true, name: slug, version: version(text), created: !exists };
   }
 
@@ -142,9 +219,34 @@ export class ProjectMemory {
     const file = path.join(this.dir, `${slug}.md`);
     if (!fs.existsSync(file)) throw new Error(`No memory file "${name}"`);
     if (!force && baseVersion !== version(fs.readFileSync(file, 'utf8'))) return { ok: false, conflict: true, note: 'Read the file first and pass its version as base_version.', current: this.read(slug) };
+    const before = this.snapshot(slug);
     fs.unlinkSync(file);
     this.writeIndex();
-    this.onChange({ name: slug, action: 'deleted', by });
+    this.onChange({ name: slug, action: 'deleted', by, diffs: this.diffs(before, slug) });
     return { ok: true };
   }
+}
+
+/** Consecutive memory.changed events in a feed collapse into one row with all their names and diffs. */
+export function collapseMemoryEvents(feed) {
+  const out = [];
+  for (const e of feed) {
+    if (e.type !== 'memory.changed') {
+      out.push(e);
+      continue;
+    }
+    const last = out[out.length - 1];
+    const names = e.body.names || [e.body.name];
+    const diffs = e.body.diffs || [];
+    if (last?.type === 'memory.changed' && last.from?.kind === e.from?.kind && last.from?.id === e.from?.id) {
+      const merged = [...last.body.diffs];
+      for (const d of diffs) {
+        const same = merged.findIndex((x) => x.file === d.file);
+        if (same < 0) merged.push(d);
+        else merged[same] = { ...d, lines: [...merged[same].lines, ['…', ''], ...d.lines], added: merged[same].added + d.added, removed: merged[same].removed + d.removed };
+      }
+      out[out.length - 1] = { ...last, ts: e.ts, body: { ...last.body, names: [...new Set([...last.body.names, ...names])], actions: [...new Set([...last.body.actions, e.body.action])], diffs: merged } };
+    } else out.push({ ...e, body: { ...e.body, names, actions: [e.body.action], diffs } });
+  }
+  return out;
 }

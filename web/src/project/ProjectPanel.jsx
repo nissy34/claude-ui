@@ -4,7 +4,7 @@ import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 're
 import { api, timeAgo } from '../api.js';
 import { Button, IconButton, Input, Menu, MenuSeparator, Modal, ModalBody, ModalHead, Spinner, Textarea } from '../ui/index.jsx';
 import { confirmDialog, promptDialog } from '../ui/dialogs.jsx';
-import { DecisionCard, Md } from './ProjectCards.jsx';
+import { DecisionCard, Md, MemoryUpdate } from './ProjectCards.jsx';
 import { ProjectMemory } from './ProjectFiles.jsx';
 import { projectAction } from './useProject.js';
 import { ProjectUsageRing } from './ProjectUsage.jsx';
@@ -485,11 +485,7 @@ function ThreadPane({ project, threadId, onBack, onSelect, openThread, onError, 
                 </div>
               );
             case 'memory.changed':
-              return (
-                <div key={e.id} className="pjp-note pjp-act">
-                  <span className="pjp-act-k">{b.action === 'delete' ? 'Removed from project memory' : 'Updated project memory'}</span> {(b.names || [b.name]).join(', ')}
-                </div>
-              );
+              return <MemoryUpdate key={e.id} body={b} ts={e.ts} />;
             case 'signal':
               return (
                 <div key={e.id} className="pjp-note pjp-act warn">
