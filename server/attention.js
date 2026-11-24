@@ -17,6 +17,10 @@ import crypto from 'node:crypto';
 import { config } from './config.js';
 import { loginAllowed, loginFailed } from './auth.js';
 import { controlSession } from './session-control.js';
+import { loopbackUrl, probe, deliverCallback, submitForm, newSeal, sealLink, openSealed, findCallback, findSealed } from './loopback-signin.js';
+
+// The encrypt-on-phone page for localhost password forms (docs/seal.html, served by GitHub Pages).
+const SEAL_URL = process.env.CW_SEAL_URL || 'https://nissy34.github.io/claude-ui/seal.html';
 
 const TOKEN_FILE = path.join(config.dataDir, 'bridge-token');
 const RING = 500;
@@ -187,7 +191,94 @@ export function createAttention({ store, engine, resolveDir, listProjects, deskt
 
   function elicitItem(s, e) {
     // Forms can ask for passwords: those stay in the UI. Only links go out.
-    return { id: `elicit:${s.id}:${e.reqId}`, kind: 'signin', session: sessionInfo(s), ts: e.ts, server: e.server, message: clip(e.message, 500), url: e.mode === 'url' ? e.url : null, form: e.mode !== 'url' };
+    const item = { id: `elicit:${s.id}:${e.reqId}`, kind: 'signin', session: sessionInfo(s), ts: e.ts, server: e.server, message: clip(e.message, 500), url: e.mode === 'url' ? e.url : null, form: e.mode !== 'url' };
+    if (e.mode === 'url' && loopbackUrl(e.url)) {
+      // A link that only opens on this machine: what we found behind it (see loopback-signin.js).
+      const f = localFlows.get(item.id);
+      if (!f) item.local = 'checking';
+      else if (f.kind === 'sso') Object.assign(item, { local: 'sso', url: f.signinUrl });
+      else if (f.kind === 'form') Object.assign(item, { local: 'form', url: null, fields: f.form.fields.map((x) => x.label), sealUrl: f.seal ? sealLink(SEAL_URL, f.seal, { server: e.server, fields: f.form.fields }) : null });
+      else Object.assign(item, { local: 'unknown', why: f.why || null });
+    }
+    return item;
+  }
+
+  // ---------- sign-ins whose link only opens on this machine ----------
+  const localFlows = new Map(); // elicit item id -> { kind, port, jar, signinUrl | form, seal, s, reqId, url }
+  async function prepareLocal(s, e) {
+    const id = `elicit:${s.id}:${e.reqId}`;
+    const r = await Promise.race([probe(e.url), new Promise((ok) => setTimeout(() => ok({ kind: 'unknown', why: 'the page took too long' }), 8000))]);
+    const f = { ...r, s, reqId: e.reqId, url: e.url, server: e.server };
+    if (f.kind === 'form') f.seal = await newSeal();
+    localFlows.set(id, f);
+    return f;
+  }
+  const sealUrlOf = (f) => sealLink(SEAL_URL, f.seal, { server: f.server, fields: f.form.fields });
+  function finishedLocal(f, id) {
+    localFlows.delete(id);
+    f.s.lastAnswerBy = 'bridge';
+    try {
+      if (f.s.elicits.has(f.reqId)) f.s.answerElicit({ reqId: f.reqId, action: 'accept' });
+    } finally {
+      f.s.lastAnswerBy = null;
+    }
+  }
+
+  /**
+   * Finish a localhost sign-in from a Teams reply: the callback address the phone ended on (sso), or
+   * the code from the encrypt page (form). The decrypted values only go to the localhost page.
+   */
+  async function finishLocal({ id, callback, sealed }) {
+    if (sealed) {
+      const sd = findSealed(sealed);
+      if (!sd) throw new Error("That doesn't look like a code from the encrypt page.");
+      const hit = [...localFlows].find(([, f]) => f.kind === 'form' && f.seal?.sid === sd.sid) || [...localFlows].find(([k, f]) => f.kind === 'form' && f.usedSids?.has(sd.sid) && (!id || k === id));
+      if (!hit) throw new Error('That code is for a sign-in that is gone or already finished.');
+      const [key, f] = hit;
+      if (!f.seal || f.seal.sid !== sd.sid) {
+        f.seal = await newSeal();
+        return { ok: false, id: key, note: 'That code was already used. Open the new link and enter it again.', sealUrl: sealUrlOf(f) };
+      }
+      if (Date.now() > f.seal.exp) {
+        f.seal = await newSeal();
+        return { ok: false, id: key, note: 'That link expired. Open the new one and enter it again.', sealUrl: sealUrlOf(f) };
+      }
+      let values = await openSealed(f.seal, sd);
+      // One use: the key is gone whatever happens next.
+      (f.usedSids ||= new Set()).add(f.seal.sid);
+      f.seal = null;
+      const names = new Set(f.form.fields.map((x) => x.name));
+      if (Object.keys(values).some((k) => !names.has(k)) || Object.values(values).some((v) => typeof v !== 'string' || v.length > 2000)) {
+        f.seal = await newSeal();
+        return { ok: false, id: key, note: "That code doesn't match this sign-in's fields. Open the new link and enter it again.", sealUrl: sealUrlOf(f) };
+      }
+      let r;
+      try {
+        r = await submitForm(f, values);
+      } finally {
+        values = null;
+      }
+      if (r.ok) {
+        finishedLocal(f, key);
+        return { ok: true, id: key, answered: 'signed in' };
+      }
+      // Wrong password, or the page wants a fresh form (new hidden tokens): read it again, new key.
+      const again = await probe(f.url).catch(() => null);
+      if (again?.kind === 'form') Object.assign(f, { form: again.form, jar: again.jar, page: again.page });
+      f.seal = await newSeal();
+      return { ok: false, id: key, note: `The sign-in page didn't accept it${r.note ? ` (${clip(r.note, 160)})` : ''}. Check the username and password and try again with the new link.`, sealUrl: sealUrlOf(f) };
+    }
+    const url = findCallback(callback);
+    if (!url) throw new Error('That is not a localhost address.');
+    const port = url.port || '80';
+    const cands = [...localFlows].filter(([k, f]) => f.kind === 'sso' && (!id || k === id));
+    const hit = cands.find(([, f]) => f.port === port);
+    if (!hit) throw new Error(cands.length ? `No sign-in is waiting on port ${port}; this one waits on port ${cands.map(([, f]) => f.port).join(', ')}.` : 'No sign-in is waiting for that address. It may have finished or timed out.');
+    const [key, f] = hit;
+    const r = await deliverCallback(f, url);
+    if (!r.ok) return { ok: false, id: key, note: `The sign-in didn't take it (HTTP ${r.status}${r.body ? `: ${clip(r.body, 160)}` : ''}). Start the sign-in again if it keeps failing.` };
+    finishedLocal(f, key);
+    return { ok: true, id: key, answered: 'signed in' };
   }
 
   function decisionItem(p, d) {
@@ -246,6 +337,11 @@ export function createAttention({ store, engine, resolveDir, listProjects, deskt
         permTools.set(ev.reqId, ev.tool);
         return push({ type: 'ask', item: permItem(s, ev) });
       case 'elicit':
+        // A localhost link: look behind it first, so the card can carry something a phone can open.
+        if (ev.mode === 'url' && loopbackUrl(ev.url))
+          return void prepareLocal(s, ev)
+            .catch(() => null)
+            .then(() => s.elicits.has(ev.reqId) && push({ type: 'ask', item: elicitItem(s, ev) }));
         return push({ type: 'ask', item: elicitItem(s, ev) });
       case 'perm_done': {
         const tool = permTools.get(ev.reqId);
@@ -254,6 +350,7 @@ export function createAttention({ store, engine, resolveDir, listProjects, deskt
         return push({ type: 'resolved', id: `perm:${s.id}:${ev.reqId}`, answer, by: s.lastAnswerBy || 'ui' });
       }
       case 'elicit_done':
+        localFlows.delete(`elicit:${s.id}:${ev.reqId}`);
         return push({ type: 'resolved', id: `elicit:${s.id}:${ev.reqId}`, answer: ev.action, by: s.lastAnswerBy || 'ui' });
       case 'result':
         // Turn updates only for chats the bridge started, wrote to, or gave a Teams thread; projects
@@ -328,6 +425,9 @@ export function createAttention({ store, engine, resolveDir, listProjects, deskt
         if (!s.elicits.has(b)) return { ok: false, already: true, note: 'Already answered.' };
         const act = ['accept', 'decline', 'cancel'].includes(behavior) ? behavior : 'accept';
         if (act === 'accept' && s.elicits.get(b).mode !== 'url') throw new Error('This sign-in is a form; fill it in in the web UI.');
+        const lf = localFlows.get(id);
+        if (act === 'accept' && lf?.kind === 'sso') throw new Error('Reply with the address the sign-in page ended on (it starts with http://localhost).');
+        if (act === 'accept' && lf?.kind === 'form') throw new Error('Reply with the code from the encrypt page.');
         s.answerElicit({ reqId: b, action: act });
         return { ok: true, answered: act };
       }
@@ -525,7 +625,7 @@ export function createAttention({ store, engine, resolveDir, listProjects, deskt
     ...(i.kind === 'permission' || i.kind === 'plan' ? { tool: i.tool, detail: clip(i.detail, 300) } : {}),
     ...(i.kind === 'question' ? { questions: i.questions.map((q) => ({ question: q.question, options: q.options.map((o) => o.label) })) } : {}),
     ...(i.kind === 'decision' ? { question: i.question, options: i.options.map((o, n) => `${n + 1}. ${o.label}${n === i.recommended ? ' (recommended)' : ''}`), irreversible: i.irreversible } : {}),
-    ...(i.kind === 'signin' ? { server: i.server, url: i.url, form: i.form } : {}),
+    ...(i.kind === 'signin' ? { server: i.server, url: i.url, form: i.form, ...(i.local ? { local: i.local } : {}) } : {}),
     waiting: Math.round((Date.now() - (i.ts || Date.now())) / 60000) + ' min',
   });
 
@@ -663,9 +763,10 @@ export function createAttention({ store, engine, resolveDir, listProjects, deskt
         clearTimeout(timer);
       });
     });
-    app.post('/api/bridge/answer', (req, res) => {
+    app.post('/api/bridge/answer', async (req, res) => {
       try {
-        res.json(answer(req.body || {}));
+        const b = req.body || {};
+        res.json(b.callback || b.sealed ? await finishLocal(b) : answer(b));
       } catch (e) {
         res.status(400).json({ error: e.message });
       }

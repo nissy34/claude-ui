@@ -26,6 +26,28 @@ export function md(text) {
     .join('');
 }
 
+// Sign-ins whose link only opens on the server (localhost): what to do instead.
+export const SSO_HINT = "Open Sign in on your phone. When you're done it ends on a page that can't load (http://localhost…). Copy that page's address and reply with it here. Reply no to cancel.";
+export const FORM_HINT = "Open the link and type them there: they're encrypted on your phone. Reply here with the code it gives you. Never type a password in Teams. Reply no to cancel.";
+export const LOCAL_HINT = 'Its sign-in link only opens on the server, and it isn\'t one Teams can finish. Sign in from the web UI.';
+export const fieldWords = (item) => {
+  const f = (item.fields || []).map((x) => String(x).toLowerCase());
+  return f.length ? (f.length > 1 ? `${f.slice(0, -1).join(', ')} and ${f.at(-1)}` : f[0]) : 'your password';
+};
+
+/**
+ * A reply that finishes a localhost sign-in: the code from the encrypt page, or (while such a
+ * sign-in is open) a localhost address. Null otherwise.
+ */
+export function localSigninReply(text, ssoOpen) {
+  const t = String(text || '');
+  const sealed = /\bcw1\.[A-Za-z0-9_-]{6,40}\.[A-Za-z0-9_-]{40,200}\.[A-Za-z0-9_-]{12,40}\.[A-Za-z0-9_-]{16,8000}/.exec(t.replace(/\s+/g, ''));
+  if (sealed) return { sealed: sealed[0] };
+  if (!ssoOpen) return null;
+  const cb = /https?:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?\/[^\s<>"']*/i.exec(t);
+  return cb ? { callback: cb[0] } : null;
+}
+
 /** Teams HTML (or plain text) back to plain text. */
 export function plain(html) {
   return String(html ?? '')
@@ -71,8 +93,13 @@ export function askHtml(item, code, { allowPermissions = true } = {}) {
       const opts = item.options.map((o, i) => `${i + 1}. <b>${esc(o.label)}</b>${i === item.recommended ? ' (recommended)' : ''}${o.consequence ? ` · ${esc(o.consequence)}` : ''}`).join('<br>');
       return `${head} needs a decision${item.irreversible ? ' <b>(cannot be undone)</b>' : ''}:<br>${esc(item.question)}<br>${opts}${how(code, 'a number')}`;
     }
-    case 'signin':
-      return `${head} · <b>${esc(item.server || 'An MCP server')}</b> needs you to sign in.<br>${esc(item.message)}${item.url ? `<br><a href="${esc(item.url)}">${esc(clip(item.url, 120))}</a><br><i>Open the link, then reply <b>done</b>. Reply <b>no</b> to cancel.</i>` : '<br><i>This one is a form: fill it in in the web UI.</i>'}`;
+    case 'signin': {
+      const top = `${head} · <b>${esc(item.server || 'An MCP server')}</b> needs you to sign in.<br>${esc(item.message)}`;
+      if (item.local === 'sso' && item.url) return `${top}<br><a href="${esc(item.url)}">Sign in</a><br><i>${esc(SSO_HINT)}</i>`;
+      if (item.local === 'form' && item.sealUrl) return `${top}<br><a href="${esc(item.sealUrl)}">Enter ${esc(fieldWords(item))}</a><br><i>${esc(FORM_HINT)}</i>`;
+      if (item.local) return `${top}<br><i>${esc(LOCAL_HINT)}</i>`;
+      return `${top}${item.url ? `<br><a href="${esc(item.url)}">${esc(clip(item.url, 120))}</a><br><i>Open the link, then reply <b>done</b>. Reply <b>no</b> to cancel.</i>` : '<br><i>This one is a form: fill it in in the web UI.</i>'}`;
+    }
     case 'plan':
       return `${head} has a plan and wants to start:<br>${md(clip(item.detail, 1500))}${allowPermissions ? how(code, '<b>yes</b> to start or <b>no</b> plus what to change') : '<br><i>Approve it in the web UI.</i>'}`;
     default:

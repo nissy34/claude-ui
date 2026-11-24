@@ -1,7 +1,7 @@
 // Adaptive Cards for the Teams bridge. The bridge posts as you through Graph, so cards are
 // read-only (no bot receives button taps): you answer by replying, as with plain messages.
 // Links open the web UI when CW_PUBLIC_URL (or TEAMS_UI_LINK) says where it is.
-import { turnWord } from './text.mjs';
+import { FORM_HINT, LOCAL_HINT, SSO_HINT, fieldWords, turnWord } from './text.mjs';
 
 const clip = (s, n) => {
   s = String(s ?? '');
@@ -82,6 +82,9 @@ export function askCard(item, n, { allowPermissions = true, uiUrl } = {}) {
         url
       );
     case 'signin':
+      if (item.local === 'sso' && item.url) return card([...header(n, where, `${item.server || 'An MCP server'} needs you to sign in`, 'Warning'), T(clip(item.message, 500), { spacing: 'Small' }), hint(SSO_HINT)], item.url, 'Sign in');
+      if (item.local === 'form' && item.sealUrl) return card([...header(n, where, `${item.server || 'An MCP server'} needs your ${fieldWords(item)}`, 'Warning'), T(clip(item.message, 500), { spacing: 'Small' }), hint(FORM_HINT)], item.sealUrl, `Enter ${fieldWords(item)}`);
+      if (item.local) return card([...header(n, where, `${item.server || 'An MCP server'} needs you to sign in`, 'Warning'), T(clip(item.message, 500), { spacing: 'Small' }), hint(LOCAL_HINT)], url);
       return card(
         [
           ...header(n, where, `${item.server || 'An MCP server'} needs you to sign in`, 'Warning'),
@@ -172,7 +175,10 @@ export function flowCard(item, nonce, { allowPermissions = true, uiUrl } = {}, r
       item.options.forEach((o, i) => actions.push(submit(o.label.slice(0, 40), { a: 'choice', n: i + 1 }, i === item.recommended ? 'positive' : undefined)));
       break;
     case 'signin':
-      if (!item.url) return null;
+      // Localhost sign-ins finish with a reply (an address or a code), not a Done button.
+      if (item.local === 'sso' && item.url) return { ...base, body: base.body, actions: [{ type: 'Action.OpenUrl', title: 'Sign in', url: item.url }, submit('Cancel', { a: 'no' })] };
+      if (item.local === 'form' && item.sealUrl) return { ...base, body: base.body, actions: [{ type: 'Action.OpenUrl', title: `Enter ${fieldWords(item)}`, url: item.sealUrl }, submit('Cancel', { a: 'no' })] };
+      if (item.local || !item.url) return null;
       actions.push({ type: 'Action.OpenUrl', title: 'Sign in', url: item.url }, submit('Done', { a: 'yes' }, 'positive'), submit('Cancel', { a: 'no' }));
       break;
     default:

@@ -20,11 +20,23 @@ Talk to your agents from a Microsoft Teams chat. The bridge runs next to Claude 
 | A project decision card | The options, the recommended one marked | a number |
 | A plan (ExitPlanMode) | The plan | `yes`, or `no` plus what to change |
 | An MCP sign-in link | The link | `done` after you sign in, `no` to cancel |
+| An MCP sign-in link that only opens on the server (`http://localhost…`), SSO | The real sign-in page behind it | the address your phone ends on (`http://localhost…?code=…`) |
+| The same, but the localhost page asks for a username and password | A link to the encrypt page | the code the encrypt page gives you |
 | A coordinator post, a finished chat started from Teams, `notify_user` | The text | reply to continue that conversation |
 
 Answer by **replying to the message** (swipe it on the phone, or hover and Reply). Your message gets 👀 while it's being worked on, and ✅ once the answer is back. A bare `yes` or `2` answers the one open request when there is only one. Whichever side answers first wins: answer in the web UI and the Teams message is marked "Answered in the web UI".
 
-MCP sign-in **forms** (usernames, passwords) never go to Teams; fill those in the web UI.
+MCP sign-in **forms** (usernames, passwords) never go to Teams; fill those in the web UI. Passwords are never typed into Teams in readable form (see below).
+
+### Sign-ins whose link only opens on the server
+
+Some MCP servers running on the server hand out a `http://localhost:<port>/…` sign-in link. On your phone `localhost` is the phone, so the link can't open there. Claude UI opens that link itself first and sees what's behind it:
+
+- **SSO (a redirect to Microsoft, Google…)**: the card links the real sign-in page. Sign in on your phone; it ends on a `http://localhost…/callback?code=…` page that can't load. Copy that page's address and reply with it. Claude UI opens it on the server's own localhost, with the cookies from its first visit, as your browser would have, and the chat goes on. The address is fine to leave in Teams: the code in it works once, expires within minutes, and only the waiting local server can use it. Only an address for the same port as the waiting sign-in is accepted, and it's never passed to the Assistant or a chat.
+- **A username/password page**: the card links an **encrypt page** (`docs/seal.html`). It opens with a one-time public key made on the server, carried after the `#` (browsers never send that part to the host). You type the username and password there; the page encrypts them on your phone (ECDH P-256 + AES-GCM, WebCrypto) and gives you a code like `cw1.…`. Reply with it. The server decrypts it, submits the form to the localhost page (with its hidden fields and cookies), and throws the key away. Teams only ever holds scrambled text that nothing can open any more. A wrong password gets a new link; a key expires after 10 minutes (`CW_SEAL_TTL_MS`) or one use. The page makes no network requests (its Content-Security-Policy forbids them).
+- Anything else (a page with a button or script, another port): the card says to sign in from the web UI.
+
+The encrypt page has to load on your phone, so it's served by **GitHub Pages** from this repository: in the repository's Settings > Pages, pick "Deploy from a branch", branch `main`, folder `/docs`. It's then at `https://<owner>.github.io/claude-ui/seal.html`. Set `CW_SEAL_URL` on the Claude UI server if yours is somewhere else (any static HTTPS host works; the page needs nothing from a server).
 
 **Just write what you want.** Plain messages go to the **Assistant**, a chat in Claude UI on Haiku that acts as your chief of staff. It sees what's waiting on you, your projects and your chats, and turns "tell the Claude UI project to add dark mode", "yes to the npm one" or "what's everyone doing?" into the right action, then answers in a sentence or two. It only answers a request when your words clearly say what to answer; otherwise it asks back. The Assistant is pinned in the web UI's sidebar, so you can read the whole conversation there and talk to it from the UI too. Replying to one of its messages continues with it; replying to a request with more than yes/no also goes to it, with that request as context.
 
@@ -188,12 +200,12 @@ If your company has a **sign-in frequency** policy (for example "sign in again e
 | `CW_BRIDGE_TOKEN` / `CW_BRIDGE_TOKEN_FILE` | `~/.claude-web/bridge-token` | |
 | `TEAMS_DATA_DIR` | `~/.claude-web/teams-bridge` | state and tokens |
 
-On the Claude UI side, `CW_BRIDGE_API=0` turns the feed off.
+On the Claude UI side, `CW_BRIDGE_API=0` turns the feed off, and `CW_SEAL_URL` says where the encrypt page is (default `https://nissy34.github.io/claude-ui/seal.html`).
 
 ## Security
 
 - Approving a permission prompt from Teams runs code on your server. Only messages from your own account are read, the bridge API needs its own token, and browsers can't call it. Set `TEAMS_ALLOW_PERMISSIONS=0` to keep tool approvals in the web UI.
-- Prompts show the command or file path (trimmed), never file contents. Sign-in forms stay in the web UI.
+- Prompts show the command or file path (trimmed), never file contents. Sign-in forms stay in the web UI. Passwords for localhost sign-in pages go through Teams only encrypted for a one-time key; they are never logged, stored or shown to a model. Whoever controls the host of the encrypt page could change it, so serve it from a repository you control.
 - Messages go through your Teams tenant like any other chat message.
 
 ## Claude UI API (for other companions)
@@ -202,7 +214,7 @@ All under `/api/bridge`, `Authorization: Bearer <bridge token>`, requests with a
 
 - `GET /attention` → `{ seq, items, lastSeen }`: open permission prompts, questions, plans, sign-ins, decisions.
 - `GET /events?after=<seq>&wait=<seconds>` → `{ seq, lastSeen, events }`, long-poll. Events: `ask`, `resolved`, `post` (coordinator), `turn` (a finished turn of a chat the bridge started, wrote to or gave a thread), `notify`, `thread` (open or link a chat's or project's thread), `status` (what a chat with a thread is doing now), `archived`.
-- `POST /answer` `{ id, text?, choice?, behavior?: allow|always|deny|accept|decline, answers? }`.
+- `POST /answer` `{ id, text?, choice?, behavior?: allow|always|deny|accept|decline, answers? }`. For a localhost sign-in: `{ id?, callback: "http://localhost…" }` or `{ id?, sealed: "cw1.…" }` → `{ ok, id, note?, sealUrl? }`.
 - `POST /act` `{ action: project_send|new_chat|send|link|stop|status|folders, ... }`. `send` answers `busy` and `status` (what the chat was doing); `link` marks a chat as having a thread.
 - `POST /status` `{ state, message, code?, url? }`: the bridge's own state, shown in Settings > Teams and as a notice in the web UI.
 - `GET /signin-reply?wait=<seconds>` → `{ url }`: the address pasted in Settings > Teams, handed over once.
