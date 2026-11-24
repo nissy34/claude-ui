@@ -37,6 +37,19 @@ if (!secret) {
   }
 }
 
+// The token built-in MCP servers and hooks use to call /internal. Kept in a file so CLIs that
+// outlive a server restart (in the session runner) still get in afterwards.
+function internalToken() {
+  const f = path.join(dataDir, 'internal-token');
+  try {
+    const t = fs.readFileSync(f, 'utf8').trim();
+    if (t.length === 48) return t;
+  } catch {}
+  const t = crypto.randomBytes(24).toString('hex');
+  fs.writeFileSync(f, t, { mode: 0o600 });
+  return t;
+}
+
 const defaultRoot = fs.existsSync(path.join(home, 'projects')) ? path.join(home, 'projects') : home;
 
 // On macOS the disk ignores letter case, so a root typed as /users/me/projects works but gives
@@ -90,7 +103,10 @@ export const config = {
   defaultMode: env.CW_DEFAULT_MODE || 'auto',
   assistantModel: env.CW_ASSISTANT_MODEL || 'haiku',
   assistantMayApprove: env.CW_ASSISTANT_APPROVE !== '0',
-  internalToken: crypto.randomBytes(24).toString('hex'),
+  internalToken: internalToken(),
+  // The session runner's socket (server/runner.js). Set: chats and terminals run there and survive
+  // server restarts. Unset: they are child processes of the server, as before.
+  runnerSocket: env.CW_RUNNER ? expand(env.CW_RUNNER) : '',
   internalUrl: '',
   trustProxy: env.CW_TRUST_PROXY === '1',
   // Address other computers use to reach this server (e.g. http://myserver:8787),

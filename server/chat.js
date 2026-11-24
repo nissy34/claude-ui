@@ -5,7 +5,7 @@ import { refreshPr } from './pr-cache.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import readline from 'node:readline';
+import { openPipe, onLines, runner, RunnerProc } from './proc.js';
 import { spawn } from 'node:child_process';
 import { sessionExtras } from './environments.js';
 import { fileURLToPath } from 'node:url';
@@ -462,14 +462,34 @@ export class ChatSession {
       const env = childEnv(m.id, envx.env);
       // Our own switch decides; an inherited CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=0 would silence them.
       if (config.promptSuggestions) delete env.CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION;
-      proc = spawn(cmd.file, cmd.args, { cwd: m.cwd, env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+      proc = openPipe({ id: m.id, file: cmd.file, args: cmd.args, cwd: m.cwd, env, meta: { name: m.name } });
     } catch (e) {
       this.record({ k: 'error', text: `Could not start ${config.claudeBin}: ${e.message}` });
       return;
     }
-    this.proc = proc;
     this.stderr = [];
-    m.pid = proc.pid;
+    this.wireProcess(proc);
+    // Ask for the command list with descriptions (what the SDK's supportedCommands() uses), for the / menu.
+    this.control({ subtype: 'initialize' })
+      .then((r) => {
+        if (!Array.isArray(r?.commands)) return;
+        m.commandInfo = r.commands.map((c) => ({ name: c.name, description: (c.description || '').slice(0, 300), argumentHint: c.argumentHint || '', builtin: !!c.builtin, aliases: c.aliases || [] }));
+        commandCache.set(m.cwd, m.commandInfo);
+        if (Array.isArray(r.models)) setModels(r.models);
+        this.broadcastState();
+      })
+      .catch(() => {});
+    this.store.save();
+  }
+
+  /** Hook a started (or reattached) CLI process up to this chat. */
+  wireProcess(proc) {
+    const m = this.meta;
+    this.proc = proc;
+    m.pid = proc.pid ?? null;
+    proc.on('spawn', () => {
+      if (this.proc === proc) m.pid = proc.pid;
+    });
     proc.on('error', (e) => this.record({ k: 'error', text: `Could not start ${config.claudeBin}: ${e.message}` }));
     proc.stdin.on('error', () => {});
     proc.stderr.setEncoding('utf8');
@@ -477,7 +497,7 @@ export class ChatSession {
       this.stderr.push(d);
       if (this.stderr.length > 50) this.stderr.shift();
     });
-    readline.createInterface({ input: proc.stdout, crlfDelay: Infinity }).on('line', (line) => {
+    onLines(proc, (line) => {
       if (!line.trim()) return;
       this.heard = true;
       clearTimeout(this.watchdog);
@@ -493,43 +513,104 @@ export class ChatSession {
         console.error('chat message handling failed', e);
       }
     });
-    // Ask for the command list with descriptions (what the SDK's supportedCommands() uses), for the / menu.
-    this.control({ subtype: 'initialize' })
-      .then((r) => {
-        if (!Array.isArray(r?.commands)) return;
-        m.commandInfo = r.commands.map((c) => ({ name: c.name, description: (c.description || '').slice(0, 300), argumentHint: c.argumentHint || '', builtin: !!c.builtin, aliases: c.aliases || [] }));
-        commandCache.set(m.cwd, m.commandInfo);
-        if (Array.isArray(r.models)) setModels(r.models);
-        this.broadcastState();
-      })
-      .catch(() => {});
-    proc.on('exit', (code, signal) => {
-      if (this.proc !== proc) return;
+    proc.on('exit', (code, signal) => this.onProcessExit(proc, code, signal));
+  }
+
+  onProcessExit(proc, code, signal) {
+    const m = this.meta;
+    if (this.proc !== proc) return;
+    // Another server took this process over (a stray old container): let go without a word.
+    if (proc.detachedFromUs) {
       this.proc = null;
       m.pid = null;
-      const hadWork = this.turns > 0 || this.pending.size > 0;
-      this.cancelWait('Claude stopped');
-      this.turns = 0;
-      for (const id of this.pending.keys()) this.record({ k: 'perm_done', reqId: id, behavior: 'cancelled' });
-      this.pending.clear();
-      for (const id of this.elicits.keys()) this.record({ k: 'elicit_done', reqId: id, action: 'cancelled' });
-      this.elicits.clear();
-      for (const w of this.controlWaiters.values()) w.reject(new Error('process exited'));
-      this.controlWaiters.clear();
-      this.oauth.clear();
-      this.endTasksOnExit();
-      clearTimeout(this.watchdog);
-      if (this.quietExit) this.quietExit = false;
-      else if (hadWork || (code && code !== 0 && !this.stopping)) {
-        const err = this.stderr.join('').trim().split('\n').slice(-8).join('\n');
-        const why = this.stopping ? 'Claude was stopped before it finished.' : `Claude exited (${signal || `code ${code}`}).`;
-        this.record({ k: 'error', resumable: true, text: `${why} Press Resume or send a message to pick up where it left off.${err ? `\n\n${err}` : ''}` });
-      }
-      this.stopping = false;
-      this.store.save();
-      this.broadcastState();
-    });
+      return this.broadcastState();
+    }
+    this.proc = null;
+    m.pid = null;
+    const hadWork = this.turns > 0 || this.pending.size > 0;
+    this.cancelWait('Claude stopped');
+    this.turns = 0;
+    for (const id of this.pending.keys()) this.record({ k: 'perm_done', reqId: id, behavior: 'cancelled' });
+    this.pending.clear();
+    for (const id of this.elicits.keys()) this.record({ k: 'elicit_done', reqId: id, action: 'cancelled' });
+    this.elicits.clear();
+    for (const w of this.controlWaiters.values()) w.reject(new Error('process exited'));
+    this.controlWaiters.clear();
+    this.oauth.clear();
+    this.endTasksOnExit();
+    clearTimeout(this.watchdog);
+    if (this.quietExit) this.quietExit = false;
+    else if (hadWork || (code && code !== 0 && !this.stopping)) {
+      const err = this.stderr.join('').trim().split('\n').slice(-8).join('\n');
+      const why = this.stopping ? 'Claude was stopped before it finished.' : `Claude exited (${signal || `code ${code}`}).`;
+      this.record({ k: 'error', resumable: true, text: `${why} Press Resume or send a message to pick up where it left off.${err ? `\n\n${err}` : ''}` });
+    }
+    this.stopping = false;
     this.store.save();
+    this.broadcastState();
+  }
+
+  /**
+   * The server is going down and the CLI runs in the session runner: leave it running and save
+   * what this chat knows about it, so the next server picks it up where this one stopped.
+   */
+  detachProcess() {
+    const proc = this.proc;
+    const d = proc?.detach?.();
+    if (!d) return false;
+    this.proc = null;
+    clearTimeout(this.watchdog);
+    clearTimeout(this.idleTimer);
+    clearTimeout(this.interruptTimer);
+    this.meta.runtime = {
+      runnerId: runner.runnerId,
+      offset: d.offset,
+      turns: this.turns,
+      heard: !!this.heard,
+      interrupted: !!this.interrupted,
+      stopping: !!this.stopping,
+      pending: [...this.pending.values()],
+      elicits: [...this.elicits.values()],
+      oauth: [...this.oauth.entries()],
+      tasks: [...this.taskMap().entries()],
+      stderr: this.stderr.slice(-10),
+      at: Date.now(),
+    };
+    return true;
+  }
+
+  /** After a server restart: take over the CLI the runner kept running (info from the runner's list). */
+  async reattach(client, info) {
+    const rt = this.meta.runtime && this.meta.runtime.runnerId === client.info.runnerId ? this.meta.runtime : null;
+    delete this.meta.runtime;
+    if (rt) {
+      this.turns = rt.turns || 0;
+      this.heard = rt.heard;
+      this.interrupted = rt.interrupted;
+      this.stopping = rt.stopping;
+      for (const ev of rt.pending || []) this.pending.set(ev.reqId, ev);
+      for (const ev of rt.elicits || []) this.elicits.set(ev.reqId, ev);
+      for (const [k, v] of rt.oauth || []) this.oauth.set(k, v);
+      for (const [k, v] of rt.tasks || []) this.taskMap().set(k, v);
+      this.stderr = rt.stderr || [];
+    } else {
+      // No snapshot from this runner (it wasn't saved, or a different runner): replay everything it
+      // still has, from a clean slate, so the turn state is rebuilt from the output itself.
+      this.turns = 0;
+      this.stderr = [];
+    }
+    const { proc } = await RunnerProc.attach(client, this.id, 'pipe', rt ? rt.offset : 0, { beforeReplay: (p) => this.wireProcess(p) });
+    this.meta.pid = proc.pid;
+    if (info.alive) this.touchIdle();
+    this.broadcastState();
+    return proc;
+  }
+
+  /** The runner kept no process for this chat (it restarted): say so if a turn was cut off. */
+  runtimeLost() {
+    const rt = this.meta.runtime;
+    delete this.meta.runtime;
+    if (rt && rt.turns > 0) this.record({ k: 'error', resumable: true, text: 'Claude was stopped while the server restarted. Press Resume or send a message to pick up where it left off.' });
   }
 
   writeLine(obj) {
@@ -1346,6 +1427,7 @@ export class ChatSession {
 
   /** The server is going down: note it in the chat, since the process may outlive our exit handler. */
   shutdown() {
+    if (this.detachProcess()) return;
     if (this.proc && this.turns > 0) {
       this.record({ k: 'error', resumable: true, text: 'The server shut down while Claude was working. Press Resume or send a message to pick up where it left off.' });
       this.quietExit = true;

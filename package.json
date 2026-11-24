@@ -15,6 +15,7 @@
     "test:ui": "node scripts/test-ui.mjs",
     "test:resize": "node scripts/test-resize.mjs",
     "test:runner": "node scripts/test-runner.mjs",
+    "test:runner-chats": "node scripts/test-runner-chats.mjs",
     "test:bridge": "node scripts/test-bridge.mjs",
     "demo:teams": "node scripts/teams-demo.mjs",
     "test:gateway": "node scripts/test-gateway.mjs",

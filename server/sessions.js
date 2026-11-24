@@ -240,13 +240,19 @@ class Store {
       list = JSON.parse(fs.readFileSync(META_FILE, 'utf8'));
     } catch {}
     for (const meta of list) {
-      // Processes don't survive a server restart; they're shown as exited and can be resumed.
+      // Local processes don't survive a server restart; they're shown as exited and can be resumed.
+      // Ones in the session runner are picked up again by reattach().
       meta.pid = null;
       this.sessions.set(meta.id, meta.kind === 'chat' ? new ChatSession(meta, this) : new Session(meta));
     }
     // Messages queued for a chat when the server stopped: deliver them now.
+    // (After the session runner's processes are picked up: a chat still running there must not
+    // get a second process.)
+    this.ready = null;
     setTimeout(() => {
-      for (const s of this.sessions.values()) if (s.meta.kind === 'chat' && s.inbox.length) s.flushInbox();
+      Promise.resolve(this.ready).then(() => {
+        for (const s of this.sessions.values()) if (s.meta.kind === 'chat' && s.inbox.length) s.flushInbox();
+      });
     }, 2000).unref?.();
     this.saveTimer = setInterval(() => {
       for (const s of this.sessions.values()) s.saveScreen();
@@ -327,8 +333,42 @@ class Store {
     for (const s of this.sessions.values()) {
       s.saveScreen(true);
     }
-    this.save();
+    // Chats and terminals in the session runner detach (and note where to pick up) instead of
+    // stopping, so save after they have.
     for (const s of this.sessions.values()) (s.shutdown ? s.shutdown() : s.kill());
+    this.save();
+  }
+
+  /**
+   * At startup, with a session runner: take over the processes it kept running while the server
+   * was down. Processes of deleted sessions are stopped.
+   */
+  async reattach(client) {
+    let procs = [];
+    try {
+      ({ procs } = await client.request('list'));
+    } catch (e) {
+      console.warn(`session runner: could not list processes: ${e.message}`);
+      return;
+    }
+    const seen = new Set();
+    for (const info of procs) {
+      const s = this.sessions.get(info.id);
+      if (!s?.reattach) {
+        if (info.alive) client.request('signal', { id: info.id, sig: 'SIGTERM' }).catch(() => {});
+        else client.request('reap', { id: info.id }).catch(() => {});
+        continue;
+      }
+      seen.add(info.id);
+      try {
+        await s.reattach(client, info);
+        console.log(`session runner: picked up ${s.meta.kind} "${s.meta.name}"${info.alive ? '' : ' (it ended while the server was down)'}`);
+      } catch (e) {
+        console.warn(`session runner: could not pick up ${info.id}: ${e.message}`);
+      }
+    }
+    for (const s of this.sessions.values()) if (!seen.has(s.id) && s.meta.runtime) s.runtimeLost?.();
+    this.save();
   }
 }
 

@@ -23,6 +23,7 @@ import {
   loginSucceeded,
 } from './auth.js';
 import { store, claudeProjectDir } from './sessions.js';
+import { connectRunner } from './proc.js';
 import { getChanges, searchFiles, readFileSafe, createWorktree, listBranches } from './git.js';
 import * as browser from './browser.js';
 import { browserAvailable } from './browser.js';
@@ -465,6 +466,11 @@ app.post(
 
 // ---------- Projects (coordinator + threads) ----------
 const engine = new ProjectEngine(store);
+// The session runner: pick up the chats and terminals it kept running while the server was down.
+// After the engine exists (replayed output reaches projects) and before anything starts processes.
+store.ready = config.runnerSocket
+  ? connectRunner(config.runnerSocket, { onReconnect: (c) => store.reattach(c) }).then((c) => c && store.reattach(c))
+  : Promise.resolve();
 
 app.get('/internal/sessions', (req, res) => {
   const all = [...store.sessions.values()];
@@ -1573,6 +1579,7 @@ if (config.schedules) schedules.startScheduler(async (t) => {
   return s.id;
 });
 
+await store.ready;
 server.listen(config.port, config.host, () => {
   startPrSweep(store);
   tokenKeeper.start();

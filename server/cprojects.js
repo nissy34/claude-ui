@@ -1782,7 +1782,8 @@ export class ProjectEngine {
     store.onSignal = (s, kind, info) => this.projectOf(s)?.onSignal(s, kind, info);
     store.projectLaunch = (s) => this.projectOf(s)?.launchConfig(s) || null;
     // Recover after a restart: confirm or re-queue wakes that were in flight, flag turns cut off.
-    setTimeout(() => this.recover(), 1500).unref?.();
+    // (After the session runner's processes are picked up, so turns still running count as running.)
+    setTimeout(() => Promise.resolve(store.ready).then(() => this.recover()), 1500).unref?.();
     this.tick = setInterval(() => this.onTick(), 30_000);
     this.tick.unref?.();
   }
