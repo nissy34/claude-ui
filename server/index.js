@@ -25,6 +25,7 @@ import {
 import { store, claudeProjectDir } from './sessions.js';
 import { connectRunner } from './proc.js';
 import { mountHealth, mountServerRoutes } from './server-admin.js';
+import { mountUpdateRoutes } from './self-update.js';
 import { getChanges, searchFiles, readFileSafe, createWorktree, listBranches } from './git.js';
 import * as browser from './browser.js';
 import { browserAvailable } from './browser.js';
@@ -568,8 +569,9 @@ app.use('/api', (req, res, next) => {
 // Pictures from tool results (MCP screenshots and the like), shown inline in chats.
 mountToolImages(app);
 
-// Server status and draining (Settings > Server, server/ctl.js).
+// Server status and draining (Settings > Server, server/ctl.js), and self-update.
 mountServerRoutes(app, { store });
+mountUpdateRoutes(app, { store });
 
 // Projects API (behind the login check above; the internal tool route checks its own token).
 mountProjectRoutes(app, { engine, store, resolveDir: (d) => resolveDir(d), wrap });

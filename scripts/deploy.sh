@@ -9,25 +9,29 @@
 #
 # Options:
 #   --ref <branch>    deploy this branch (fetched from origin) instead of the current one
+#   --commit <sha>    update only up to this commit of the branch (what someone approved)
 #   --no-pull         build what is checked out
 #   --force           with --runner: restart without waiting for chats to finish
 #   --timeout <min>   with --runner: give up waiting after this long (default 720)
 #   --no-rollback     keep a new server that fails its health check
+#   --ignore-chat <id> with --runner: don't wait for this chat (the one that asked for the update)
 #
 # The first run on an older single-container setup restarts everything once.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-ref="" pull=1 runner=0 force=0 timeout=720 rollback=1
+ref="" commit="" ignore="" pull=1 runner=0 force=0 timeout=720 rollback=1
 while [ $# -gt 0 ]; do
   case "$1" in
     --ref) ref="$2"; shift ;;
+    --commit) commit="$2"; shift ;;
+    --ignore-chat) ignore="$2"; shift ;;
     --no-pull) pull=0 ;;
     --runner) runner=1 ;;
     --force) force=1 ;;
     --timeout) timeout="$2"; shift ;;
     --no-rollback) rollback=0 ;;
-    -h|--help) sed -n '2,17p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,19p' "$0"; exit 0 ;;
     *) echo "unknown option: $1" >&2; exit 1 ;;
   esac
   shift
@@ -49,8 +53,14 @@ if [ "$pull" = 1 ]; then
     git fetch --quiet origin "$ref"
     git checkout --quiet "$ref" 2>/dev/null || git checkout --quiet -b "$ref" --track "origin/$ref"
   fi
-  say "Pulling $(git rev-parse --abbrev-ref HEAD)"
-  git pull --ff-only --quiet
+  if [ -n "$commit" ]; then
+    say "Updating $(git rev-parse --abbrev-ref HEAD) to $commit"
+    git fetch --quiet origin "$(git rev-parse --abbrev-ref HEAD)"
+    git merge --ff-only --quiet "$commit"
+  else
+    say "Pulling $(git rev-parse --abbrev-ref HEAD)"
+    git pull --ff-only --quiet
+  fi
 fi
 export GIT_COMMIT
 GIT_COMMIT=$(git rev-parse --short HEAD)
@@ -80,11 +90,11 @@ if [ "$first" = 1 ]; then
   docker tag claude-ui claude-ui-runner
   # An older single container holds the port the runner publishes now.
   dc rm -sf claude-ui >/dev/null 2>&1 || true
-  dc up -d runner claude-ui
+  dc up -d
 elif [ "$runner" = 1 ]; then
   if running claude-ui && [ "$force" = 0 ]; then
     say "Waiting for chats to finish (new messages wait in their queues meanwhile)"
-    if ! dc exec -T claude-ui node server/ctl.js drain --wait --timeout "$timeout" --reason "runner upgrade"; then
+    if ! dc exec -T claude-ui node server/ctl.js drain --wait --timeout "$timeout" --reason "runner upgrade" ${ignore:+--ignore "$ignore"}; then
       echo "Chats are still working. The server keeps draining; run with --force, or: docker compose exec claude-ui node server/ctl.js undrain" >&2
       exit 2
     fi
@@ -97,6 +107,9 @@ else
   say "Restarting the web server (chats keep running)"
   dc up -d --no-deps claude-ui
 fi
+
+# The updater (if this compose file has it) keeps its own image; start it if it isn't running.
+if dc config --services 2>/dev/null | grep -qx updater && ! running updater; then dc up -d --no-deps updater || true; fi
 
 if got=$(health); then
   say "Up: $got"

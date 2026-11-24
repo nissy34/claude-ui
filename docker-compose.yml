@@ -24,6 +24,9 @@ x-claude-env: &claude-env
   # Where the web server finds the runner (in ~/.claude-web, shared by both).
   CW_RUNNER: ${HOME}/.claude-web/runner/runner.sock
   CW_RUNNER_SOCKET: ${HOME}/.claude-web/runner/runner.sock
+  # The updater service (self-update from Settings > Server or a chat).
+  CW_UPDATER: ${HOME}/.claude-web/updater/updater.sock
+  CW_UPDATER_SOCKET: ${HOME}/.claude-web/updater/updater.sock
   # Your uid/gid are read from the owner of ~/.claude; set these to override.
   # PUID: "1000"
   # PGID: "1000"
@@ -104,6 +107,9 @@ services:
       - "host.docker.internal:host-gateway"
     environment: *claude-env
     volumes: *claude-volumes
+    # Hides the updater's socket from chats (they run here); only the web server asks for updates.
+    tmpfs:
+      - ${HOME}/.claude-web/updater
 
   claude-ui:
     build:
@@ -123,6 +129,31 @@ services:
     env_file: .env
     environment: *claude-env
     volumes: *claude-volumes
+
+  # Self-update: runs scripts/deploy.sh in this folder when Settings > Server or a chat (main
+  # only, with your approval) asks. It has the host's Docker socket and this checkout, and
+  # nothing else; only the web server can reach it. Remove this service to turn self-update off.
+  updater:
+    image: claude-ui-runner
+    pull_policy: never
+    restart: unless-stopped
+    command: ["node", "server/updater.js"]
+    env_file: .env
+    environment: *claude-env
+    volumes:
+      # This checkout (wherever you run docker compose from): deploy.sh pulls and builds here.
+      - .:/deploy
+      - ${HOME}/.claude-web/updater:${HOME}/.claude-web/updater
+      - type: bind
+        source: /var/run/docker.sock
+        target: /var/run/docker.sock
+        bind: { create_host_path: false }
+      - type: bind
+        source: ${HOME}/.gitconfig
+        target: ${HOME}/.gitconfig
+        read_only: true
+        bind: { create_host_path: false }
+      # For a private repository over SSH, also: - ${HOME}/.ssh:${HOME}/.ssh:ro
 
   # Optional: the Teams bridge (teams-bridge/README.md). Talk to your agents from a Microsoft Teams
   # chat. Outbound only: it polls Teams through Microsoft Graph and needs no open ports.

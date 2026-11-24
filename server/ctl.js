@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Talk to the running server from a shell on the same machine (or `docker compose exec claude-ui`):
 //   node server/ctl.js status                 commit, runner, what is working
-//   node server/ctl.js drain [--wait] [--timeout <minutes>] [--reason <text>]
+//   node server/ctl.js drain [--wait] [--timeout <minutes>] [--reason <text>] [--ignore <chat id>]
 //                                             stop starting new turns; --wait blocks until nothing works
 //   node server/ctl.js undrain                deliver what queued up and carry on
 // Exit code 0 on success; 2 when --wait timed out (the server keeps draining).
@@ -42,14 +42,17 @@ try {
     if (flag('--wait')) {
       const until = Date.now() + Number(opt('--timeout', '720')) * 60_000;
       let last = '';
-      while (!st.busy.idle) {
+      // The chat that asked for this update (it waits on it, so it never goes idle).
+      const ignore = opt('--ignore', '');
+      const busy = (x) => x.busy.chats.filter((c) => c.id !== ignore);
+      while (busy(st).length) {
         if (Date.now() > until) {
           console.error('timed out waiting for chats to finish; still draining (undrain to carry on)');
           process.exit(2);
         }
         await new Promise((r) => setTimeout(r, 5000));
         st = await api('/status');
-        const now = st.busy.chats.map((c) => c.name).join(', ');
+        const now = busy(st).map((c) => c.name).join(', ');
         if (now !== last) console.log(now ? `waiting for: ${now}` : 'idle');
         last = now;
       }

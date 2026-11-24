@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { openPipe, onLines, runner, RunnerProc } from './proc.js';
+import { UPDATE_TOOL } from './self-update.js';
 import { spawn } from 'node:child_process';
 import { sessionExtras } from './environments.js';
 import { fileURLToPath } from 'node:url';
@@ -42,6 +43,7 @@ import { firstExchange, generateTitle, queueTitle, transcriptTitle } from './cha
 import { bgTaskMethods, isTaskMessage } from './bg-tasks.js';
 const MCP_BROWSER = path.join(path.dirname(fileURLToPath(import.meta.url)), 'mcp-browser.js');
 const MCP_UI = path.join(path.dirname(fileURLToPath(import.meta.url)), 'mcp-ui.js');
+const MCP_SERVER_ADMIN = path.join(path.dirname(fileURLToPath(import.meta.url)), 'mcp-server-admin.js');
 const MCP_ASSISTANT = path.join(path.dirname(fileURLToPath(import.meta.url)), 'mcp-assistant.js');
 // The Assistant chat: the user's chief of staff, reached from Teams (through the bridge) or the web UI.
 const ASSISTANT_PROMPT = [
@@ -407,6 +409,7 @@ export class ChatSession {
       if (config.childSessions && !proj) builtin.sessions = { type: 'stdio', command: process.execPath, args: [MCP_SCRIPT] };
       if (config.schedules) builtin.schedule = { type: 'stdio', command: process.execPath, args: [MCP_SCHEDULE] };
       builtin.ui = { type: 'stdio', command: process.execPath, args: [MCP_UI] };
+      if (config.updaterSocket) builtin.server = { type: 'stdio', command: process.execPath, args: [MCP_SERVER_ADMIN] };
       if (config.desktopMcp) builtin.notes = { type: 'stdio', command: process.execPath, args: [MCP_NOTES] };
       if (browserAvailable()) builtin.browser = { type: 'stdio', command: process.execPath, args: [MCP_BROWSER] };
       if (Object.keys(builtin).length) args.push('--mcp-config', JSON.stringify({ mcpServers: builtin }));
@@ -419,6 +422,7 @@ export class ChatSession {
       if (builtin.browser) allowed.push(...['snapshot', 'screenshot', 'console', 'scroll', 'wait_for', 'back', 'reload', 'resize'].map((t) => `mcp__browser__${t}`));
       if (builtin.schedule) allowed.push('mcp__schedule__list_scheduled_tasks');
       allowed.push('mcp__ui__update_plan', 'mcp__ui__publish_artifact');
+      if (builtin.server) allowed.push('mcp__server__check_for_update');
       if (builtin.notes) allowed.push(...['list_notes', 'read_note', 'write_note'].map((t) => `mcp__notes__${t}`));
       if (proj?.allowed) allowed.push(...proj.allowed);
       if (allowed.length) args.push('--allowedTools', allowed.join(','));
@@ -428,6 +432,8 @@ export class ChatSession {
       const attribution = coauthorAttribution(this.attributionModel());
       this.attrCommit = attribution.commit;
       settings = { ...(settings || {}), attribution: { ...(settings?.attribution || {}), ...attribution } };
+      // Updating the server always asks (and the server checks the answer too: self-update.js).
+      if (builtin.server) settings.permissions = { ...(settings.permissions || {}), ask: [...(settings.permissions?.ask || []), UPDATE_TOOL] };
       args.push('--settings', JSON.stringify(settings));
       if (proj && typeof proj.tools === 'string') args.push('--tools', proj.tools);
       for (const d of proj?.addDirs || []) args.push('--add-dir', d);
@@ -1110,7 +1116,7 @@ export class ChatSession {
    */
   async allowDenied({ toolUseId }) {
     const ev = this.events.find((e) => e.k === 'block' && e.block?.type === 'tool_use' && e.block.id === toolUseId);
-    if (!ev) return;
+    if (!ev || ev.block.name === UPDATE_TOOL) return; // every update asks
     const rule = allowRuleFor(ev.block.name, ev.block.input, this.meta.cwd);
     if (!rule) return;
     const m = this.meta;
@@ -1141,6 +1147,12 @@ export class ChatSession {
     let response;
     if (behavior === 'allow') {
       response = { behavior: 'allow', updatedInput: updatedInput && typeof updatedInput === 'object' ? updatedInput : p.input };
+      if (p.tool === UPDATE_TOOL) {
+        // Proof for the server that the user approved this exact update (self-update.js). Never
+        // "always": every update asks.
+        this.updateApproval = { input: response.updatedInput, at: Date.now() };
+        always = false;
+      }
       if (always && Array.isArray(p.suggestions) && p.suggestions.length) response.updatedPermissions = p.suggestions;
     } else {
       response = { behavior: 'deny', message: message || 'The user denied this action.' };
