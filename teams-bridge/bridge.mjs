@@ -16,7 +16,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { CHANNEL_SCOPES, Graph } from './graph.mjs';
 import { answeredCard, askCard, flowAnswer, flowCard, postCard } from './cards.mjs';
-import { HELP, TAG, askHtml, esc, md, parseCommand, permissionReply, plain, postHtml, replyParts, resolvedHtml, rootHtml, turnWord, withQuote } from './text.mjs';
+import { HELP, TAG, askHtml, esc, localSigninReply, md, parseCommand, permissionReply, plain, postHtml, replyParts, resolvedHtml, rootHtml, turnWord, withQuote } from './text.mjs';
 
 const env = process.env;
 const home = (p) => p.replace(/^~(?=$|\/)/, os.homedir());
@@ -349,7 +349,7 @@ async function sendAsk(item) {
   if (st.items[item.id]) return;
   const code = st.nextCode++;
   st.codes[code] = item.id;
-  st.items[item.id] = { code, kind: item.kind, open: true, msg: null, ...(item.kind === 'question' ? { item: { questions: item.questions } } : {}) };
+  st.items[item.id] = { code, kind: item.kind, open: true, msg: null, ...(item.kind === 'question' ? { item: { questions: item.questions } } : {}), ...(item.local ? { local: item.local } : {}) };
   const id = await post(askHtml(item, code, cfg), { kind: 'ask', item: item.id, thread: targetOf(item) }, askCard(item, code, cfg));
   st.items[item.id].msg = id;
   if (chan) st.items[item.id].thread = st.sent[id].root || id;
@@ -592,6 +592,7 @@ async function answer(itemId, text, msgId) {
     const r = permissionReply(text);
     if (!r && cfg.assistant) return toAssistant(text, msgId, `[Context] Replying in Teams to request #${it.code} (id ${itemId}).`);
     if (!r) return post(`${TAG} Reply <b>yes</b>${it.kind === 'permission' ? ', <b>always</b>' : ''} or <b>no</b>.`, { kind: 'note' });
+    if (it.kind === 'signin' && r.behavior !== 'deny' && (it.local === 'sso' || it.local === 'form')) return post(`${TAG} ${it.local === 'sso' ? 'Reply with the address the sign-in page ended on (it starts with http://localhost).' : 'Reply with the code from the encrypt page.'}`, { kind: 'note' });
     if (it.kind === 'signin') body.behavior = r.behavior === 'deny' ? 'decline' : 'accept';
     else Object.assign(body, r);
   } else if (/^(skip|\/skip|no answer)$/i.test(text.trim()) && it.kind === 'question') {
@@ -607,6 +608,23 @@ async function answer(itemId, text, msgId) {
     if (msgId) await react(msgId);
   } catch (e) {
     await post(`${TAG} Couldn't answer that: ${esc(e.message)}`, { kind: 'note' });
+  }
+}
+
+/**
+ * Finish a sign-in whose link only opens on the server: the localhost address the phone ended on, or
+ * the code from the encrypt page. Never passed to the Assistant or a chat.
+ */
+async function finishLocal(itemId, reply, msgId) {
+  try {
+    const r = await ui('POST', '/api/bridge/answer', { ...(itemId ? { id: itemId } : {}), ...reply });
+    if (r.ok) {
+      if (msgId) await react(msgId);
+      return;
+    }
+    await post(`${TAG} ${esc(r.note || "That didn't finish the sign-in.")}${r.sealUrl ? `<br><a href="${esc(r.sealUrl)}">Open the new link</a>` : ''}`, { kind: 'note' });
+  } catch (e) {
+    await post(`${TAG} Couldn't finish the sign-in: ${esc(e.message)}`, { kind: 'note' });
   }
 }
 
@@ -661,6 +679,10 @@ async function handle(msg) {
   const { quote, text } = replyParts(msg, st.sent);
   if (!text) return;
   const full = withQuote(quote, text);
+  // A localhost sign-in's address or encrypted code goes straight to the server, never to an agent.
+  const asked = ref && st.sent[ref.id]?.kind === 'ask' ? st.sent[ref.id].item : null;
+  const local = localSigninReply(text, openAsks().some(([, it]) => it.local === 'sso'));
+  if (local) return finishLocal(asked && st.items[asked]?.local ? asked : null, local, msg.id);
   // A reply to one of our messages answers it, or continues that conversation.
   if (ref && st.sent[ref.id]) {
     const s = st.sent[ref.id];

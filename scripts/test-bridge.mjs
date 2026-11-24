@@ -10,6 +10,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Graph } from '../teams-bridge/graph.mjs';
+import { sealFor } from '../server/loopback-signin.js';
+import { createRequire } from 'node:module';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(here, '..');
@@ -17,6 +19,9 @@ const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'cw-bridge-'));
 const port = 19000 + Math.floor(Math.random() * 500);
 const gport = port + 600;
 const base = `http://127.0.0.1:${port}`;
+const ssoPort = port + 1200; // a stand-in MCP sign-in page on localhost that redirects to SSO
+const formPort = port + 1300; // a stand-in localhost username/password page
+const sealPort = port + 1400; // serves docs/seal.html, as GitHub Pages would
 const repo = path.join(tmp, 'projects', 'demo');
 fs.mkdirSync(repo, { recursive: true });
 execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: repo });
@@ -38,6 +43,7 @@ const env = {
   CW_BRIDGE_STATUS_MS: '300',
   FAKE_CLAUDE_LOG: path.join(tmp, 'fake.log'),
   CLAUDE_CONFIG_DIR: path.join(tmp, 'claude'),
+  CW_SEAL_URL: `http://127.0.0.1:${sealPort}/seal.html`,
 };
 for (const k of ['CLAUDECODE', 'CLAUDE_CODE_SESSION_ID', 'CLAUDE_CODE_MESSAGING_SOCKET']) delete env[k];
 
@@ -178,6 +184,61 @@ const graph = http.createServer((req, res) => {
   });
 });
 
+// ---------- stand-in localhost sign-in pages (what an MCP server on the machine would run) ----------
+const ssoHits = []; // callbacks the SSO page got: { code, state, cookie }
+const formHits = []; // username/password posts the form page got
+const readBody = (req) => new Promise((r) => {
+  let d = '';
+  req.on('data', (c) => (d += c));
+  req.on('end', () => r(d));
+});
+const ssoServer = http.createServer(async (req, res) => {
+  const u = new URL(req.url, 'http://x');
+  if (u.pathname === '/login') {
+    res.writeHead(302, { 'set-cookie': 'flow=f123; HttpOnly', location: `https://idp.example/authorize?state=st9&redirect_uri=${encodeURIComponent(`http://localhost:${ssoPort}/callback`)}` });
+    return res.end();
+  }
+  if (u.pathname === '/callback') {
+    ssoHits.push({ code: u.searchParams.get('code'), state: u.searchParams.get('state'), cookie: req.headers.cookie || '' });
+    const ok = u.searchParams.get('state') === 'st9' && /flow=f123/.test(req.headers.cookie || '');
+    res.writeHead(ok ? 200 : 400, { 'content-type': 'text/html' });
+    return res.end(ok ? '<p>Signed in, you can close this tab.</p>' : '<p>Bad state</p>');
+  }
+  res.writeHead(404).end();
+});
+const loginPage = (err = '') => `<html><body>${err ? `<p class="err">${err}</p>` : ''}<form method="post" action="/login"><input type="hidden" name="csrf" value="tok42"><label for="u">Username</label><input id="u" name="username"><label for="p">Password</label><input id="p" type="password" name="password"><button>Sign in</button></form></body></html>`;
+const formServer = http.createServer(async (req, res) => {
+  const u = new URL(req.url, 'http://x');
+  if (u.pathname === '/login' && req.method === 'GET') {
+    res.writeHead(200, { 'content-type': 'text/html', 'set-cookie': 'sess=s77' });
+    return res.end(loginPage());
+  }
+  if (u.pathname === '/login' && req.method === 'POST') {
+    const f = new URLSearchParams(await readBody(req));
+    formHits.push({ username: f.get('username'), password: f.get('password'), csrf: f.get('csrf'), cookie: req.headers.cookie || '' });
+    if (f.get('username') === 'nissan' && f.get('password') === 's3cret!' && f.get('csrf') === 'tok42' && /sess=s77/.test(req.headers.cookie || '')) {
+      res.writeHead(302, { location: '/done' });
+      return res.end();
+    }
+    res.writeHead(200, { 'content-type': 'text/html' });
+    return res.end(loginPage('Wrong username or password'));
+  }
+  if (u.pathname === '/done') {
+    res.writeHead(200, { 'content-type': 'text/html' });
+    return res.end('<p>Signed in.</p>');
+  }
+  res.writeHead(404).end();
+});
+const sealServer = http.createServer((req, res) => {
+  res.writeHead(200, { 'content-type': 'text/html' });
+  res.end(fs.readFileSync(path.join(root, 'docs', 'seal.html')));
+});
+const unesc = (s) => s.replace(/&amp;/g, '&').replace(/&quot;/g, '"');
+const hrefIn = (m, re) => {
+  for (const x of textOf(m).matchAll(/href="([^"]+)"/g)) if (re.test(unesc(x[1]))) return unesc(x[1]);
+  return null;
+};
+
 /** The person writes in the chat, optionally as a reply to one of the bridge's messages. */
 function say(text, replyTo) {
   const id = `u${++n}`;
@@ -203,6 +264,9 @@ async function api(p, opts = {}) {
 
 async function main() {
   await new Promise((r) => graph.listen(gport, '127.0.0.1', r));
+  await new Promise((r) => ssoServer.listen(ssoPort, '127.0.0.1', r));
+  await new Promise((r) => formServer.listen(formPort, '127.0.0.1', r));
+  await new Promise((r) => sealServer.listen(sealPort, '127.0.0.1', r));
   server = spawn(process.execPath, [path.join(root, 'server', 'index.js')], { env, stdio: ['ignore', 'pipe', 'pipe'] });
   server.stderr.on('data', (d) => process.env.VERBOSE && process.stderr.write(d));
   server.stdout.on('data', (d) => process.env.VERBOSE && process.stdout.write(d));
@@ -318,6 +382,74 @@ async function main() {
   say('no not now');
   await until(() => findBot(/answer: denied: The user denied this from Teams: not now/), 15_000, 'denied with reason');
   check(true, 'denied, and Claude gets the reason');
+
+  console.log('SSO sign-in whose link only opens on the server: the real page goes out, the pasted address comes back');
+  say(`@@elicit corp-sso http://localhost:${ssoPort}/login`);
+  const sso = await until(() => findBot(/corp-sso[\s\S]*needs you to sign in/), 15_000, 'sso sign-in message');
+  const ssoLink = hrefIn(sso, /^https:/);
+  check(ssoLink?.startsWith('https://idp.example/authorize') && !/localhost:\d+\/login/.test(textOf(sso).replace(/redirect_uri=[^"&]+/g, '')), 'the card links the real sign-in page, not the localhost link', textOf(sso));
+  check(/can't load[\s\S]*reply with it/.test(textOf(sso)), 'it says to reply with the address the page ends on');
+  say('done', sso.id);
+  await until(() => findBot(/Reply with the address the sign-in page ended on/), 10_000, 'done is not enough');
+  check(true, '"done" alone asks for the address instead of accepting');
+  say(`http://localhost:${ssoPort + 7}/callback?code=c1&amp;state=st9`, sso.id);
+  await until(() => findBot(/No sign-in is waiting on port/), 10_000, 'wrong port refused');
+  check(ssoHits.length === 0, 'an address for another port is refused and nothing is opened');
+  const cbMsg = say(`http://localhost:${ssoPort}/callback?code=good&amp;state=st9`, sso.id);
+  await until(() => ssoHits.length === 1, 10_000, 'callback delivered');
+  check(ssoHits[0].code === 'good' && ssoHits[0].state === 'st9' && /flow=f123/.test(ssoHits[0].cookie), 'the server opens the address on its own localhost, with the cookie from the first visit', ssoHits[0]);
+  await until(() => findBot(/elicit: accept/), 15_000, 'elicitation accepted');
+  check(reactions.includes(`${cbMsg}:✅`), 'the sign-in finishes, the chat goes on, and your reply gets a ✅');
+  const fakeLog = () => fs.readFileSync(env.FAKE_CLAUDE_LOG, 'utf8');
+  check(!/code=good/.test(fakeLog().split('\n').filter((l) => /prompt/.test(l)).join('\n')), 'the address never reaches the chat as a message');
+
+  console.log('Username/password page on localhost: encrypted on the phone, submitted by the server');
+  say(`@@elicit corp-form http://localhost:${formPort}/login`);
+  const fm = await until(() => findBot(/corp-form[\s\S]*needs you to sign in/), 15_000, 'form sign-in message');
+  const sealLink1 = hrefIn(fm, /seal\.html#/);
+  check(sealLink1 && /Enter username and password/.test(textOf(fm)) && /Never type a password in Teams/.test(textOf(fm)), 'the card links the encrypt page for username and password', textOf(fm));
+  const params = (l) => new URLSearchParams(new URL(l).hash.slice(1));
+  const p1 = params(sealLink1);
+  check(JSON.parse(Buffer.from(p1.get('f'), 'base64url')).map((x) => x.n).join() === 'username,password' && p1.get('s') === 'corp-form', 'the link carries the fields and a one-time key, all after the #');
+  say(await sealFor(p1.get('id'), p1.get('k'), { username: 'nissan', password: 'wrong' }), fm.id);
+  const retry = await until(() => findBot(/didn't accept it/), 15_000, 'wrong password note');
+  check(formHits.at(-1)?.password === 'wrong' && formHits.at(-1).csrf === 'tok42' && /sess=s77/.test(formHits.at(-1).cookie), 'the server submits the form with its hidden fields and cookie', formHits.at(-1));
+  const sealLink2 = hrefIn(retry, /seal\.html#/);
+  check(sealLink2 && params(sealLink2).get('id') !== p1.get('id'), 'a wrong password gets a new one-time link', textOf(retry));
+  let code2;
+  try {
+    const { chromium } = createRequire(import.meta.url)('playwright');
+    const browser = await chromium.launch();
+    const page = await browser.newPage();
+    await page.goto(sealLink2);
+    check((await page.textContent('h1')) === 'Sign in to corp-form', 'the encrypt page opens on the phone with the server name');
+    check(!(await page.evaluate(() => location.hash)), 'it takes the key out of the address bar at once');
+    const requests = [];
+    page.on('request', (r) => requests.push(r.url()));
+    await page.fill('#f0', 'nissan');
+    await page.fill('#f1', 's3cret!');
+    await page.click('button[type=submit]');
+    code2 = await page.inputValue('#code');
+    check(/^cw1\./.test(code2) && !code2.includes('s3cret'), 'it gives back a scrambled code', code2);
+    check(requests.length === 0, 'the page sends nothing anywhere', requests);
+    await browser.close();
+  } catch (e) {
+    console.log('  (no browser here, sealing in Node instead:', e.message.split('\n')[0], ')');
+    const p2 = params(sealLink2);
+    code2 = await sealFor(p2.get('id'), p2.get('k'), { username: 'nissan', password: 's3cret!' });
+  }
+  const codeMsg = say(code2, retry.id);
+  await until(() => reactions.includes(`${codeMsg}:✅`), 15_000, 'form sign-in finished');
+  const elicited = () => fs.readFileSync(env.FAKE_CLAUDE_LOG, 'utf8').split('\n').filter((l) => l.includes('"elicited":"corp-form"'));
+  await until(() => elicited().length, 10_000, 'form elicitation answered');
+  check(/"action":"accept"/.test(elicited()[0]), 'the MCP gets accept', elicited());
+  check(formHits.at(-1)?.password === 's3cret!' && formHits.at(-1).username === 'nissan', 'the server submits the decrypted username and password to the localhost page');
+  check(true, 'the sign-in finishes and your reply gets a ✅');
+  say(code2);
+  await until(() => findBot(/gone or already finished/), 10_000, 'replayed code refused');
+  check(true, 'the same code again is refused: the key is gone');
+  check(!chat.some((m) => /s3cret/.test(textOf(m))), 'the password never appears in Teams');
+  check(!fs.readFileSync(env.FAKE_CLAUDE_LOG, 'utf8').includes('s3cret') && !JSON.stringify(await api(`/api/sessions/${sid}/events`, { allowError: true })).includes('s3cret'), 'nor in the chat or its transcript');
 
   console.log('Answered in the web UI: the Teams message says so');
   say('@@ask Bash {"command":"rm -rf build"}');
@@ -591,6 +723,9 @@ main()
     server?.kill('SIGTERM');
     await Promise.race([Promise.all(waits), sleep(5000)]);
     graph.close();
+    ssoServer.close();
+    formServer.close();
+    sealServer.close();
     console.log(`\n${passes} passed, ${failures} failed`);
     if (!failures) {
       try {
