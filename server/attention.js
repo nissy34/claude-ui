@@ -215,12 +215,13 @@ export function createAttention({ store, engine, resolveDir, listProjects, deskt
   }
   const sealUrlOf = (f) => sealLink(SEAL_URL, f.seal, { server: f.server, fields: f.form.fields });
   function finishedLocal(f, id) {
-    localFlows.delete(id);
+    f.done = true; // the card then says "signed in" rather than "accept"
     f.s.lastAnswerBy = 'bridge';
     try {
       if (f.s.elicits.has(f.reqId)) f.s.answerElicit({ reqId: f.reqId, action: 'accept' });
     } finally {
       f.s.lastAnswerBy = null;
+      localFlows.delete(id);
     }
   }
 
@@ -349,9 +350,11 @@ export function createAttention({ store, engine, resolveDir, listProjects, deskt
         const answer = ev.behavior === 'allow' ? (tool === 'AskUserQuestion' ? 'answered' : ev.always ? 'always allowed' : 'allowed') : ev.behavior === 'deny' ? (tool === 'AskUserQuestion' ? 'declined' : 'denied') : ev.behavior;
         return push({ type: 'resolved', id: `perm:${s.id}:${ev.reqId}`, answer, by: s.lastAnswerBy || 'ui' });
       }
-      case 'elicit_done':
+      case 'elicit_done': {
+        const signedIn = localFlows.get(`elicit:${s.id}:${ev.reqId}`)?.done && ev.action === 'accept';
         localFlows.delete(`elicit:${s.id}:${ev.reqId}`);
-        return push({ type: 'resolved', id: `elicit:${s.id}:${ev.reqId}`, answer: ev.action, by: s.lastAnswerBy || 'ui' });
+        return push({ type: 'resolved', id: `elicit:${s.id}:${ev.reqId}`, answer: signedIn ? 'signed in' : ev.action, by: s.lastAnswerBy || 'ui' });
+      }
       case 'result':
         // Turn updates only for chats the bridge started, wrote to, or gave a Teams thread; projects
         // report through their coordinator.

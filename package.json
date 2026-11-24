@@ -16,6 +16,7 @@
     "test:resize": "node scripts/test-resize.mjs",
     "test:bridge": "node scripts/test-bridge.mjs",
     "demo:teams": "node scripts/teams-demo.mjs",
+    "demo:teams-signin": "node scripts/teams-signin-demo.mjs",
     "test:gateway": "node scripts/test-gateway.mjs",
     "test:token": "node scripts/test-oauth-token.mjs",
     "test:sessions": "node scripts/test-sessions.mjs",

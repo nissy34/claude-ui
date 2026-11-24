@@ -16,7 +16,7 @@
 //   @@bgtask <ms> [text]             start a background agent that ends <ms> later and wakes a follow-up turn
 //   @@bash <command>                 a Bash call that succeeds (tool_use + tool_result "ok")
 //   @@approve <tool> <json>          like @@ask, without saying the answer afterwards
-//   @@elicit <server> <url>          an MCP server asks the user to open a link (URL-mode elicitation); then say the answer
+//   @@elicit <server> <url> [words]  an MCP server asks the user to open a link (URL-mode elicitation); then say the answer (or words if accepted)
 // FAKE_CLAUDE_SCRIPT=<file.json>: [{ "match": "words", "run": ["@@say …", …] }] adds those directives
 // to any message containing the words, so demos can show plain messages.
 //                                    with no user message (saying [text], or nothing)
@@ -197,14 +197,14 @@ async function runTurn(text) {
         said = true;
       }
     } else if (cmd === 'elicit') {
-      const [server, url] = rest.split(/\s+/);
+      const [server, url, ...words] = rest.split(/\s+/);
       const reqId = `req_${crypto.randomBytes(4).toString('hex')}`;
       const r = await new Promise((resolve) => {
         asks.set(reqId, resolve);
         out({ type: 'control_request', request_id: reqId, request: { subtype: 'elicitation', mcp_server_name: server, message: `Sign in to ${server}`, mode: 'url', url, elicitation_id: reqId } });
       });
       note({ elicited: server, answer: r });
-      out({ type: 'assistant', message: { id: `msg_${++msgN}`, role: 'assistant', content: [{ type: 'text', text: `elicit: ${r?.action}` }] }, parent_tool_use_id: null, session_id: sessionId });
+      out({ type: 'assistant', message: { id: `msg_${++msgN}`, role: 'assistant', content: [{ type: 'text', text: r?.action === 'accept' && words.length ? words.join(' ') : `elicit: ${r?.action}` }] }, parent_tool_use_id: null, session_id: sessionId });
       said = true;
     } else if (cmd === 'call') {
       const sp = rest.indexOf(' ');
