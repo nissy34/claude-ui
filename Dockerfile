@@ -108,6 +108,11 @@ ENV DISABLE_AUTOUPDATER=1 \
     CW_IN_DOCKER=1 \
     CW_PORT=8787
 
+# The commit this image was built from (scripts/deploy.sh passes it), shown in Settings > Server.
+# Last, so a new commit doesn't invalidate the layers above.
+ARG GIT_COMMIT=""
+ENV CW_COMMIT=$GIT_COMMIT
+
 EXPOSE 8787
 ENTRYPOINT ["tini", "--", "claude-ui-entrypoint"]
 CMD ["node", "server/index.js"]

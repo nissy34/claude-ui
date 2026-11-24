@@ -994,6 +994,8 @@ export class Project {
   /** Deliver queued events to every session that can take a turn now. */
   pump() {
     if (this.state.paused) return;
+    // The server is draining before a restart: queued events wait (they are kept across it).
+    if (this.engine?.store?.draining) return;
     const c = this.state.coordinator;
     let next = Infinity;
     // Coordinator first, then threads oldest-queued first.

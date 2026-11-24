@@ -107,6 +107,8 @@ export const config = {
   // The session runner's socket (server/runner.js). Set: chats and terminals run there and survive
   // server restarts. Unset: they are child processes of the server, as before.
   runnerSocket: env.CW_RUNNER ? expand(env.CW_RUNNER) : '',
+  // Chats cut off mid-turn by a restart resume by themselves when the server is back.
+  autoResume: env.CW_AUTO_RESUME !== '0',
   internalUrl: '',
   trustProxy: env.CW_TRUST_PROXY === '1',
   // Address other computers use to reach this server (e.g. http://myserver:8787),

@@ -215,12 +215,35 @@ try {
   await until(async () => text(await chat(a.id)).includes('second-message'), 10_000, 'second message');
   check(cliStarts(a.id) === 1, 'a new message after the restart uses the same CLI');
 
-  // ---- 7. without a runner the old behavior holds: stopping the server stops the chat ----
+  // ---- 7. draining: new messages wait, then go out ----
+  const h = await (await fetch(base + '/api/health')).json();
+  check(h.ok === true && 'commit' in h, '/api/health answers without a login');
+  const dr = await api('/api/server/drain', { on: true, reason: 'test' });
+  check(dr.draining && dr.busy.idle && dr.runner.up, 'drain reports idle with the runner up', dr);
+  await chat(c.id, { t: 'send', text: '@@say queued-during-drain' });
+  await sleep(800);
+  const sq = await chat(c.id);
+  check(!text(sq).includes('queued-during-drain') && sq.inbox.length === 1, 'while draining, a new message waits in the queue', { inbox: sq.inbox });
+  await api('/api/server/drain', { on: false });
+  await until(async () => text(await chat(c.id)).includes('queued-during-drain'), 10_000, 'queued message after undrain');
+  check(true, 'undrain sends it');
+
+  // ---- 8. without a runner the old behavior holds: stopping the server stops the chat ----
   runner.kill('SIGTERM');
   await until(async () => /connection lost/.test(serverLog), 5000, 'server to notice the runner is gone');
   const e = (await api('/api/sessions', { kind: 'chat', cwd: 'demo', name: 'Local', prompt: '@@say local-ok' })).session;
   await until(async () => text(await chat(e.id)).includes('local-ok'), 10_000, 'local chat');
   check(true, 'with the runner gone, new chats start locally');
+
+  // ---- 9. ...and a chat cut off by a restart resumes by itself ----
+  const f = (await api('/api/sessions', { kind: 'chat', cwd: 'demo', name: 'Cut', prompt: '@@sleep 20000\n@@say never' })).session;
+  await until(async () => (await chat(f.id)).state === 'busy', 10_000, 'chat F busy');
+  await sleep(1000); // let the CLI take the prompt before the restart
+  delete env.CW_RUNNER;
+  await stopServer();
+  await startServer();
+  await until(() => fs.readFileSync(fakeLog, 'utf8').includes('Continue from where you left off'), 15_000, 'auto-resume');
+  check(cliStarts(f.id) === 2, 'a chat cut off mid-turn (no runner) resumes by itself after the restart', cliStarts(f.id));
 } catch (err) {
   console.error(err);
   failures++;

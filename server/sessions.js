@@ -284,7 +284,14 @@ class Store {
     this.ready = null;
     setTimeout(() => {
       Promise.resolve(this.ready).then(() => {
+        // Chats cut off mid-turn by the restart carry on by themselves.
+        for (const s of this.sessions.values()) {
+          if (s.meta.kind !== 'chat' || !s.meta.resumeOnStart) continue;
+          delete s.meta.resumeOnStart;
+          if (!s.running) s.resume().catch(() => {});
+        }
         for (const s of this.sessions.values()) if (s.meta.kind === 'chat' && s.inbox.length) s.flushInbox();
+        this.save();
       });
     }, 2000).unref?.();
     this.saveTimer = setInterval(() => {

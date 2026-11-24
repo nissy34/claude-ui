@@ -24,6 +24,7 @@ import {
 } from './auth.js';
 import { store, claudeProjectDir } from './sessions.js';
 import { connectRunner } from './proc.js';
+import { mountHealth, mountServerRoutes } from './server-admin.js';
 import { getChanges, searchFiles, readFileSafe, createWorktree, listBranches } from './git.js';
 import * as browser from './browser.js';
 import { browserAvailable } from './browser.js';
@@ -506,6 +507,7 @@ app.post(
 );
 
 app.get('/api/me', (req, res) => res.json({ authed: isAuthed(req) }));
+mountHealth(app);
 
 // Handoff MCP for Claude Desktop (bearer token, not the login cookie).
 const desktopMcp = createDesktopMcp({ store, resolveDir, createWorktree, getChanges, listProjects, engine });
@@ -565,6 +567,9 @@ app.use('/api', (req, res, next) => {
 
 // Pictures from tool results (MCP screenshots and the like), shown inline in chats.
 mountToolImages(app);
+
+// Server status and draining (Settings > Server, server/ctl.js).
+mountServerRoutes(app, { store });
 
 // Projects API (behind the login check above; the internal tool route checks its own token).
 mountProjectRoutes(app, { engine, store, resolveDir: (d) => resolveDir(d), wrap });

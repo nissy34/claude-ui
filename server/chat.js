@@ -610,7 +610,11 @@ export class ChatSession {
   runtimeLost() {
     const rt = this.meta.runtime;
     delete this.meta.runtime;
-    if (rt && rt.turns > 0) this.record({ k: 'error', resumable: true, text: 'Claude was stopped while the server restarted. Press Resume or send a message to pick up where it left off.' });
+    if (!rt || !(rt.turns > 0)) return;
+    if (config.autoResume && !this.meta.cproject) {
+      this.meta.resumeOnStart = true;
+      this.record({ k: 'notice', text: 'Claude was stopped while the server restarted. Picking up where it left off.' });
+    } else this.record({ k: 'error', resumable: true, text: 'Claude was stopped while the server restarted. Press Resume or send a message to pick up where it left off.' });
   }
 
   writeLine(obj) {
@@ -906,7 +910,7 @@ export class ChatSession {
    * order as one turn, each part labelled with its sender, so nothing is dropped or lands mid-turn.
    */
   deliver({ text, from, steer }) {
-    if (this.isBusy()) {
+    if (this.isBusy() || this.store.draining) {
       const item = this.enqueue({ text, from });
       // Steer: stop the current turn and send this right away (like Send now in the chat).
       if (steer) {
@@ -950,7 +954,8 @@ export class ChatSession {
       .filter((c) => c && c !== this && c.meta.kind === 'chat')
       .slice(0, 5)
       .map((c) => ({ id: c.id, name: c.meta.name }));
-    if (this.isBusy()) {
+    // While the server drains before a restart, new messages wait in the queue (kept across it).
+    if (this.isBusy() || this.store.draining) {
       if (typeof msg.text !== 'string' || (!msg.text.trim() && !images.length)) return false;
       this.enqueue({ text: msg.text, images, refs });
       return true;
@@ -982,7 +987,7 @@ export class ChatSession {
   }
 
   flushInbox() {
-    if (!this.inbox.length || this.isBusy()) return;
+    if (!this.inbox.length || this.isBusy() || this.store.draining) return;
     // Send now picks those messages; otherwise everything queued goes together, in order.
     const picked = this.inbox.some((b) => b.now) ? this.inbox.filter((b) => b.now) : this.inbox;
     const rest = this.inbox.filter((b) => !picked.includes(b));
@@ -1429,6 +1434,8 @@ export class ChatSession {
   shutdown() {
     if (this.detachProcess()) return;
     if (this.proc && this.turns > 0) {
+      // Picked up again by the next server (projects recover their own turns).
+      if (config.autoResume && !this.meta.cproject) this.meta.resumeOnStart = true;
       this.record({ k: 'error', resumable: true, text: 'The server shut down while Claude was working. Press Resume or send a message to pick up where it left off.' });
       this.quietExit = true;
     }
