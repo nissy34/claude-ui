@@ -126,6 +126,35 @@ export default function Permission({ perm, cwd, onAnswer, onMode, showBody = tru
     );
   }
 
+  // Self-update: one approval for one commit, so there is no "Always allow" (the server ignores it).
+  if (perm.tool === 'mcp__server__update_server') {
+    const { to_commit, restart_runner, reason } = perm.input || {};
+    return (
+      <div className="perm">
+        <div className="perm-title">
+          Update the server to <code>{to_commit}</code> from main{restart_runner ? ' and restart the runner' : ''}?
+        </div>
+        {reason && <div className="perm-reason">{reason}</div>}
+        <div className="perm-reason muted">
+          Rebuilds and restarts the web server; chats keep running.
+          {restart_runner ? ' Restarting the runner waits until no chat is working.' : ''} It rolls back if the new server fails its health check.
+        </div>
+        <div className="perm-actions">
+          <Button variant="primary" onClick={() => answer('allow')}>
+            Update
+          </Button>
+          <Button onClick={() => setDenying((d) => !d)}>Deny</Button>
+        </div>
+        {denying && (
+          <form className="deny-form fields" onSubmit={(e) => (e.preventDefault(), answer('deny', { message: denyMsg || undefined }))}>
+            <input autoFocus placeholder="Tell Claude why (optional)" value={denyMsg} onChange={(e) => setDenyMsg(e.target.value)} />
+            <Button size="sm">Deny</Button>
+          </form>
+        )}
+      </div>
+    );
+  }
+
   const always = alwaysLabel(perm.suggestions);
   return (
     <div className="perm">

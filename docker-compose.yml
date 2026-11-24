@@ -1,13 +1,116 @@
-# Runs Claude UI and the Claude Code CLI in a container while sharing your
-# host's Claude data. Paths inside the container match the host (Claude keys
-# sessions by folder path), and the server runs as your own user.
+# Runs Claude UI and the Claude Code CLI in containers while sharing your
+# host's Claude data. Paths inside the containers match the host (Claude keys
+# sessions by folder path), and everything runs as your own user.
 #
 #   cp .env.example .env    # set CW_PASSWORD_HASH and CW_PROJECTS_ROOT (absolute path)
-#   docker compose up -d --build
+#   scripts/deploy.sh       # build and start (also: update later)
+#
+# Two containers from one image:
+#   runner     holds the chats' Claude Code processes and terminals. Restarted rarely
+#              (scripts/deploy.sh --runner, for a new Claude Code version).
+#   claude-ui  the web server. Rebuilt and restarted on every update; running chats
+#              carry on in the runner and are picked up again.
+# Update with scripts/deploy.sh rather than `docker compose up --build`, which
+# would also recreate the runner when its image changes.
 #
 # See "Run it in Docker" in README.md.
 
+x-claude-env: &claude-env
+  HOME: ${HOME}
+  USER: ${USER:-claude}
+  CW_HOST: 0.0.0.0
+  CW_PORT: "8787"
+  CW_PROJECTS_ROOT: ${CW_PROJECTS_ROOT:-${HOME}/projects}
+  # Where the web server finds the runner (in ~/.claude-web, shared by both).
+  CW_RUNNER: ${HOME}/.claude-web/runner/runner.sock
+  CW_RUNNER_SOCKET: ${HOME}/.claude-web/runner/runner.sock
+  # The updater service (self-update from Settings > Server or a chat).
+  CW_UPDATER: ${HOME}/.claude-web/updater/updater.sock
+  CW_UPDATER_SOCKET: ${HOME}/.claude-web/updater/updater.sock
+  # Your uid/gid are read from the owner of ~/.claude; set these to override.
+  # PUID: "1000"
+  # PGID: "1000"
+  # SSH agent forwarding (see the ssh-agent volume below):
+  # SSH_AUTH_SOCK: /ssh-agent
+
+# Both containers see the same folders at the same paths.
+x-claude-volumes: &claude-volumes
+  # Claude's sessions, login, settings, skills, CLAUDE.md, MCP config.
+  - type: bind
+    source: ${HOME}/.claude
+    target: ${HOME}/.claude
+    bind: { create_host_path: false }
+  - type: bind
+    source: ${HOME}/.claude.json
+    target: ${HOME}/.claude.json
+    bind: { create_host_path: false }
+  # The UI's own data (session list, chat logs, password cookie secret).
+  - ${HOME}/.claude-web:${HOME}/.claude-web
+  # Your projects, at the same path as on the host.
+  - ${CW_PROJECTS_ROOT:-${HOME}/projects}:${CW_PROJECTS_ROOT:-${HOME}/projects}
+  # Your git settings (read only). The name and email for commits can also be set in
+  # Settings > Account > Git identity, which wins over this file.
+  - type: bind
+    source: ${HOME}/.gitconfig
+    target: ${HOME}/.gitconfig
+    read_only: true
+    bind: { create_host_path: false }
+  # The host's Docker, so chats can run docker and docker compose. Containers
+  # they start run on the host beside this one, and since your folders are
+  # mounted at their host paths, `docker run -v "$PWD":/src` works as usual.
+  # This gives chats the same power as root on the host; remove it (and
+  # build with WITH_DOCKER=0) if you don't want that.
+  - type: bind
+    source: /var/run/docker.sock
+    target: /var/run/docker.sock
+    bind: { create_host_path: false }
+  # Optional: let "Clone from git" in New chat reach private repositories with your
+  # SSH key (git@github.com:...) or saved HTTPS logins. Uncomment what you use.
+  # - ${HOME}/.ssh:${HOME}/.ssh:ro
+  # - ${HOME}/.git-credentials:${HOME}/.git-credentials:ro
+
+  # uv's cache, the Pythons it downloads and `uv tool` installs, so uvx
+  # MCP servers start fast and survive rebuilds of the container.
+  - uv-cache:${HOME}/.cache/uv
+  - uv-data:${HOME}/.local/share/uv
+  # Playwright's default browser folder, for chats, MCP servers and scripts.
+  # Each project's Playwright downloads the build it wants once and keeps
+  # it through rebuilds. (The UI's own browser is in the image.)
+  - ms-playwright:${HOME}/.cache/ms-playwright
+
+  # Optional extras (uncomment what you use):
+  # GitHub CLI login, for the pull request card:
+  # - ${HOME}/.config/gh:${HOME}/.config/gh
+  # SSH for git push/pull. Agent forwarding keeps your keys out of the container:
+  # - ${SSH_AUTH_SOCK}:/ssh-agent
+  # ...or mount your keys read-only instead:
+  # - ${HOME}/.ssh:${HOME}/.ssh:ro
+  # Another folder you work in (also set CW_ALLOW_ANY_DIR=1 in .env):
+  # - /srv/work:/srv/work
+
 services:
+  runner:
+    # The web server's image, tagged by scripts/deploy.sh. No build here, so
+    # `docker compose up --build` never replaces it (and the chats in it) by accident.
+    image: claude-ui-runner
+    pull_policy: never
+    restart: unless-stopped
+    command: ["node", "server/runner.js"]
+    # The web server joins this container's network (network_mode below), so the
+    # port is published here.
+    ports:
+      # Use "127.0.0.1:8787:8787" to reach it only from this machine.
+      - "${CW_PORT:-8787}:8787"
+    env_file: .env
+    # Lets chats reach ports that containers they start publish on the host.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment: *claude-env
+    volumes: *claude-volumes
+    # Hides the updater's socket from chats (they run here); only the web server asks for updates.
+    tmpfs:
+      - ${HOME}/.claude-web/updater
+
   claude-ui:
     build:
       context: .
@@ -16,79 +119,41 @@ services:
         WITH_BROWSER: ${WITH_BROWSER:-1}
         WITH_DOCKER: ${WITH_DOCKER:-1}
         EXTRA_APT_PACKAGES: ${EXTRA_APT_PACKAGES:-}
+        GIT_COMMIT: ${GIT_COMMIT:-}
     image: claude-ui
     restart: unless-stopped
-    ports:
-      # Use "127.0.0.1:8787:8787" to reach it only from this machine.
-      - "${CW_PORT:-8787}:8787"
+    depends_on: [runner]
+    # One 127.0.0.1 for both: chats in the runner call the server's internal API
+    # on localhost, as they did when everything ran in one container.
+    network_mode: "service:runner"
     env_file: .env
-    # Lets chats reach ports that containers they start publish on the host.
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    environment:
-      HOME: ${HOME}
-      USER: ${USER:-claude}
-      CW_HOST: 0.0.0.0
-      CW_PORT: "8787"
-      CW_PROJECTS_ROOT: ${CW_PROJECTS_ROOT:-${HOME}/projects}
-      # Your uid/gid are read from the owner of ~/.claude; set these to override.
-      # PUID: "1000"
-      # PGID: "1000"
-      # SSH agent forwarding (see the ssh-agent volume below):
-      # SSH_AUTH_SOCK: /ssh-agent
+    environment: *claude-env
+    volumes: *claude-volumes
+
+  # Self-update: runs scripts/deploy.sh in this folder when Settings > Server or a chat (main
+  # only, with your approval) asks. It has the host's Docker socket and this checkout, and
+  # nothing else; only the web server can reach it. Remove this service to turn self-update off.
+  updater:
+    image: claude-ui-runner
+    pull_policy: never
+    restart: unless-stopped
+    command: ["node", "server/updater.js"]
+    env_file: .env
+    environment: *claude-env
     volumes:
-      # Claude's sessions, login, settings, skills, CLAUDE.md, MCP config.
+      # This checkout (wherever you run docker compose from): deploy.sh pulls and builds here.
+      - .:/deploy
+      - ${HOME}/.claude-web/updater:${HOME}/.claude-web/updater
       - type: bind
-        source: ${HOME}/.claude
-        target: ${HOME}/.claude
+        source: /var/run/docker.sock
+        target: /var/run/docker.sock
         bind: { create_host_path: false }
-      - type: bind
-        source: ${HOME}/.claude.json
-        target: ${HOME}/.claude.json
-        bind: { create_host_path: false }
-      # The UI's own data (session list, chat logs, password cookie secret).
-      - ${HOME}/.claude-web:${HOME}/.claude-web
-      # Your projects, at the same path as on the host.
-      - ${CW_PROJECTS_ROOT:-${HOME}/projects}:${CW_PROJECTS_ROOT:-${HOME}/projects}
-      # Your git settings (read only). The name and email for commits can also be set in
-      # Settings > Account > Git identity, which wins over this file.
       - type: bind
         source: ${HOME}/.gitconfig
         target: ${HOME}/.gitconfig
         read_only: true
         bind: { create_host_path: false }
-      # The host's Docker, so chats can run docker and docker compose. Containers
-      # they start run on the host beside this one, and since your folders are
-      # mounted at their host paths, `docker run -v "$PWD":/src` works as usual.
-      # This gives chats the same power as root on the host; remove it (and
-      # build with WITH_DOCKER=0) if you don't want that.
-      - type: bind
-        source: /var/run/docker.sock
-        target: /var/run/docker.sock
-        bind: { create_host_path: false }
-      # Optional: let "Clone from git" in New chat reach private repositories with your
-      # SSH key (git@github.com:...) or saved HTTPS logins. Uncomment what you use.
-      # - ${HOME}/.ssh:${HOME}/.ssh:ro
-      # - ${HOME}/.git-credentials:${HOME}/.git-credentials:ro
-
-      # uv's cache, the Pythons it downloads and `uv tool` installs, so uvx
-      # MCP servers start fast and survive rebuilds of the container.
-      - uv-cache:${HOME}/.cache/uv
-      - uv-data:${HOME}/.local/share/uv
-      # Playwright's default browser folder, for chats, MCP servers and scripts.
-      # Each project's Playwright downloads the build it wants once and keeps
-      # it through rebuilds. (The UI's own browser is in the image.)
-      - ms-playwright:${HOME}/.cache/ms-playwright
-
-      # Optional extras (uncomment what you use):
-      # GitHub CLI login, for the pull request card:
-      # - ${HOME}/.config/gh:${HOME}/.config/gh
-      # SSH for git push/pull. Agent forwarding keeps your keys out of the container:
-      # - ${SSH_AUTH_SOCK}:/ssh-agent
-      # ...or mount your keys read-only instead:
-      # - ${HOME}/.ssh:${HOME}/.ssh:ro
-      # Another folder you work in (also set CW_ALLOW_ANY_DIR=1 in .env):
-      # - /srv/work:/srv/work
+      # For a private repository over SSH, also: - ${HOME}/.ssh:${HOME}/.ssh:ro
 
   # Optional: the Teams bridge (teams-bridge/README.md). Talk to your agents from a Microsoft Teams
   # chat. Outbound only: it polls Teams through Microsoft Graph and needs no open ports.
@@ -104,7 +169,8 @@ services:
     environment:
       HOME: ${HOME}
       USER: ${USER:-claude}
-      CLAUDE_UI_URL: http://claude-ui:8787
+      # The web server shares the runner's network, so it is reached by the runner's name.
+      CLAUDE_UI_URL: http://runner:8787
     volumes:
       # Reads Claude UI's bridge token and keeps its own state in ~/.claude-web/teams-bridge.
       - type: bind

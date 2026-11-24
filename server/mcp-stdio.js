@@ -9,7 +9,27 @@ const TOKEN = process.env.CW_INTERNAL_TOKEN;
 
 // node:http rather than fetch: fetch gives up on a response after 5 minutes, and some calls
 // (read_session wait, send_to_session wait_for_reply) legitimately block for longer.
-export function call(method, path, body, { raw = false } = {}) {
+// The server can be away for a few seconds while it restarts (the CLI keeps running in the
+// session runner). A call that couldn't connect is retried for up to a minute; one that was cut off
+// mid-way only when it is a GET, since a POST may already have done its work.
+const RETRY_MS = Number(process.env.CW_INTERNAL_RETRY_MS) || 60_000;
+const RETRYABLE = new Set(['ECONNREFUSED', 'ENOENT', 'EAI_AGAIN']);
+const CUT = new Set(['ECONNRESET', 'EPIPE']);
+
+export async function call(method, path, body, opts = {}) {
+  const until = Date.now() + RETRY_MS;
+  for (let wait = 250; ; wait = Math.min(wait * 2, 4000)) {
+    try {
+      return await callOnce(method, path, body, opts);
+    } catch (e) {
+      const again = RETRYABLE.has(e.code) || (method === 'GET' && (CUT.has(e.code) || e.message === 'socket hang up')) || e.status === 502 || e.status === 503;
+      if (!again || Date.now() + wait > until) throw e;
+      await new Promise((r) => setTimeout(r, wait));
+    }
+  }
+}
+
+function callOnce(method, path, body, { raw = false } = {}) {
   return new Promise((resolve, reject) => {
     const data = body ? JSON.stringify(body) : undefined;
     const req = http.request(
@@ -27,7 +47,10 @@ export function call(method, path, body, { raw = false } = {}) {
           try {
             out = JSON.parse(buf.toString('utf8'));
           } catch {}
-          ok ? resolve(out) : reject(new Error(out.error || `HTTP ${res.statusCode}`));
+          if (ok) return resolve(out);
+          const err = new Error(out.error || `HTTP ${res.statusCode}`);
+          err.status = res.statusCode;
+          reject(err);
         });
       }
     );

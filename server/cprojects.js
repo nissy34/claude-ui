@@ -994,6 +994,8 @@ export class Project {
   /** Deliver queued events to every session that can take a turn now. */
   pump() {
     if (this.state.paused) return;
+    // The server is draining before a restart: queued events wait (they are kept across it).
+    if (this.engine?.store?.draining) return;
     const c = this.state.coordinator;
     let next = Infinity;
     // Coordinator first, then threads oldest-queued first.
@@ -1782,7 +1784,8 @@ export class ProjectEngine {
     store.onSignal = (s, kind, info) => this.projectOf(s)?.onSignal(s, kind, info);
     store.projectLaunch = (s) => this.projectOf(s)?.launchConfig(s) || null;
     // Recover after a restart: confirm or re-queue wakes that were in flight, flag turns cut off.
-    setTimeout(() => this.recover(), 1500).unref?.();
+    // (After the session runner's processes are picked up, so turns still running count as running.)
+    setTimeout(() => Promise.resolve(store.ready).then(() => this.recover()), 1500).unref?.();
     this.tick = setInterval(() => this.onTick(), 30_000);
     this.tick.unref?.();
   }

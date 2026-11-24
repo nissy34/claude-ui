@@ -23,6 +23,9 @@ import {
   loginSucceeded,
 } from './auth.js';
 import { store, claudeProjectDir } from './sessions.js';
+import { connectRunner } from './proc.js';
+import { mountHealth, mountServerRoutes } from './server-admin.js';
+import { mountUpdateRoutes } from './self-update.js';
 import { getChanges, searchFiles, readFileSafe, createWorktree, listBranches } from './git.js';
 import * as browser from './browser.js';
 import { browserAvailable } from './browser.js';
@@ -465,6 +468,11 @@ app.post(
 
 // ---------- Projects (coordinator + threads) ----------
 const engine = new ProjectEngine(store);
+// The session runner: pick up the chats and terminals it kept running while the server was down.
+// After the engine exists (replayed output reaches projects) and before anything starts processes.
+store.ready = config.runnerSocket
+  ? connectRunner(config.runnerSocket, { onReconnect: (c) => store.reattach(c) }).then((c) => c && store.reattach(c))
+  : Promise.resolve();
 
 app.get('/internal/sessions', (req, res) => {
   const all = [...store.sessions.values()];
@@ -500,6 +508,7 @@ app.post(
 );
 
 app.get('/api/me', (req, res) => res.json({ authed: isAuthed(req) }));
+mountHealth(app);
 
 // Handoff MCP for Claude Desktop (bearer token, not the login cookie).
 const desktopMcp = createDesktopMcp({ store, resolveDir, createWorktree, getChanges, listProjects, engine });
@@ -559,6 +568,10 @@ app.use('/api', (req, res, next) => {
 
 // Pictures from tool results (MCP screenshots and the like), shown inline in chats.
 mountToolImages(app);
+
+// Server status and draining (Settings > Server, server/ctl.js), and self-update.
+mountServerRoutes(app, { store });
+mountUpdateRoutes(app, { store });
 
 // Projects API (behind the login check above; the internal tool route checks its own token).
 mountProjectRoutes(app, { engine, store, resolveDir: (d) => resolveDir(d), wrap });
@@ -1573,6 +1586,7 @@ if (config.schedules) schedules.startScheduler(async (t) => {
   return s.id;
 });
 
+await store.ready;
 server.listen(config.port, config.host, () => {
   startPrSweep(store);
   tokenKeeper.start();

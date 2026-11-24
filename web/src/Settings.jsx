@@ -7,6 +7,7 @@ import { useModels } from './models.js';
 import { McpTab, PluginsTab, SkillsTab } from './Customize.jsx';
 import DesktopTab from './DesktopTab.jsx';
 import TeamsTab from './TeamsTab.jsx';
+import ServerTab from './ServerTab.jsx';
 import SignInsTab from './SignIns.jsx';
 import { GatewaySettings } from './Gateway.jsx';
 import { ClaudeTokenSettings } from './ClaudeToken.jsx';
@@ -24,6 +25,7 @@ const TABS = [
   ['desktop', 'Claude Desktop'],
   ['teams', 'Teams'],
   ['account', 'Account'],
+  ['server', 'Server'],
   ['about', 'About'],
 ];
 
@@ -313,6 +315,7 @@ export default function Settings({ projects, activeCwd, onClose, onError, onKeys
           {tab === 'desktop' && <DesktopTab onError={onError} projects={projects} activeCwd={activeCwd} />}
           {tab === 'teams' && <TeamsTab onError={onError} />}
           {tab === 'account' && <Account onError={onError} />}
+          {tab === 'server' && <ServerTab onError={onError} />}
           {tab === 'about' && <About />}
         </div>
       </div>

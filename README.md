@@ -110,12 +110,14 @@ git clone https://github.com/nissy34/claude-ui ~/claude-ui
 cd ~/claude-ui
 cp .env.example .env
 # In .env: set CW_PROJECTS_ROOT to a full path (e.g. /home/you/projects) if it isn't ~/projects
-docker compose build
-docker compose run --rm --no-deps claude-ui node server/hash-password.js 'pick a strong password'
+docker compose build claude-ui
+docker run --rm --entrypoint node claude-ui server/hash-password.js 'pick a strong password'
 # paste the output into CW_PASSWORD_HASH in .env
-docker compose up -d
+scripts/deploy.sh --no-pull
 docker compose logs -f
 ```
+
+It runs as two containers from the same image: `runner` holds the chats' Claude Code processes and terminals, and `claude-ui` is the web server. That split is what lets you update without stopping running chats (below).
 
 In `.env`, also set `CW_PUBLIC_URL=http://<machine>:8787` (the address other computers use), so Settings > Claude Desktop shows that instead of the container id.
 
@@ -129,8 +131,25 @@ Open `http://<machine>:8787`. It listens on all interfaces; change the port mapp
 - **Playwright in your projects** (tests, scripts, MCP servers) uses its normal browser folder, `~/.cache/ms-playwright`, kept in the `ms-playwright` volume. Each project's Playwright downloads the browser build it needs once (`npx playwright install chromium`) and keeps it through rebuilds. The UI's own built-in browser is a separate Chromium inside the image, passed to the UI as `CW_BROWSER_PATH`, so it doesn't pin the build your projects use.
 - **Docker in chats:** the image has the `docker` CLI with `docker compose` and `docker buildx`, and the compose file mounts the host's Docker socket (`/var/run/docker.sock`), so chats can build images and run containers. They run on the host's Docker, next to the Claude UI container, not inside it. Your projects are mounted at their host paths, so bind mounts like `docker run -v "$PWD":/src ...` point at the right folder. A container a chat publishes on a port is reached at the host's address (from inside a chat, `localhost` is the Claude UI container, so use `host.docker.internal`, which the compose file points at the host). Access to the socket is the same as root on the host: to turn it off, delete the `docker.sock` volume in `docker-compose.yml` and set `WITH_DOCKER=0` in `.env` for a smaller image. If your socket lives elsewhere, mount it and set `DOCKER_HOST=unix:///path` in `.env`.
 - **Other tools your projects or MCP servers need** (compilers, `make`, a Python or Go toolchain) must be in the image: set `EXTRA_APT_PACKAGES="golang make"` in `.env` and rebuild. MCP servers whose config points at a path under your home need that folder mounted too.
-- **Update** with `git pull && docker compose up -d --build`. The CLI doesn't update itself inside the container; the rebuild picks up the latest version (pin one with `CLAUDE_CODE_VERSION=` in `.env`). `WITH_BROWSER=0` builds a smaller image without the built-in browser.
+- **Update** with `scripts/deploy.sh`: it pulls, rebuilds and restarts only the web server. Chats keep working through it, mid-turn too (a long Bash command, a permission prompt, background tasks), and the new server picks them up within seconds, with nothing lost. Don't use `docker compose up --build` for updates: it works, but recreating the runner stops every chat. See [Updating without stopping chats](#updating-without-stopping-chats).
+- **New Claude Code version:** the CLI doesn't update itself inside the container. `scripts/deploy.sh --runner` rebuilds with the latest version (pin one with `CLAUDE_CODE_VERSION=` in `.env`), waits until no chat is working, then restarts both containers; chats cut off anyway resume by themselves. `WITH_BROWSER=0` builds a smaller image without the built-in browser.
 - Same-path sharing assumes a Linux host. Docker Desktop on Windows or macOS runs a Linux VM, so host paths and container paths don't match and sessions won't line up with a native `claude` there.
+
+### Updating without stopping chats
+
+`scripts/deploy.sh` (Docker) updates the web server while chats keep running:
+
+| Command | What restarts | Running chats |
+| --- | --- | --- |
+| `scripts/deploy.sh` | the web server | keep running, picked up again |
+| `scripts/deploy.sh --ref my-branch` | the web server, on that branch | keep running |
+| `scripts/deploy.sh --runner` | both (new Claude Code version, runner changes) | waits until none is working; new messages queue meanwhile; cut-off chats resume |
+
+How it works: the `runner` container (`server/runner.js`) owns every chat's Claude Code process and every terminal, spools their output to `~/.claude-web/runner/`, and keeps them going while the web server is away. The web server talks to it over a Unix socket (`CW_RUNNER`); on shutdown each chat notes where it stopped reading, and the next server picks every chat up from there and replays what it missed. The built-in MCP tools (sessions, browser, notes) retry for up to a minute while the server restarts. The built-in browser restarts with the server.
+
+A failed build never touches the running server. If the new server doesn't pass its health check, `deploy.sh` puts the previous image back. Outside Docker you can get the same by running `node server/runner.js` as its own service and setting `CW_RUNNER` to its socket (`~/.claude-web/runner/runner.sock`) for the server; without `CW_RUNNER` chats are child processes of the server, as before, and a restart stops them (they resume by themselves afterwards; `CW_AUTO_RESUME=0` turns that off).
+
+`node server/ctl.js status|drain [--wait]|undrain` (or `docker compose exec claude-ui node server/ctl.js ...`) shows what is working and drains the server by hand.
 
 ### Windows
 
