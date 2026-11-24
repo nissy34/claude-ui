@@ -11,6 +11,7 @@ export { claudeProjectDir, transcriptPath };
 
 import { withOpener } from './opener.js';
 import { resolveCommand, defaultShell } from './launch.js';
+import { openPty, isRunnerProc, runner, RunnerProc } from './proc.js';
 
 const require = createRequire(import.meta.url);
 // node-pty is optional: without it, chat sessions still work and terminal sessions are disabled.
@@ -100,15 +101,9 @@ class Session {
 
     let proc;
     try {
-      if (!pty) throw new Error(`terminal sessions need the node-pty package, which failed to load (${ptyError}). Chat sessions still work.`);
+      if (!pty && !runner.up) throw new Error(`terminal sessions need the node-pty package, which failed to load (${ptyError}). Chat sessions still work.`);
       ({ file, args } = resolveCommand(file, args));
-      proc = pty.spawn(file, args, {
-        name: 'xterm-256color',
-        cols: this.cols,
-        rows: this.rows,
-        cwd: m.cwd,
-        env: childEnv(this.meta.id, this.meta),
-      });
+      proc = openPty(pty, { id: m.id, file, args, cols: this.cols, rows: this.rows, cwd: m.cwd, env: childEnv(this.meta.id, this.meta), meta: { name: m.name } });
     } catch (err) {
       const msg = `\r\n\x1b[31mFailed to start ${file}: ${err.message}\x1b[0m\r\n`;
       this.term.write(msg);
@@ -117,14 +112,26 @@ class Session {
       store.save();
       return;
     }
-    this.proc = proc;
-    m.pid = proc.pid;
     m.exitCode = null;
     m.lastActivity = Date.now();
     m.command = [file, ...args].join(' ');
+    this.wirePty(proc);
+    store.save();
+  }
 
+  /** Hook a started (or reattached) PTY up to this terminal. */
+  wirePty(proc) {
+    const m = this.meta;
+    this.proc = proc;
+    m.pid = proc.pid ?? null;
+    if (isRunnerProc(proc)) proc.on('spawn', () => this.proc === proc && (m.pid = proc.pid));
     proc.onData((d) => {
-      this.term.write(d);
+      // The saved screen covers output up to `parsed` (xterm parses asynchronously), so a
+      // reattach replays from there.
+      const end = proc.consumed;
+      this.term.write(d, () => {
+        if (end !== undefined) this.parsed = end;
+      });
       this.dirty = true;
       m.lastActivity = Date.now();
       // Window-title escapes (OSC 0/2) carry Claude's task summary; a bare BEL means "needs you".
@@ -147,6 +154,7 @@ class Session {
       if (this.proc !== proc) return;
       this.proc = null;
       m.pid = null;
+      if (proc.detachedFromUs) return;
       m.exitCode = exitCode;
       m.lastActivity = Date.now();
       const msg = `\r\n\x1b[2m── process exited (code ${exitCode}) ──\x1b[0m\r\n`;
@@ -156,7 +164,32 @@ class Session {
       this.saveScreen(true);
       store.save();
     });
-    store.save();
+  }
+
+  /** The server is going down: a PTY in the session runner keeps running; note where to pick up. */
+  shutdown() {
+    const proc = this.proc;
+    const d = proc?.detach?.();
+    if (!d) return this.kill();
+    this.proc = null;
+    this.meta.runtime = { runnerId: runner.runnerId, offset: this.parsed ?? d.offset, at: Date.now() };
+  }
+
+  /** After a server restart: take over the PTY the runner kept running. */
+  async reattach(client, info) {
+    const rt = this.meta.runtime && this.meta.runtime.runnerId === client.info.runnerId ? this.meta.runtime : null;
+    delete this.meta.runtime;
+    // Without a note of where the saved screen ends, show only what comes next.
+    const from = rt ? rt.offset : info.spoolEnd;
+    this.parsed = from;
+    this.meta.exitCode = null;
+    await RunnerProc.attach(client, this.id, 'pty', from, { beforeReplay: (p) => this.wirePty(p) });
+    this.meta.pid = info.pid;
+    if (info.alive) this.proc.resize(this.cols, this.rows);
+  }
+
+  runtimeLost() {
+    delete this.meta.runtime;
   }
 
   kill() {
@@ -168,7 +201,7 @@ class Session {
       setTimeout(() => {
         if (this.proc === p) {
           try {
-            process.kill(p.pid, 'SIGKILL');
+            p.kill('SIGKILL');
           } catch {}
         }
       }, 3000);

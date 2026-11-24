@@ -88,6 +88,24 @@ function chat(id, send) {
   });
 }
 // What Claude did (the user's own messages, which quote the directives, left out).
+/** A terminal session: its screen snapshot after sending `input` (and waiting `wait` ms). */
+function term(id, input, wait = 400) {
+  return new Promise((resolve, reject) => {
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws?id=${id}&cols=100&rows=30`, { headers: { cookie } });
+    let screen = '';
+    let session = null;
+    ws.on('message', (d) => {
+      const m = JSON.parse(d);
+      if (m.t === 'snapshot') {
+        screen = m.d;
+        session = m.session;
+        if (input) ws.send(JSON.stringify({ t: 'i', d: input }));
+        setTimeout(() => (ws.close(), resolve({ screen, session })), input ? wait : 50);
+      } else if (m.t === 'o') screen += m.d;
+    });
+    ws.once('error', reject);
+  });
+}
 const text = (snap) => JSON.stringify(snap.events.filter((e) => e.k !== 'user'));
 const count = (s, needle) => s.split(needle).length - 1;
 const claudeIds = new Map(); // chat id -> Claude session id
@@ -136,12 +154,18 @@ try {
   const d = (await api('/api/sessions', { kind: 'chat', cwd: 'demo', name: 'Mcp', prompt: '@@sleep 1200\n@@call sessions__list_sessions {"all":true}\n@@say mcp-done' })).session;
   await until(async () => (await chat(d.id)).state === 'busy', 10_000, 'chat D busy');
 
+  // ---- 5. a terminal across a restart ----
+  const t = (await api('/api/sessions', { kind: 'shell', cwd: 'demo', name: 'Term' })).session;
+  await until(async () => (await term(t.id)).session.pid, 10_000, 'terminal pid');
+  await term(t.id, 'echo before-$((20+1))\r');
+  const t0 = await term(t.id, 'sleep 2; echo during-$((2*21))\r', 100);
+
   await stopServer();
   const rc = new RunnerClient(sock);
   await rc.connect();
   const live = (await rc.request('list')).procs;
   rc.close();
-  check([a.id, b.id, c.id, d.id].every((id) => live.some((p) => p.id === id)), 'the CLIs are still in the runner after the server stopped', live.map((p) => [p.id, p.alive]));
+  check([a.id, b.id, c.id, d.id, t.id].every((id) => live.some((p) => p.id === id)), 'the CLIs are still in the runner after the server stopped', live.map((p) => [p.id, p.alive]));
   await sleep(3500); // chat C's and D's turns run on (D's MCP call waits for the server)
   await startServer();
   check(/picked up chat "Long"/.test(serverLog), 'the new server picks the chats up');
@@ -177,12 +201,21 @@ try {
   check(mcp && !/Error|ECONNREFUSED/.test(mcp.result) && mcp.result.includes('Long'), 'an MCP call made while the server was down retries and succeeds', mcp);
   check(count(text(sd), 'mcp-done') === 1, 'and its turn carries on');
 
-  // ---- 5. a new message after the restart goes to the same CLI ----
+  const t1 = await until(async () => {
+    const r = await term(t.id);
+    return r.screen.includes('during-42') && r;
+  }, 10_000, 'terminal output from while the server was down');
+  check(t1.screen.includes('before-21') && t1.session.pid === t0.session.pid, 'a terminal keeps its process and shows what it printed while the server was down', { pid0: t0.session.pid, pid1: t1.session.pid });
+  check(count(t1.screen, 'during-42') === 1, 'with nothing repeated');
+  const t2 = await term(t.id, 'echo after-$((50-8))\r', 800);
+  check(count(t2.screen, 'after-42') >= 1 && t2.session.status === 'running', 'and takes input again');
+
+  // ---- 6. a new message after the restart goes to the same CLI ----
   await chat(a.id, { t: 'send', text: '@@say second-message' });
   await until(async () => text(await chat(a.id)).includes('second-message'), 10_000, 'second message');
   check(cliStarts(a.id) === 1, 'a new message after the restart uses the same CLI');
 
-  // ---- 6. without a runner the old behavior holds: stopping the server stops the chat ----
+  // ---- 7. without a runner the old behavior holds: stopping the server stops the chat ----
   runner.kill('SIGTERM');
   await until(async () => /connection lost/.test(serverLog), 5000, 'server to notice the runner is gone');
   const e = (await api('/api/sessions', { kind: 'chat', cwd: 'demo', name: 'Local', prompt: '@@say local-ok' })).session;
